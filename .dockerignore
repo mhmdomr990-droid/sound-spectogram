@@ -12,3 +12,6 @@ Thumbs.db
 coverage
 *.swp
 *.swo
+
+# Flutter phone client - not part of server docker image
+flutter_app

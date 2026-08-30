@@ -4,3 +4,8 @@ dist/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Flutter phone client (own repo / separate project)
+flutter_app/
+flutter_app/.dart_tool/
+flutter_app/build/
