@@ -185,34 +185,41 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         child: Stack(
           children: [
             SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
+              scrollDirection: Axis.vertical,
               child: SizedBox(
                 width: math.max(constraints.maxWidth, displayWidth + 34),
-                height: constraints.maxHeight,
-                child: Stack(
-                  children: [
-                    Positioned(
-                      left: 32,
-                      top: 0,
-                      width: displayWidth,
-                      height: displayHeight,
-                      child: RawImage(
-                        image: img,
-                        fit: BoxFit.fill,
-                        filterQuality: FilterQuality.medium,
-                      ),
-                    ),
-                    Positioned.fill(
-                      child: CustomPaint(
-                        painter: SpectrogramAxesPainter(
-                          colCount: _colCount,
-                          frequencyBins: _frequencyBins,
-                          startTime: _startTime,
-                          endTime: _endTime,
+                height: math.max(constraints.maxHeight, displayHeight + 24),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(
+                    width: math.max(constraints.maxWidth, displayWidth + 34),
+                    height: math.max(constraints.maxHeight, displayHeight + 24),
+                    child: Stack(
+                      children: [
+                        Positioned(
+                          left: 32,
+                          top: 0,
+                          width: displayWidth,
+                          height: displayHeight,
+                          child: RawImage(
+                            image: img,
+                            fit: BoxFit.fill,
+                            filterQuality: FilterQuality.medium,
+                          ),
                         ),
-                      ),
+                        Positioned.fill(
+                          child: CustomPaint(
+                            painter: SpectrogramAxesPainter(
+                              colCount: _colCount,
+                              frequencyBins: _frequencyBins,
+                              startTime: _startTime,
+                              endTime: _endTime,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
