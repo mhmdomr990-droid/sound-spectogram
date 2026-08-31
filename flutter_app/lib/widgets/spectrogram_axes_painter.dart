@@ -2,10 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// Draws frequency (Y) and time (X) axes around the spectrogram plot area,
-/// matching the web dashboard layout.
+/// Combined axes painter: freq labels (left), grid (center), time labels (bottom).
+/// Drawn as an overlay on top of the image — it is transparent except for text/lines.
 class SpectrogramAxesPainter extends CustomPainter {
-  final int rowCount;
   final int colCount;
   final List<double>? frequencyBins;
   final DateTime? startTime;
@@ -14,10 +13,8 @@ class SpectrogramAxesPainter extends CustomPainter {
   static const Color axisColor = Color(0xFFCFD7E6);
   static const Color textColor = Color(0xFFD8E2FF);
   static const Color gridColor = Color(0x29CFD7E6);
-  static const Color bgColor = Color(0xFF140D28);
 
   SpectrogramAxesPainter({
-    required this.rowCount,
     required this.colCount,
     this.frequencyBins,
     this.startTime,
@@ -27,157 +24,89 @@ class SpectrogramAxesPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     const left = 32.0;
-    const imageTop = 16.0;
+    const topPad = 0.0;
+    const bottomPad = 20.0;
     final plotW = math.max(10.0, size.width - left - 2);
-    final plotH = math.max(10.0, size.height - imageTop - 24);
-    final plotBottom = imageTop + plotH;
-    final plotRight = left + plotW;
+    final plotH = math.max(10.0, size.height - topPad - bottomPad);
 
     // --- Grid lines ---
-    final gridPaint = Paint()
-      ..color = gridColor
-      ..strokeWidth = 1;
-
+    final gridPaint = Paint()..color = gridColor..strokeWidth = 1;
     final xTicks = _chooseTicks(plotW, 4, 8);
     for (var tx = 0; tx <= xTicks; tx++) {
-      final xFrac = tx / xTicks;
-      final x = left + (xFrac * plotW).roundToDouble();
-      canvas.drawLine(Offset(x, imageTop), Offset(x, plotBottom), gridPaint);
+      final x = left + (tx / xTicks * plotW).roundToDouble();
+      canvas.drawLine(Offset(x, topPad), Offset(x, topPad + plotH), gridPaint);
     }
-
     const yTicks = 5;
     for (var ty = 0; ty <= yTicks; ty++) {
-      final yFrac = ty / yTicks;
-      final y = imageTop + (yFrac * plotH).roundToDouble();
-      canvas.drawLine(Offset(left, y), Offset(plotRight, y), gridPaint);
+      final y = topPad + (ty / yTicks * plotH).roundToDouble();
+      canvas.drawLine(Offset(left, y), Offset(left + plotW, y), gridPaint);
     }
 
-    // --- L-shaped axis border ---
-    final borderPaint = Paint()
-      ..color = axisColor
-      ..strokeWidth = 1.2
-      ..style = PaintingStyle.stroke;
-    final borderPath = Path()
-      ..moveTo(left, imageTop)
-      ..lineTo(left, plotBottom)
-      ..lineTo(plotRight, plotBottom);
-    canvas.drawPath(borderPath, borderPaint);
+    // --- L-shaped border ---
+    final bp = Paint()..color = axisColor..strokeWidth = 1.2..style = PaintingStyle.stroke;
+    final border = Path()
+      ..moveTo(left, topPad)
+      ..lineTo(left, topPad + plotH)
+      ..lineTo(left + plotW, topPad + plotH);
+    canvas.drawPath(border, bp);
 
-    // --- Y-axis: frequency labels ---
-    final freqLabelPainter = TextPainter(textDirection: TextDirection.rtl);
+    // --- Y-axis: freq labels (left of image) ---
+    final freqTp = TextPainter(textDirection: TextDirection.rtl);
     for (var ly = 0; ly <= yTicks; ly++) {
       final yFrac = ly / yTicks;
-      final yPos = imageTop + (yFrac * plotH).roundToDouble();
+      final yPos = topPad + (yFrac * plotH).roundToDouble();
       final label = _freqLabel(yFrac);
-      freqLabelPainter
+      freqTp
         ..text = TextSpan(
           text: label,
-          style: const TextStyle(
-            color: textColor,
-            fontSize: 8,
-            fontFamily: 'sans-serif',
-          ),
+          style: const TextStyle(color: textColor, fontSize: 8, fontFamily: 'sans-serif'),
         )
         ..layout();
-      freqLabelPainter.paint(
-        canvas,
-        Offset(left - 2 - freqLabelPainter.width, yPos - freqLabelPainter.height / 2),
-      );
+      freqTp.paint(canvas, Offset(left - 2 - freqTp.width, yPos - freqTp.height / 2));
     }
 
-    // --- Y-axis title (rotated) ---
-    canvas.save();
-    canvas.translate(6, imageTop + plotH / 2);
-    canvas.rotate(-math.pi / 2);
-    final hasFreq = frequencyBins != null && frequencyBins!.isNotEmpty;
-    final yTitlePainter = TextPainter(textDirection: TextDirection.rtl)
-      ..text = TextSpan(
-        text: hasFreq ? 'التردد (Hz)' : 'نطاقات التردد',
-        style: const TextStyle(
-          color: textColor,
-          fontSize: 10,
-          fontFamily: 'sans-serif',
-        ),
-      )
-      ..layout();
-    yTitlePainter.paint(canvas, Offset(-yTitlePainter.width / 2, -yTitlePainter.height / 2));
-    canvas.restore();
+    // --- X-axis: time labels (below image) ---
+    final st = startTime, et = endTime;
+    final totalMs = (st != null && et != null)
+        ? math.max(1, et.millisecondsSinceEpoch - st.millisecondsSinceEpoch).toDouble()
+        : 1.0;
+    final startMs = st?.millisecondsSinceEpoch.toDouble() ?? 0;
+    final withDate = totalMs > 24 * 60 * 60 * 1000;
 
-    // --- X-axis: time labels ---
-    final withDate = _totalRangeMs() > 24 * 60 * 60 * 1000;
-    final timeLabelPainter = TextPainter(textDirection: TextDirection.ltr);
+    final timeTp = TextPainter(textDirection: TextDirection.ltr);
     for (var lx = 0; lx <= xTicks; lx++) {
       final lf = lx / xTicks;
-      final labelMs = _startMs() + lf * _totalRangeMs();
       final labelX = left + (lf * plotW).roundToDouble();
-      final label = _formatTime(labelMs, withDate);
-      timeLabelPainter
+      timeTp
         ..text = TextSpan(
-          text: label,
-          style: const TextStyle(
-            color: textColor,
-            fontSize: 8,
-            fontFamily: 'sans-serif',
-          ),
+          text: _formatTime(startMs + lf * totalMs, withDate),
+          style: const TextStyle(color: textColor, fontSize: 8, fontFamily: 'sans-serif'),
         )
         ..layout();
-      timeLabelPainter.paint(
-        canvas,
-        Offset(labelX - timeLabelPainter.width / 2, plotBottom + 2),
-      );
+      timeTp.paint(canvas, Offset(labelX - timeTp.width / 2, topPad + plotH + 4));
     }
 
     // --- X-axis title ---
-    final xTitlePainter = TextPainter(textDirection: TextDirection.ltr)
+    final title = TextPainter(textDirection: TextDirection.ltr)
       ..text = const TextSpan(
         text: 'الزمن',
-        style: TextStyle(
-          color: axisColor,
-          fontSize: 7,
-          fontFamily: 'sans-serif',
-        ),
+        style: TextStyle(color: axisColor, fontSize: 7, fontFamily: 'sans-serif'),
       )
       ..layout();
-    xTitlePainter.paint(
-      canvas,
-      Offset(left + plotW / 2 - xTitlePainter.width / 2, plotBottom + 14),
-    );
+    title.paint(canvas, Offset(left + plotW / 2 - title.width / 2, topPad + plotH + 14));
   }
 
   int _chooseTicks(double widthPx, int minTicks, int maxTicks) {
-    final byWidth = (widthPx / 120).floor();
-    return math.max(minTicks, math.min(maxTicks, byWidth)).toInt();
+    return math.max(minTicks, math.min(maxTicks, (widthPx / 120).floor())).toInt();
   }
 
   String _freqLabel(double yFrac) {
     final bins = frequencyBins;
     if (bins != null && bins.isNotEmpty) {
-      // Top of spectrogram = high frequency, bottom = low frequency
       final rowIdx = (yFrac * (bins.length - 1)).round().clamp(0, bins.length - 1);
-      final hz = bins[rowIdx];
-      return '${hz.round()}';
+      return '${bins[rowIdx].round()}';
     }
-    // Fallback: assume 0-24000 Hz range
-    final maxFreq = 24000.0;
-    final minFreq = 0.0;
-    final hz = maxFreq - yFrac * (maxFreq - minFreq);
-    return '${hz.round()} Hz';
-  }
-
-  double _startMs() {
-    final st = startTime;
-    if (st != null) return st.millisecondsSinceEpoch.toDouble();
-    return 0;
-  }
-
-  double _totalRangeMs() {
-    final st = startTime;
-    final et = endTime;
-    if (st != null && et != null) {
-      final ms = et.millisecondsSinceEpoch - st.millisecondsSinceEpoch;
-      return ms > 0 ? ms.toDouble() : 1;
-    }
-    return 1;
+    return '${(24000 - yFrac * 24000).round()}';
   }
 
   String _formatTime(double ms, bool withDate) {
@@ -191,10 +120,9 @@ class SpectrogramAxesPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant SpectrogramAxesPainter oldDelegate) {
-    return oldDelegate.rowCount != rowCount ||
-        oldDelegate.colCount != colCount ||
-        oldDelegate.startTime != startTime ||
-        oldDelegate.endTime != endTime;
-  }
+  bool shouldRepaint(covariant SpectrogramAxesPainter o) =>
+      o.colCount != colCount ||
+      o.frequencyBins != frequencyBins ||
+      o.startTime != startTime ||
+      o.endTime != endTime;
 }

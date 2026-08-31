@@ -42,7 +42,6 @@ class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
   List<double>? _frequencyBins;
   DateTime? _startTime;
   DateTime? _endTime;
-  int _rowCount = 0;
   int _colCount = 0;
   double _zoomLevel = 1.0;
 
@@ -123,7 +122,6 @@ class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
     _frequencyBins = firstBins;
     _startTime = earliest;
     _endTime = latest;
-    _rowCount = maxRows;
     _colCount = totalCols;
 
     ui.Image? image;
@@ -167,13 +165,12 @@ class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
       );
     }
     return LayoutBuilder(builder: (context, constraints) {
-      final plotHeight = constraints.maxHeight - 40; // 16 top (freq labels) + 24 bottom (time labels)
-      final nativeHeight = plotHeight > 0 ? plotHeight : 400.0;
+      final imageAreaHeight = constraints.maxHeight - 24;
+      final nativeHeight = imageAreaHeight > 0 ? imageAreaHeight : 400.0;
       final aspectRatio = img.width / img.height;
       final nativeWidth = nativeHeight * aspectRatio;
       final displayWidth = nativeWidth * _zoomLevel;
       final displayHeight = nativeHeight * _zoomLevel;
-      final totalWidth = displayWidth + 34;
 
       return Container(
         color: const Color(0xFF140D28),
@@ -182,14 +179,13 @@ class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: SizedBox(
-                width: math.max(constraints.maxWidth, totalWidth),
+                width: math.max(constraints.maxWidth, displayWidth + 34),
                 height: constraints.maxHeight,
                 child: Stack(
                   children: [
-                    // Image — below the axes labels
                     Positioned(
                       left: 32,
-                      top: 16,
+                      top: 0,
                       width: displayWidth,
                       height: displayHeight,
                       child: RawImage(
@@ -198,11 +194,9 @@ class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
                         filterQuality: FilterQuality.medium,
                       ),
                     ),
-                    // Axes — always fixed, ignore zoom
                     Positioned.fill(
                       child: CustomPaint(
                         painter: SpectrogramAxesPainter(
-                          rowCount: _rowCount,
                           colCount: _colCount,
                           frequencyBins: _frequencyBins,
                           startTime: _startTime,
