@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'screens/dashboard_screen.dart';
 import 'screens/login_screen.dart';
@@ -11,6 +12,9 @@ const String kServerBaseUrl = 'http://192.168.1.8:3111';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+  ]);
   final auth = AuthService();
   await auth.load();
   final api = ApiClient(kServerBaseUrl, auth);
