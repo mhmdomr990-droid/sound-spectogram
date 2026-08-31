@@ -33,10 +33,10 @@ class SpectrogramCanvas extends StatefulWidget {
   });
 
   @override
-  State<SpectrogramCanvas> createState() => _SpectrogramCanvasState();
+  State<SpectrogramCanvas> createState() => SpectrogramCanvasState();
 }
 
-class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
+class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   ui.Image? _image;
   int _generation = 0;
   List<double>? _frequencyBins;
@@ -45,10 +45,13 @@ class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _colCount = 0;
   double _zoomLevel = 1.0;
 
-  void _zoomIn() => setState(() => _zoomLevel = (_zoomLevel * 1.5).clamp(0.05, 4.0));
-  void _zoomOut() => setState(() => _zoomLevel = (_zoomLevel / 1.5).clamp(0.05, 4.0));
-  void _fitToScreen(double availableWidth, double nativeWidth) {
-    final fitZoom = (availableWidth - 34) / nativeWidth;
+  void zoomIn() => setState(() => _zoomLevel = (_zoomLevel * 1.5).clamp(0.05, 4.0));
+  void zoomOut() => setState(() => _zoomLevel = (_zoomLevel / 1.5).clamp(0.05, 4.0));
+  void fitToScreen() {
+    final w = context.size?.width ?? 400;
+    final nativeHeight = (w - 34) * 0.43;
+    final nativeWidth = nativeHeight * 1.5;
+    final fitZoom = (w - 34) / nativeWidth;
     setState(() => _zoomLevel = fitZoom.clamp(0.05, 4.0));
   }
 
@@ -213,11 +216,11 @@ class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
               right: 8,
               child: Column(
                 children: [
-                  _zoomBtn(Icons.add, () => _zoomIn()),
+                  _zoomBtn(Icons.add, () => zoomIn()),
                   const SizedBox(height: 4),
-                  _zoomBtn(Icons.remove, () => _zoomOut()),
+                  _zoomBtn(Icons.remove, () => zoomOut()),
                   const SizedBox(height: 4),
-                  _zoomBtn(Icons.fit_screen, () => _fitToScreen(constraints.maxWidth, nativeWidth)),
+                  _zoomBtn(Icons.fit_screen, () => fitToScreen()),
                 ],
               ),
             ),

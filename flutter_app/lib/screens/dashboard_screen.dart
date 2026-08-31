@@ -431,9 +431,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
-  void _openFullscreen() {
+  void _openFullscreen() async {
     if (_histories.isEmpty) return;
-    Navigator.of(context).push(
+    final result = await Navigator.of(context).push<FullscreenResult>(
       MaterialPageRoute(
         builder: (_) => FullscreenSpectrogram(
           histories: _histories,
@@ -443,6 +443,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       ),
     );
+    if (result != null && mounted) {
+      setState(() {
+        _colorMapIndex = result.colorMapIndex;
+        _gainDb = result.gainDb;
+        _noiseThreshold = result.noiseThreshold;
+      });
+    }
   }
 
   Widget _buildSpectrogramArea() {
