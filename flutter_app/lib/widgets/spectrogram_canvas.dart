@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../models/device_history.dart';
 import '../utils/spectro.dart';
 import '../utils/spectro_isolate.dart';
+import 'spectrogram_axes_painter.dart';
 
 /// Displays a batch of history packets as a scrollable spectrogram image.
 ///
@@ -37,6 +39,19 @@ class SpectrogramCanvas extends StatefulWidget {
 class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
   ui.Image? _image;
   int _generation = 0;
+  List<double>? _frequencyBins;
+  DateTime? _startTime;
+  DateTime? _endTime;
+  int _rowCount = 0;
+  int _colCount = 0;
+  double _zoomLevel = 1.0;
+
+  void _zoomIn() => setState(() => _zoomLevel = (_zoomLevel * 1.5).clamp(0.05, 4.0));
+  void _zoomOut() => setState(() => _zoomLevel = (_zoomLevel / 1.5).clamp(0.05, 4.0));
+  void _fitToScreen(double availableWidth, double nativeWidth) {
+    final fitZoom = (availableWidth - 34) / nativeWidth;
+    setState(() => _zoomLevel = fitZoom.clamp(0.05, 4.0));
+  }
 
   @override
   void initState() {
@@ -50,9 +65,7 @@ class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
     if (!identical(oldWidget.histories, widget.histories) ||
         oldWidget.colorMap != widget.colorMap ||
         oldWidget.gainDb != widget.gainDb ||
-        oldWidget.noiseThreshold != widget.noiseThreshold ||
-        oldWidget.width != widget.width ||
-        oldWidget.height != widget.height) {
+        oldWidget.noiseThreshold != widget.noiseThreshold) {
       _render();
     }
   }
@@ -68,11 +81,13 @@ class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
       return;
     }
 
-    final width = widget.width ?? 1200;
-    final height = widget.height ?? 500;
-
     // Build per-block normalized matrices (matches web: each block processed independently).
     final blocks = <List<List<double>>>[];
+    List<double>? firstBins;
+    DateTime? earliest;
+    DateTime? latest;
+    int maxRows = 0;
+    int totalCols = 0;
     for (final history in histories) {
       final range = history.intensityRange;
       final data = history.data;
@@ -89,7 +104,27 @@ class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
         block.add(normalizedRow);
       }
       blocks.add(block);
+      if (data.length > maxRows) maxRows = data.length;
+      totalCols += block.isNotEmpty ? block[0].length : 0;
+      if (firstBins == null && history.frequencyBins != null && history.frequencyBins!.isNotEmpty) {
+        firstBins = history.frequencyBins;
+      }
+      final st = history.startTime ?? history.timestamp;
+      final et = history.endTime ?? history.timestamp;
+      if (st.isNotEmpty) {
+        final dt = DateTime.tryParse(st);
+        if (dt != null && (earliest == null || dt.isBefore(earliest))) earliest = dt;
+      }
+      if (et.isNotEmpty) {
+        final dt = DateTime.tryParse(et);
+        if (dt != null && (latest == null || dt.isAfter(latest))) latest = dt;
+      }
     }
+    _frequencyBins = firstBins;
+    _startTime = earliest;
+    _endTime = latest;
+    _rowCount = maxRows;
+    _colCount = totalCols;
 
     ui.Image? image;
     try {
@@ -98,8 +133,8 @@ class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
         colorMap: widget.colorMap ?? kColorMapMagma,
         gainDb: widget.gainDb,
         noiseThreshold: widget.noiseThreshold,
-        width: width,
-        height: height,
+        width: totalCols,
+        height: maxRows,
       );
     } catch (_) {
       image = null;
@@ -132,16 +167,84 @@ class _SpectrogramCanvasState extends State<SpectrogramCanvas> {
       );
     }
     return LayoutBuilder(builder: (context, constraints) {
-      return SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: RawImage(
-          image: img,
-          width: constraints.maxWidth,
-          height: constraints.maxHeight,
-          fit: BoxFit.contain,
-          filterQuality: FilterQuality.medium,
+      final plotHeight = constraints.maxHeight - 40; // 16 top (freq labels) + 24 bottom (time labels)
+      final nativeHeight = plotHeight > 0 ? plotHeight : 400.0;
+      final aspectRatio = img.width / img.height;
+      final nativeWidth = nativeHeight * aspectRatio;
+      final displayWidth = nativeWidth * _zoomLevel;
+      final displayHeight = nativeHeight * _zoomLevel;
+      final totalWidth = displayWidth + 34;
+
+      return Container(
+        color: const Color(0xFF140D28),
+        child: Stack(
+          children: [
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: math.max(constraints.maxWidth, totalWidth),
+                height: constraints.maxHeight,
+                child: Stack(
+                  children: [
+                    // Image — below the axes labels
+                    Positioned(
+                      left: 32,
+                      top: 16,
+                      width: displayWidth,
+                      height: displayHeight,
+                      child: RawImage(
+                        image: img,
+                        fit: BoxFit.fill,
+                        filterQuality: FilterQuality.medium,
+                      ),
+                    ),
+                    // Axes — always fixed, ignore zoom
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: SpectrogramAxesPainter(
+                          rowCount: _rowCount,
+                          colCount: _colCount,
+                          frequencyBins: _frequencyBins,
+                          startTime: _startTime,
+                          endTime: _endTime,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Column(
+                children: [
+                  _zoomBtn(Icons.add, () => _zoomIn()),
+                  const SizedBox(height: 4),
+                  _zoomBtn(Icons.remove, () => _zoomOut()),
+                  const SizedBox(height: 4),
+                  _zoomBtn(Icons.fit_screen, () => _fitToScreen(constraints.maxWidth, nativeWidth)),
+                ],
+              ),
+            ),
+          ],
         ),
       );
     });
+  }
+
+  Widget _zoomBtn(IconData icon, VoidCallback onTap) {
+    return Material(
+      color: Colors.black54,
+      shape: const CircleBorder(),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Icon(icon, color: Colors.white70, size: 20),
+        ),
+      ),
+    );
   }
 }
