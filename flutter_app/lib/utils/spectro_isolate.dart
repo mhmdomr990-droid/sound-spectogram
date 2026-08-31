@@ -1,10 +1,175 @@
 import 'dart:async';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
 import 'spectro.dart';
+import '../models/device_history.dart';
+
+// ---------------------------------------------------------------------------
+// Color LUT — pre-computed 256-entry RGBA lookup table per color map.
+// Replaces per-pixel colorMapToColor() interpolation with a single array
+// index, yielding ~10-50× speedup on the rasterization inner loop.
+// ---------------------------------------------------------------------------
+
+class ColorLUT {
+  final Uint8List rgba;
+
+  const ColorLUT(this.rgba);
+
+  static ColorLUT build(List<List<double>> colorMap) {
+    final buf = Uint8List(256 * 4);
+    for (var i = 0; i < 256; i++) {
+      final v = i / 255.0;
+      final c = colorMapToColor(colorMap, v);
+      buf[i * 4] = c[0].clamp(0, 255);
+      buf[i * 4 + 1] = c[1].clamp(0, 255);
+      buf[i * 4 + 2] = c[2].clamp(0, 255);
+      buf[i * 4 + 3] = 0xFF;
+    }
+    return ColorLUT(buf);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Persistent Isolate — keeps one isolate alive for the app lifetime.
+// Avoids the per-render overhead of compute() (isolate spawn + serialization).
+// ---------------------------------------------------------------------------
+
+class _IsoMessage {
+  final dynamic data;
+  final SendPort replyPort;
+  const _IsoMessage(this.data, this.replyPort);
+}
+
+class _PersistentIsolate {
+  // ignore: unused_field — kept alive intentionally to prevent GC of the isolate.
+  static Isolate? _isolate;
+  static ReceivePort? _cmdPort;
+  static SendPort? _isoSendPort;
+  static bool _ready = false;
+  static Future<void>? _starting;
+
+  static Future<void> _ensureRunning() async {
+    if (_ready) return;
+    if (_starting != null) return _starting!;
+
+    final completer = Completer<void>();
+    _starting = completer.future;
+
+    _cmdPort = ReceivePort();
+    _isolate = await Isolate.spawn(_isolateEntry, _cmdPort!.sendPort);
+
+    _cmdPort!.listen((msg) {
+      if (msg is SendPort) {
+        _isoSendPort = msg;
+        _ready = true;
+        completer.complete();
+      }
+    });
+  }
+
+  static Future<dynamic> send(dynamic data) async {
+    await _ensureRunning();
+    final reply = ReceivePort();
+    _isoSendPort!.send(_IsoMessage(data, reply.sendPort));
+    final result = await reply.first;
+    reply.close();
+    return result;
+  }
+
+  static void _isolateEntry(SendPort mainSendPort) {
+    final cmdPort = ReceivePort();
+    mainSendPort.send(cmdPort.sendPort);
+
+    cmdPort.listen((msg) {
+      final m = msg as _IsoMessage;
+      final result = _dispatch(m.data);
+      m.replyPort.send(result);
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Message dispatch — runs inside the persistent isolate.
+// ---------------------------------------------------------------------------
+
+class _RenderMsg {
+  final List<List<List<double>>> blocks;
+  final Uint8List lut;
+  final double gainDb;
+  final double noiseThreshold;
+  final int width;
+  final int height;
+  const _RenderMsg(this.blocks, this.lut, this.gainDb, this.noiseThreshold, this.width, this.height);
+}
+
+class _RawRenderMsg {
+  final List<_RawBlockMsg> rawBlocks;
+  final Uint8List lut;
+  final double gainDb;
+  final double noiseThreshold;
+  final int width;
+  final int height;
+  const _RawRenderMsg(this.rawBlocks, this.lut, this.gainDb, this.noiseThreshold, this.width, this.height);
+}
+
+class _RawBlockMsg {
+  final List<List<double>> data;
+  final String? intensityType;
+  final double min;
+  final double max;
+  const _RawBlockMsg(this.data, this.intensityType, this.min, this.max);
+}
+
+class _RasterizeMsg {
+  final List<List<double>> combined;
+  final Uint8List lut;
+  final double gainDb;
+  final int width;
+  final int height;
+  const _RasterizeMsg(this.combined, this.lut, this.gainDb, this.width, this.height);
+}
+
+class _RenderResult {
+  final Uint8List bytes;
+  final int width;
+  final int height;
+  const _RenderResult(this.bytes, this.width, this.height);
+}
+
+class _CacheResult {
+  final _RenderResult imageBytes;
+  final List<List<double>> cachedCombined;
+  const _CacheResult(this.imageBytes, this.cachedCombined);
+}
+
+dynamic _dispatch(dynamic msg) {
+  if (msg is _RenderMsg) return _renderInIsolate(msg);
+  if (msg is _RawRenderMsg) return _renderRawInIsolate(msg);
+  if (msg is _RasterizeMsg) return _rasterizeInIsolate(msg);
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Public API — called from the main isolate.
+// ---------------------------------------------------------------------------
+
+class RasterizeOutput {
+  final ui.Image image;
+  final List<List<double>> cachedCombined;
+  const RasterizeOutput({required this.image, required this.cachedCombined});
+}
+
+class RawBlockData {
+  final List<List<double>> data;
+  final String? intensityType;
+  final double min;
+  final double max;
+  const RawBlockData(this.data, this.intensityType, this.min, this.max);
+}
 
 class SpectroIsolate {
   static Future<ui.Image> render({
@@ -15,66 +180,157 @@ class SpectroIsolate {
     required int width,
     required int height,
   }) async {
-    final request = _RenderRequest(
-      blocks: blocks,
-      colorMap: colorMap,
-      gainDb: gainDb,
-      noiseThreshold: noiseThreshold,
-      width: width,
-      height: height,
-    );
-    final result = await compute(_render, request);
-    if (result == null) {
-      throw StateError('render failed');
-    }
+    final lut = ColorLUT.build(colorMap);
+    final msg = _RenderMsg(blocks, lut.rgba, gainDb, noiseThreshold, width, height);
+    final result = await _PersistentIsolate.send(msg);
+    if (result == null) throw StateError('render failed');
+    return _decodeImage(result as _RenderResult);
+  }
+
+  static Future<RasterizeOutput> renderAndCache({
+    required List<RawBlockData> rawBlocks,
+    required List<List<double>> colorMap,
+    double gainDb = 0.0,
+    double noiseThreshold = 0.06,
+    required int width,
+    required int height,
+  }) async {
+    final lut = ColorLUT.build(colorMap);
+    final blockMsgs = rawBlocks.map((b) =>
+        _RawBlockMsg(b.data, b.intensityType, b.min, b.max)).toList();
+    final msg = _RawRenderMsg(blockMsgs, lut.rgba, gainDb, noiseThreshold, width, height);
+    final result = await _PersistentIsolate.send(msg);
+    if (result == null) throw StateError('renderAndCache failed');
+    final cr = result as _CacheResult;
+    final image = await _decodeImage(cr.imageBytes);
+    return RasterizeOutput(image: image, cachedCombined: cr.cachedCombined);
+  }
+
+  static Future<ui.Image> rasterizeOnly({
+    required List<List<double>> cachedCombined,
+    required List<List<double>> colorMap,
+    double gainDb = 0.0,
+    required int width,
+    required int height,
+  }) async {
+    final lut = ColorLUT.build(colorMap);
+    final msg = _RasterizeMsg(cachedCombined, lut.rgba, gainDb, width, height);
+    final result = await _PersistentIsolate.send(msg);
+    if (result == null) throw StateError('rasterizeOnly failed');
+    return _decodeImage(result as _RenderResult);
+  }
+
+  static Future<ui.Image> _decodeImage(_RenderResult r) async {
     final completer = Completer<ui.Image>();
-    ui.decodeImageFromPixels(
-        result.bytes, result.width, result.height, ui.PixelFormat.rgba8888,
-        (image) => completer.complete(image));
+    ui.decodeImageFromPixels(r.bytes, r.width, r.height, ui.PixelFormat.rgba8888,
+        (img) => completer.complete(img));
     return completer.future;
   }
 }
 
-class _RenderRequest {
-  final List<List<List<double>>> blocks;
-  final List<List<double>> colorMap;
-  final double gainDb;
-  final double noiseThreshold;
-  final int width;
-  final int height;
+// ---------------------------------------------------------------------------
+// Rasterization — LUT-based, no per-pixel color map interpolation.
+// ---------------------------------------------------------------------------
 
-  const _RenderRequest({
-    required this.blocks,
-    required this.colorMap,
-    required this.gainDb,
-    required this.noiseThreshold,
-    required this.width,
-    required this.height,
-  });
+Uint8List _rasterize(List<List<double>> combined, Uint8List lut, double gainDb, int width, int height) {
+  final dataHeight = combined.length;
+  if (dataHeight == 0) return Uint8List(0);
+  final dataWidth = combined[0].length;
+  if (dataWidth == 0) return Uint8List(0);
+
+  final total = width * height * 4;
+  final bytes = Uint8List(total);
+
+  final scale = gainDb != 0 ? math.pow(10.0, gainDb / 20.0).toDouble() : 1.0;
+  final useGain = gainDb != 0;
+
+  for (var py = 0; py < height; py++) {
+    final rowIndex = (dataHeight - 1 - ((py * dataHeight) / height).floor())
+        .clamp(0, dataHeight - 1);
+    final row = combined[rowIndex];
+    final rowOffset = py * width * 4;
+
+    for (var px = 0; px < width; px++) {
+      final colIndex = ((px * dataWidth) / width).floor().clamp(0, dataWidth - 1);
+      var value = (colIndex < row.length) ? row[colIndex] : 0.0;
+      if (useGain && value > 0) {
+        value = (value * scale).clamp(0.0, 1.0);
+      }
+      final idx = (value * 255).round().clamp(0, 255);
+      final offset = rowOffset + px * 4;
+      bytes[offset] = lut[idx * 4];
+      bytes[offset + 1] = lut[idx * 4 + 1];
+      bytes[offset + 2] = lut[idx * 4 + 2];
+      bytes[offset + 3] = 0xFF;
+    }
+  }
+
+  return bytes;
 }
 
-class _RenderResult {
-  final Uint8List bytes;
-  final int width;
-  final int height;
+// ---------------------------------------------------------------------------
+// Isolate functions — run on the persistent isolate.
+// ---------------------------------------------------------------------------
 
-  const _RenderResult(this.bytes, this.width, this.height);
-}
-
-_RenderResult? _render(_RenderRequest req) {
+_RenderResult? _renderInIsolate(_RenderMsg req) {
   final blocks = req.blocks;
   if (blocks.isEmpty) return null;
 
-  // Process each block independently (matches web: per-block noise suppression).
   final denoisedBlocks = <List<List<double>>>[];
   for (final block in blocks) {
     if (block.isEmpty || block[0].isEmpty) continue;
     denoisedBlocks.add(_processBlockMatrix(block, req.noiseThreshold));
   }
-
   if (denoisedBlocks.isEmpty) return null;
 
-  // Concatenate denoised blocks horizontally (time axis).
+  final combined = _concatBlocks(denoisedBlocks);
+  if (combined.isEmpty) return null;
+
+  final bytes = _rasterize(combined, req.lut, req.gainDb, req.width, req.height);
+  return _RenderResult(bytes, req.width, req.height);
+}
+
+_CacheResult? _renderRawInIsolate(_RawRenderMsg req) {
+  final rawBlocks = req.rawBlocks;
+  if (rawBlocks.isEmpty) return null;
+
+  final denoisedBlocks = <List<List<double>>>[];
+  for (final raw in rawBlocks) {
+    if (raw.data.isEmpty || raw.data[0].isEmpty) continue;
+    final normalizedBlock = <List<double>>[];
+    for (var r = 0; r < raw.data.length; r++) {
+      final row = raw.data[r];
+      final normalizedRow = <double>[];
+      for (var c = 0; c < row.length; c++) {
+        normalizedRow.add(DeviceHistory.normalizeValue(row[c], raw.intensityType, raw.min, raw.max));
+      }
+      normalizedBlock.add(normalizedRow);
+    }
+    denoisedBlocks.add(_processBlockMatrix(normalizedBlock, req.noiseThreshold));
+  }
+  if (denoisedBlocks.isEmpty) return null;
+
+  final combined = _concatBlocks(denoisedBlocks);
+  if (combined.isEmpty) return null;
+
+  final bytes = _rasterize(combined, req.lut, req.gainDb, req.width, req.height);
+
+  final cachedCombined = List<List<double>>.generate(
+      combined.length, (r) => List<double>.from(combined[r]));
+
+  return _CacheResult(_RenderResult(bytes, req.width, req.height), cachedCombined);
+}
+
+_RenderResult? _rasterizeInIsolate(_RasterizeMsg req) {
+  final combined = req.combined;
+  if (combined.isEmpty) return null;
+
+  final bytes = _rasterize(combined, req.lut, req.gainDb, req.width, req.height);
+  return _RenderResult(bytes, req.width, req.height);
+}
+
+List<List<double>> _concatBlocks(List<List<List<double>>> denoisedBlocks) {
+  if (denoisedBlocks.isEmpty) return [];
   final dataHeight = denoisedBlocks[0].length;
   final combined = <List<double>>[];
   for (var r = 0; r < dataHeight; r++) {
@@ -86,38 +342,7 @@ _RenderResult? _render(_RenderRequest req) {
       combined[r].addAll(block[r]);
     }
   }
-
-  final dataWidth = combined.isNotEmpty ? combined[0].length : 0;
-  if (dataHeight == 0 || dataWidth == 0) return null;
-
-  final total = req.width * req.height * 4;
-  final bytes = Uint8List(total);
-
-  for (var py = 0; py < req.height; py++) {
-    final rowIndex = (dataHeight - 1 - ((py * dataHeight) / req.height).floor())
-        .clamp(0, dataHeight - 1);
-    final row = combined[rowIndex];
-    for (var px = 0; px < req.width; px++) {
-      final colIndex =
-          ((px * dataWidth) / req.width).floor().clamp(0, dataWidth - 1);
-      final value = (colIndex < row.length) ? row[colIndex] : 0.0;
-      final color = colorMapToColor(req.colorMap, _applyGain(value, req.gainDb));
-
-      final offset = (py * req.width + px) * 4;
-      bytes[offset] = color[0].clamp(0, 255);
-      bytes[offset + 1] = color[1].clamp(0, 255);
-      bytes[offset + 2] = color[2].clamp(0, 255);
-      bytes[offset + 3] = 0xFF;
-    }
-  }
-
-  return _RenderResult(bytes, req.width, req.height);
-}
-
-double _applyGain(double value, double gainDb) {
-  if (gainDb == 0 || value <= 0) return value;
-  final scale = math.pow(10.0, gainDb / 20.0).toDouble();
-  return (value * scale).clamp(0.0, 1.0);
+  return combined;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,12 +355,10 @@ List<List<double>> _processBlockMatrix(List<List<double>> matrix, double noiseTh
   final cols = matrix[0].length;
   if (cols == 0) return matrix;
 
-  // 1. Compute histogram and threshold
   final histData = _collectNormalizedHistogram(matrix);
   final threshold =
       math.max(_quantileFromHistogram(histData, 0.72), noiseThreshold);
 
-  // 2. Gate noise and build active mask
   final gated = List<List<double>>.generate(
       rows, (r) => List<double>.generate(cols, (c) => matrix[r][c]));
   final mask = List<List<bool>>.generate(
@@ -151,7 +374,6 @@ List<List<double>> _processBlockMatrix(List<List<double>> matrix, double noiseTh
     }
   }
 
-  // 3. Morphological erosion — thins all regions, removes thin protrusions/noise
   final eroded = List<List<bool>>.generate(
       rows, (r) => List<bool>.generate(cols, (c) => false));
   for (var r = 1; r < rows - 1; r++) {
@@ -167,7 +389,6 @@ List<List<double>> _processBlockMatrix(List<List<double>> matrix, double noiseTh
     }
   }
 
-  // 4. Isolated pixel removal (aggressive, 2 passes)
   const neighborhoodSize = 5;
   const minActiveNeighbors = 2;
   final radius = (neighborhoodSize - 1) ~/ 2;
@@ -195,10 +416,8 @@ List<List<double>> _processBlockMatrix(List<List<double>> matrix, double noiseTh
     currentMask = filteredMask;
   }
 
-  // 5. Gap bridging (morphology)
   final bridgedMask = _bridgeThinGaps(currentMask);
 
-  // 6. Build denoised matrix
   final denoised = List<List<double>>.generate(
       rows, (r) => List<double>.generate(cols, (c) {
     return bridgedMask[r][c] ? gated[r][c] : 0.0;

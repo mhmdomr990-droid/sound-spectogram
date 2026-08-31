@@ -45,6 +45,11 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _colCount = 0;
   double _zoomLevel = 1.0;
 
+  List<List<double>>? _cachedCombined;
+  int _cachedWidth = 0;
+  int _cachedHeight = 0;
+  Timer? _renderDebounce;
+
   void zoomIn() => setState(() => _zoomLevel = (_zoomLevel * 1.15).clamp(0.05, 4.0));
   void zoomOut() => setState(() => _zoomLevel = (_zoomLevel / 1.15).clamp(0.05, 4.0));
   void fitToScreen() {
@@ -70,11 +75,17 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   void didUpdateWidget(covariant SpectrogramCanvas oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.histories, widget.histories) ||
-        oldWidget.colorMap != widget.colorMap ||
-        oldWidget.gainDb != widget.gainDb ||
         oldWidget.noiseThreshold != widget.noiseThreshold) {
-      _render();
+      _renderDebounced();
+    } else if (oldWidget.colorMap != widget.colorMap ||
+        oldWidget.gainDb != widget.gainDb) {
+      _renderCached();
     }
+  }
+
+  void _renderDebounced() {
+    _renderDebounce?.cancel();
+    _renderDebounce = Timer(const Duration(milliseconds: 50), _render);
   }
 
   Future<void> _render() async {
@@ -83,36 +94,22 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
 
     if (histories.isEmpty) {
       if (mounted && _image != null) {
-        setState(() => _image = null);
+        setState(() {
+          _image = null;
+          _cachedCombined = null;
+        });
       }
       return;
     }
 
-    // Build per-block normalized matrices (matches web: each block processed independently).
-    final blocks = <List<List<double>>>[];
     List<double>? firstBins;
     DateTime? earliest;
     DateTime? latest;
     int maxRows = 0;
     int totalCols = 0;
     for (final history in histories) {
-      final range = history.intensityRange;
-      final data = history.data;
-      final type = history.intensityType;
-      final min = range[0];
-      final max = range[1];
-      final block = <List<double>>[];
-      for (var r = 0; r < data.length; r++) {
-        final row = data[r];
-        final normalizedRow = <double>[];
-        for (var c = 0; c < row.length; c++) {
-          normalizedRow.add(DeviceHistory.normalizeValue(row[c], type, min, max));
-        }
-        block.add(normalizedRow);
-      }
-      blocks.add(block);
-      if (data.length > maxRows) maxRows = data.length;
-      totalCols += block.isNotEmpty ? block[0].length : 0;
+      if (history.data.length > maxRows) maxRows = history.data.length;
+      totalCols += history.data.isNotEmpty ? history.data[0].length : 0;
       if (firstBins == null && history.frequencyBins != null && history.frequencyBins!.isNotEmpty) {
         firstBins = history.frequencyBins;
       }
@@ -131,16 +128,52 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     _startTime = earliest;
     _endTime = latest;
     _colCount = totalCols;
+    _cachedWidth = totalCols;
+    _cachedHeight = maxRows;
+
+    final rawBlocks = histories.map((h) => RawBlockData(
+      h.data,
+      h.intensityType,
+      h.intensityRange[0],
+      h.intensityRange[1],
+    )).toList();
 
     ui.Image? image;
     try {
-      image = await SpectroIsolate.render(
-        blocks: blocks,
+      final output = await SpectroIsolate.renderAndCache(
+        rawBlocks: rawBlocks,
         colorMap: widget.colorMap ?? kColorMapMagma,
         gainDb: widget.gainDb,
         noiseThreshold: widget.noiseThreshold,
         width: totalCols,
         height: maxRows,
+      );
+      image = output.image;
+      _cachedCombined = output.cachedCombined;
+    } catch (_) {
+      image = null;
+    }
+
+    if (!mounted || gen != _generation) {
+      image?.dispose();
+      return;
+    }
+    setState(() => _image = image);
+  }
+
+  Future<void> _renderCached() async {
+    final combined = _cachedCombined;
+    if (combined == null || _cachedWidth == 0 || _cachedHeight == 0) return;
+
+    final gen = ++_generation;
+    ui.Image? image;
+    try {
+      image = await SpectroIsolate.rasterizeOnly(
+        cachedCombined: combined,
+        colorMap: widget.colorMap ?? kColorMapMagma,
+        gainDb: widget.gainDb,
+        width: _cachedWidth,
+        height: _cachedHeight,
       );
     } catch (_) {
       image = null;
@@ -155,6 +188,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
 
   @override
   void dispose() {
+    _renderDebounce?.cancel();
     _image?.dispose();
     super.dispose();
   }
