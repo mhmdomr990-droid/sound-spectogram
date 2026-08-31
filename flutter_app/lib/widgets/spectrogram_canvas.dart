@@ -45,8 +45,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _colCount = 0;
   double _zoomLevel = 1.0;
 
-  void zoomIn() => setState(() => _zoomLevel = (_zoomLevel * 1.5).clamp(0.05, 4.0));
-  void zoomOut() => setState(() => _zoomLevel = (_zoomLevel / 1.5).clamp(0.05, 4.0));
+  void zoomIn() => setState(() => _zoomLevel = (_zoomLevel * 1.15).clamp(0.05, 4.0));
+  void zoomOut() => setState(() => _zoomLevel = (_zoomLevel / 1.15).clamp(0.05, 4.0));
   void fitToScreen() {
     final img = _image;
     if (img == null) return;
