@@ -9,6 +9,7 @@ import '../services/auth_service.dart';
 import '../services/socket_service.dart';
 import '../utils/spectro.dart';
 import '../widgets/spectrogram_canvas.dart';
+import 'fullscreen_spectrogram.dart';
 
 enum _RangeMode { latestPacket, lastHour, last5h, last24h, custom }
 
@@ -403,6 +404,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ],
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 6),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _openFullscreen,
+                icon: const Icon(Icons.fullscreen, size: 18),
+                label: const Text('وضع ملء الشاشة', style: TextStyle(fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white70,
+                  side: const BorderSide(color: Colors.white24),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -412,6 +429,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() {
       _colorMapIndex = (_colorMapIndex + 1) % kColorMaps.length;
     });
+  }
+
+  void _openFullscreen() {
+    if (_histories.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => FullscreenSpectrogram(
+          histories: _histories,
+          colorMapIndex: _colorMapIndex,
+          gainDb: _gainDb,
+          noiseThreshold: _noiseThreshold,
+        ),
+      ),
+    );
   }
 
   Widget _buildSpectrogramArea() {
