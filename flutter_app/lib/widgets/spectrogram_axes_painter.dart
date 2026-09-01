@@ -38,7 +38,7 @@ class SpectrogramAxesPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     const left = 32.0;
     const topPad = 0.0;
-    final bottomPad = aiStatusBlocks.isNotEmpty ? 56.0 : 20.0;
+    final bottomPad = 18.0;
     final plotW = math.max(10.0, size.width - left - 2);
     final plotH = math.max(10.0, size.height - topPad - bottomPad);
 
@@ -96,17 +96,19 @@ class SpectrogramAxesPainter extends CustomPainter {
           style: const TextStyle(color: textColor, fontSize: 8, fontFamily: 'sans-serif'),
         )
         ..layout();
-      timeTp.paint(canvas, Offset(labelX - timeTp.width / 2, topPad + plotH + 4));
+      timeTp.paint(canvas, Offset(labelX - timeTp.width / 2, topPad + plotH + 1));
     }
 
     // --- X-axis title ---
-    final title = TextPainter(textDirection: TextDirection.ltr)
-      ..text = const TextSpan(
-        text: 'الزمن',
-        style: TextStyle(color: axisColor, fontSize: 7, fontFamily: 'sans-serif'),
-      )
-      ..layout();
-    title.paint(canvas, Offset(left + plotW / 2 - title.width / 2, topPad + plotH + 14));
+    if (aiStatusBlocks.isEmpty) {
+      final title = TextPainter(textDirection: TextDirection.ltr)
+        ..text = const TextSpan(
+          text: 'الزمن',
+          style: TextStyle(color: axisColor, fontSize: 7, fontFamily: 'sans-serif'),
+        )
+        ..layout();
+      title.paint(canvas, Offset(left + plotW / 2 - title.width / 2, topPad + plotH + 7));
+    }
 
     // --- Y-axis title (rotated) ---
     final yTitle = TextPainter(textDirection: TextDirection.rtl)
@@ -121,10 +123,10 @@ class SpectrogramAxesPainter extends CustomPainter {
     yTitle.paint(canvas, Offset(-yTitle.width / 2, -yTitle.height / 2));
     canvas.restore();
 
-    // --- AI Status bar ---
+    // --- AI Status bar (below axes, under time labels) ---
     if (aiStatusBlocks.isNotEmpty) {
-      const statusBarHeight = 28.0;
-      final statusBarY = topPad + plotH + 24;
+      const statusBarHeight = 10.0;
+      final statusBarY = topPad + plotH + 11;
       final blockPaint = Paint();
       final blockTp = TextPainter(textDirection: TextDirection.rtl);
 
@@ -140,13 +142,13 @@ class SpectrogramAxesPainter extends CustomPainter {
           blockPaint,
         );
 
-        if (sw >= 72) {
+        if (sw >= 40) {
           blockTp
             ..text = TextSpan(
               text: block.label,
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 11,
+                fontSize: 9,
                 fontWeight: FontWeight.bold,
                 fontFamily: 'sans-serif',
               ),

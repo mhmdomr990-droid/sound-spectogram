@@ -333,7 +333,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: _loadingDevices
           ? const LinearProgressIndicator()
           : SizedBox(
-              height: 40,
+              height: 36,
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 children: [
@@ -376,7 +376,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Icon(icon, size: 16),
                 const SizedBox(width: 4),
               ],
-              Text(label, style: const TextStyle(fontSize: 12)),
+              Text(label, style: const TextStyle(fontSize: 10)),
             ],
           ),
         ),
@@ -390,10 +390,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Column(
         children: [
           SizedBox(
-            height: 44,
+            height: 32,
             child: ListView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
               children: [
                 btn('آخر باكت', Icons.flash_on, () => _setRange(_RangeMode.latestPacket), active: mode(_RangeMode.latestPacket)),
                 btn('متابعة البث', Icons.play_circle, () => _setRange(_RangeMode.followLive), active: mode(_RangeMode.followLive)),
@@ -405,10 +405,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           SizedBox(
-            height: 44,
+            height: 32,
             child: ListView(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
               children: [
                 btn('الألوان: ${kColorMapNames[_colorMapIndex]}', null, _toggleColorMap),
                 if (_rangeMode != _RangeMode.latestPacket)
@@ -417,22 +417,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
+            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
             child: Row(
               children: [
-                const Icon(Icons.volume_up, size: 16, color: Colors.white70),
-                const SizedBox(width: 8),
+                const Icon(Icons.volume_up, size: 14, color: Colors.white70),
+                const SizedBox(width: 4),
                 Text(
                   'الكسب: ${_gainDb.toStringAsFixed(0)} dB',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  style: const TextStyle(color: Colors.white70, fontSize: 10),
                 ),
                 Expanded(
-                  child: Slider(
-                    value: _gainDb,
-                    min: -24,
-                    max: 24,
-                    divisions: 48,
-                    onChanged: (v) => setState(() => _gainDb = v),
+                  child: SliderTheme(
+                    data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5)),
+                    child: Slider(
+                      value: _gainDb,
+                      min: -24,
+                      max: 24,
+                      divisions: 48,
+                      onChanged: (v) => setState(() => _gainDb = v),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
+            child: Row(
+              children: [
+                const Icon(Icons.noise_aware, size: 14, color: Colors.white70),
+                const SizedBox(width: 4),
+                Text(
+                  'الضوضاء: ${_noiseThreshold.toStringAsFixed(2)}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 10),
+                ),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5)),
+                    child: Slider(
+                      value: _noiseThreshold,
+                      min: 0.0,
+                      max: 0.5,
+                      divisions: 50,
+                      onChanged: (v) => setState(() => _noiseThreshold = v),
+                    ),
                   ),
                 ),
               ],
@@ -440,38 +468,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           Padding(
             padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
-            child: Row(
-              children: [
-                const Icon(Icons.noise_aware, size: 16, color: Colors.white70),
-                const SizedBox(width: 8),
-                Text(
-                  'عتبة الضوضاء: ${_noiseThreshold.toStringAsFixed(2)}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-                Expanded(
-                  child: Slider(
-                    value: _noiseThreshold,
-                    min: 0.0,
-                    max: 0.5,
-                    divisions: 50,
-                    onChanged: (v) => setState(() => _noiseThreshold = v),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 6),
             child: SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: _openFullscreen,
-                icon: const Icon(Icons.fullscreen, size: 18),
-                label: const Text('وضع ملء الشاشة', style: TextStyle(fontSize: 12)),
+                icon: const Icon(Icons.fullscreen, size: 14),
+                label: const Text('ملء الشاشة', style: TextStyle(fontSize: 10)),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.white70,
                   side: const BorderSide(color: Colors.white24),
-                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  padding: const EdgeInsets.symmetric(vertical: 4),
                 ),
               ),
             ),
@@ -565,7 +571,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final connected = _socketStatus == SocketStatus.connected;
     final packetCount = _histories.length;
     return Container(
-      height: 28,
+      height: 24,
       color: const Color(0xFF111111),
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(

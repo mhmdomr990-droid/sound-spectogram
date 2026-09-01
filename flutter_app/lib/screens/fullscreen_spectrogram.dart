@@ -124,21 +124,21 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
           ),
           Container(
             color: const Color(0xFF111111),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             child: Row(
               children: [
                 Expanded(
                   child: Row(
                     children: [
-                      const Icon(Icons.volume_up, size: 14, color: Colors.white70),
-                      const SizedBox(width: 4),
+                      const Icon(Icons.volume_up, size: 12, color: Colors.white70),
+                      const SizedBox(width: 2),
                       Text(
-                        'الكسب: ${_gainDb.toStringAsFixed(0)} dB',
-                        style: const TextStyle(color: Colors.white70, fontSize: 11),
+                        '${_gainDb.toStringAsFixed(0)} dB',
+                        style: const TextStyle(color: Colors.white70, fontSize: 9),
                       ),
                       Expanded(
                         child: SliderTheme(
-                          data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6)),
+                          data: SliderThemeData(trackHeight: 1, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4)),
                           child: Slider(
                             value: _gainDb,
                             min: -24,
@@ -151,19 +151,18 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                     ],
                   ),
                 ),
-                const SizedBox(width: 12),
                 Expanded(
                   child: Row(
                     children: [
-                      const Icon(Icons.noise_aware, size: 14, color: Colors.white70),
-                      const SizedBox(width: 4),
+                      const Icon(Icons.noise_aware, size: 12, color: Colors.white70),
+                      const SizedBox(width: 2),
                       Text(
-                        'الضوضاء: ${_noiseThreshold.toStringAsFixed(2)}',
-                        style: const TextStyle(color: Colors.white70, fontSize: 11),
+                        '${_noiseThreshold.toStringAsFixed(2)}',
+                        style: const TextStyle(color: Colors.white70, fontSize: 9),
                       ),
                       Expanded(
                         child: SliderTheme(
-                          data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6)),
+                          data: SliderThemeData(trackHeight: 1, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4)),
                           child: Slider(
                             value: _noiseThreshold,
                             min: 0.0,
@@ -181,23 +180,22 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
           ),
           Container(
             color: const Color(0xFF111111),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _fsBtn(Icons.palette, 'الألوان', _toggleColorMap),
-                const SizedBox(width: 8),
-                _fsBtn(Icons.arrow_left, null, () => _canvasKey.currentState?.panLeft()),
-                const SizedBox(width: 8),
-                _fsBtn(Icons.zoom_in, null, () => _canvasKey.currentState?.zoomIn()),
-                const SizedBox(width: 8),
-                _fsBtn(Icons.zoom_out, null, () => _canvasKey.currentState?.zoomOut()),
-                const SizedBox(width: 8),
-                _fsBtn(Icons.arrow_right, null, () => _canvasKey.currentState?.panRight()),
-                const SizedBox(width: 8),
-                _fsBtn(Icons.fit_screen, null, () => _canvasKey.currentState?.fitToScreen()),
-                const SizedBox(width: 8),
-                _fsBtn(Icons.fullscreen_exit, 'خروج', _exit),
+                Expanded(child: _fsBtn(Icons.palette, null, _toggleColorMap)),
+                const SizedBox(width: 2),
+                Expanded(child: _fsBtn(Icons.arrow_left, null, () => _canvasKey.currentState?.panLeft())),
+                const SizedBox(width: 2),
+                Expanded(child: _fsBtn(Icons.zoom_in, null, () => _canvasKey.currentState?.zoomIn())),
+                const SizedBox(width: 2),
+                Expanded(child: _fsBtn(Icons.zoom_out, null, () => _canvasKey.currentState?.zoomOut())),
+                const SizedBox(width: 2),
+                Expanded(child: _fsBtn(Icons.arrow_right, null, () => _canvasKey.currentState?.panRight())),
+                const SizedBox(width: 2),
+                Expanded(child: _fsBtn(Icons.fit_screen, null, () => _canvasKey.currentState?.fitToScreen())),
+                const SizedBox(width: 2),
+                Expanded(child: _fsBtn(Icons.fullscreen_exit, null, _exit)),
               ],
             ),
           ),
@@ -209,21 +207,23 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
   Widget _fsBtn(IconData icon, String? label, VoidCallback onTap) {
     return Material(
       color: Colors.white12,
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(4),
       child: InkWell(
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(4),
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, color: Colors.white70, size: 18),
-              if (label != null) ...[
-                const SizedBox(width: 4),
-                Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: Colors.white70, size: 18),
+                if (label != null) ...[
+                  const SizedBox(height: 2),
+                  Text(label, style: const TextStyle(color: Colors.white70, fontSize: 8)),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

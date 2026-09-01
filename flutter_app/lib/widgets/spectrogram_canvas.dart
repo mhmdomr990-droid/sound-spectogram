@@ -365,8 +365,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
 
     return LayoutBuilder(builder: (context, constraints) {
       final containerWidth = constraints.maxWidth;
-      final containerHeight = constraints.maxHeight - 24;
-      final h = containerHeight > 0 ? containerHeight : 300.0;
+      final bottomPad = 18.0;
+      final h = (constraints.maxHeight - bottomPad).clamp(0.0, constraints.maxHeight);
 
       return Container(
         color: const Color(0xFF140D28),
@@ -412,7 +412,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                 ),
               ),
               Positioned(
-                top: 8,
+                top: 40,
                 right: 8,
                 child: Column(
                   children: [
