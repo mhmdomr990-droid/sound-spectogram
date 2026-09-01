@@ -41,6 +41,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double _gainDb = 0.0;
   double _noiseThreshold = 0.06;
   _RangeMode _rangeMode = _RangeMode.lastHour;
+  final _canvasKey = GlobalKey<SpectrogramCanvasState>();
 
   StreamSubscription<DeviceHistory>? _dataSub;
   StreamSubscription<SocketStatus>? _statusSub;
@@ -433,6 +434,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _openFullscreen() async {
     if (_histories.isEmpty) return;
+    final snap = _canvasKey.currentState?.seedSnapshot;
     final result = await Navigator.of(context).push<FullscreenResult>(
       MaterialPageRoute(
         builder: (_) => FullscreenSpectrogram(
@@ -440,6 +442,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
           colorMapIndex: _colorMapIndex,
           gainDb: _gainDb,
           noiseThreshold: _noiseThreshold,
+          seedImage: snap?.image,
+          seedCachedCombined: snap?.cachedCombined,
+          seedCachedWidth: snap?.cachedWidth ?? 0,
+          seedCachedHeight: snap?.cachedHeight ?? 0,
+          seedFrequencyBins: snap?.frequencyBins,
+          seedColCount: snap?.colCount ?? 0,
+          seedStartTime: snap?.startTime,
+          seedEndTime: snap?.endTime,
         ),
       ),
     );
@@ -487,6 +497,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       clipBehavior: Clip.antiAlias,
       child: SpectrogramCanvas(
+        key: _canvasKey,
         histories: _histories,
         colorMap: kColorMaps[_colorMapIndex],
         gainDb: _gainDb,

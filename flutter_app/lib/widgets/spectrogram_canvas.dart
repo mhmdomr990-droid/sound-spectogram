@@ -9,6 +9,28 @@ import '../utils/spectro.dart';
 import '../utils/spectro_isolate.dart';
 import 'spectrogram_axes_painter.dart';
 
+class CanvasSeedSnapshot {
+  final ui.Image image;
+  final List<List<double>>? cachedCombined;
+  final int cachedWidth;
+  final int cachedHeight;
+  final List<double>? frequencyBins;
+  final int colCount;
+  final DateTime? startTime;
+  final DateTime? endTime;
+
+  const CanvasSeedSnapshot({
+    required this.image,
+    this.cachedCombined,
+    this.cachedWidth = 0,
+    this.cachedHeight = 0,
+    this.frequencyBins,
+    this.colCount = 0,
+    this.startTime,
+    this.endTime,
+  });
+}
+
 /// Displays a batch of history packets as a scrollable spectrogram image.
 ///
 /// Packets are normalized to [0, 1], truncated vertically to a shared row
@@ -21,6 +43,14 @@ class SpectrogramCanvas extends StatefulWidget {
   final double noiseThreshold;
   final int? width;
   final int? height;
+  final ui.Image? seedImage;
+  final List<List<double>>? seedCachedCombined;
+  final int seedCachedWidth;
+  final int seedCachedHeight;
+  final List<double>? seedFrequencyBins;
+  final int seedColCount;
+  final DateTime? seedStartTime;
+  final DateTime? seedEndTime;
 
   const SpectrogramCanvas({
     super.key,
@@ -30,6 +60,14 @@ class SpectrogramCanvas extends StatefulWidget {
     this.noiseThreshold = 0.06,
     this.width,
     this.height,
+    this.seedImage,
+    this.seedCachedCombined,
+    this.seedCachedWidth = 0,
+    this.seedCachedHeight = 0,
+    this.seedFrequencyBins,
+    this.seedColCount = 0,
+    this.seedStartTime,
+    this.seedEndTime,
   });
 
   @override
@@ -50,6 +88,20 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _cachedHeight = 0;
   Timer? _renderDebounce;
 
+  CanvasSeedSnapshot? get seedSnapshot {
+    if (_image == null) return null;
+    return CanvasSeedSnapshot(
+      image: _image!,
+      cachedCombined: _cachedCombined,
+      cachedWidth: _cachedWidth,
+      cachedHeight: _cachedHeight,
+      frequencyBins: _frequencyBins,
+      colCount: _colCount,
+      startTime: _startTime,
+      endTime: _endTime,
+    );
+  }
+
   void zoomIn() => setState(() => _zoomLevel = (_zoomLevel * 1.15).clamp(0.05, 4.0));
   void zoomOut() => setState(() => _zoomLevel = (_zoomLevel / 1.15).clamp(0.05, 4.0));
   void fitToScreen() {
@@ -68,7 +120,18 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   @override
   void initState() {
     super.initState();
-    _render();
+    if (widget.seedImage != null) {
+      _image = widget.seedImage;
+      _cachedCombined = widget.seedCachedCombined;
+      _cachedWidth = widget.seedCachedWidth;
+      _cachedHeight = widget.seedCachedHeight;
+      _frequencyBins = widget.seedFrequencyBins;
+      _colCount = widget.seedColCount;
+      _startTime = widget.seedStartTime;
+      _endTime = widget.seedEndTime;
+    } else {
+      _render();
+    }
   }
 
   @override

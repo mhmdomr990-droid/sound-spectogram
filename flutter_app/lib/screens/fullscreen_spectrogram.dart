@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -22,6 +24,14 @@ class FullscreenSpectrogram extends StatefulWidget {
   final int colorMapIndex;
   final double gainDb;
   final double noiseThreshold;
+  final ui.Image? seedImage;
+  final List<List<double>>? seedCachedCombined;
+  final int seedCachedWidth;
+  final int seedCachedHeight;
+  final List<double>? seedFrequencyBins;
+  final int seedColCount;
+  final DateTime? seedStartTime;
+  final DateTime? seedEndTime;
 
   const FullscreenSpectrogram({
     super.key,
@@ -29,6 +39,14 @@ class FullscreenSpectrogram extends StatefulWidget {
     required this.colorMapIndex,
     required this.gainDb,
     required this.noiseThreshold,
+    this.seedImage,
+    this.seedCachedCombined,
+    this.seedCachedWidth = 0,
+    this.seedCachedHeight = 0,
+    this.seedFrequencyBins,
+    this.seedColCount = 0,
+    this.seedStartTime,
+    this.seedEndTime,
   });
 
   @override
@@ -93,6 +111,14 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                 colorMap: kColorMaps[_colorMapIndex],
                 gainDb: _gainDb,
                 noiseThreshold: _noiseThreshold,
+                seedImage: widget.seedImage,
+                seedCachedCombined: widget.seedCachedCombined,
+                seedCachedWidth: widget.seedCachedWidth,
+                seedCachedHeight: widget.seedCachedHeight,
+                seedFrequencyBins: widget.seedFrequencyBins,
+                seedColCount: widget.seedColCount,
+                seedStartTime: widget.seedStartTime,
+                seedEndTime: widget.seedEndTime,
               ),
             ),
           ),
