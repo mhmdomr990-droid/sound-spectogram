@@ -197,12 +197,19 @@ Uint8List _doRasterize(List<List<double>> combined, Uint8List lut, double gainDb
 
     for (var px = 0; px < width; px++) {
       final colIndex = startCol + ((px * visibleCols) / width).floor();
-      var value = (colIndex >= 0 && colIndex < row.length) ? row[colIndex] : 0.0;
+      final offset = rowOffset + px * 4;
+      if (colIndex < 0 || colIndex >= row.length) {
+        bytes[offset] = 0x14;
+        bytes[offset + 1] = 0x0D;
+        bytes[offset + 2] = 0x28;
+        bytes[offset + 3] = 0xFF;
+        continue;
+      }
+      var value = row[colIndex];
       if (useGain && value > 0) {
         value = (value * scale).clamp(0.0, 1.0);
       }
       final idx = (value * 255).round().clamp(0, 255);
-      final offset = rowOffset + px * 4;
       bytes[offset] = lut[idx * 4];
       bytes[offset + 1] = lut[idx * 4 + 1];
       bytes[offset + 2] = lut[idx * 4 + 2];
