@@ -130,7 +130,7 @@ _CacheResult? _renderRaw(_RenderRequest req) {
   final rawBlocks = req.rawBlocks;
   if (rawBlocks.isEmpty) return null;
 
-  final denoisedBlocks = <List<List<double>>>[];
+  final normalizedBlocks = <List<List<double>>>[];
   for (final raw in rawBlocks) {
     if (raw.data.isEmpty || raw.data[0].isEmpty) continue;
     final normalizedBlock = <List<double>>[];
@@ -142,9 +142,20 @@ _CacheResult? _renderRaw(_RenderRequest req) {
       }
       normalizedBlock.add(normalizedRow);
     }
-    denoisedBlocks.add(_processBlockMatrix(normalizedBlock, req.noiseThreshold));
+    normalizedBlocks.add(normalizedBlock);
   }
-  if (denoisedBlocks.isEmpty) return null;
+  if (normalizedBlocks.isEmpty) return null;
+
+  final globalHist = _collectGlobalHistogram(normalizedBlocks);
+  final globalThreshold = math.max(
+    _quantileFromHistogram(globalHist, 0.72),
+    req.noiseThreshold,
+  );
+
+  final denoisedBlocks = <List<List<double>>>[];
+  for (final block in normalizedBlocks) {
+    denoisedBlocks.add(_processBlockMatrix(block, globalThreshold));
+  }
 
   final combined = _concatBlocks(denoisedBlocks);
   if (combined.isEmpty) return null;
@@ -247,15 +258,11 @@ List<List<double>> _concatBlocks(List<List<List<double>>> denoisedBlocks) {
 // Noise suppression
 // ---------------------------------------------------------------------------
 
-List<List<double>> _processBlockMatrix(List<List<double>> matrix, double noiseThreshold) {
+List<List<double>> _processBlockMatrix(List<List<double>> matrix, double threshold) {
   final rows = matrix.length;
   if (rows == 0) return matrix;
   final cols = matrix[0].length;
   if (cols == 0) return matrix;
-
-  final histData = _collectNormalizedHistogram(matrix);
-  final threshold =
-      math.max(_quantileFromHistogram(histData, 0.72), noiseThreshold);
 
   final gated = List<List<double>>.generate(
       rows, (r) => List<double>.generate(cols, (c) => matrix[r][c]));
@@ -325,6 +332,37 @@ List<List<double>> _processBlockMatrix(List<List<double>> matrix, double noiseTh
 }
 
 // ---------------------------------------------------------------------------
+// Global histogram — matches web collectNormalizedHistogram
+// ---------------------------------------------------------------------------
+
+_HistogramData _collectGlobalHistogram(List<List<List<double>>> blocks) {
+  const binsCount = 1024;
+  final hist = List<int>.filled(binsCount, 0);
+  var total = 0;
+
+  for (final matrix in blocks) {
+    final rows = matrix.length;
+    if (rows == 0) continue;
+    final cols = matrix[0].length;
+    if (cols == 0) continue;
+    final rowStep = math.max(1, rows ~/ 64);
+    final colStep = math.max(1, cols ~/ 64);
+
+    for (var r = 0; r < rows; r += rowStep) {
+      for (var c = 0; c < cols; c += colStep) {
+        final v = matrix[r][c].clamp(0.0, 1.0);
+        final binIndex =
+            (v * (binsCount - 1)).floor().clamp(0, binsCount - 1);
+        hist[binIndex]++;
+        total++;
+      }
+    }
+  }
+
+  return _HistogramData(hist, total);
+}
+
+// ---------------------------------------------------------------------------
 // Histogram helpers
 // ---------------------------------------------------------------------------
 
@@ -332,30 +370,6 @@ class _HistogramData {
   final List<int> hist;
   final int total;
   const _HistogramData(this.hist, this.total);
-}
-
-_HistogramData _collectNormalizedHistogram(List<List<double>> matrix) {
-  const binsCount = 1024;
-  final hist = List<int>.filled(binsCount, 0);
-  var total = 0;
-
-  final rows = matrix.length;
-  if (rows == 0) return _HistogramData(hist, 0);
-  final cols = matrix[0].length;
-  final rowStep = math.max(1, rows ~/ 64);
-  final colStep = math.max(1, cols ~/ 64);
-
-  for (var r = 0; r < rows; r += rowStep) {
-    for (var c = 0; c < cols; c += colStep) {
-      final v = matrix[r][c].clamp(0.0, 1.0);
-      final binIndex =
-          (v * (binsCount - 1)).floor().clamp(0, binsCount - 1);
-      hist[binIndex]++;
-      total++;
-    }
-  }
-
-  return _HistogramData(hist, total);
 }
 
 double _quantileFromHistogram(_HistogramData data, double q) {
