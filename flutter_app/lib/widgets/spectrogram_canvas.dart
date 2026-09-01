@@ -80,6 +80,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   List<List<double>>? _cachedCombined;
   int _cachedWidth = 0;
   int _cachedHeight = 0;
+  int _displayWidth = 0;
 
   double _viewportStart = 0.0;
   double _viewportEnd = 1.0;
@@ -315,20 +316,26 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     }
   }
 
-  Future<void> _rasterizeViewport() async {
+  Future<void> _rasterizeViewport({int? displayWidth}) async {
     final combined = _cachedCombined;
     if (combined == null || _cachedWidth == 0 || _cachedHeight == 0) return;
+
+    if (displayWidth != null && displayWidth > 0) {
+      _displayWidth = displayWidth;
+    }
 
     final gen = ++_generation;
     final startCol = (_viewportStart * _cachedWidth).floor();
     final endCol = (_viewportEnd * _cachedWidth).ceil();
+
+    final outW = _displayWidth > 0 ? _displayWidth : _cachedWidth;
 
     try {
       final image = await SpectroIsolate.rasterizeOnly(
         cachedCombined: combined,
         colorMap: widget.colorMap ?? kColorMapMagma,
         gainDb: widget.gainDb,
-        width: _cachedWidth,
+        width: outW,
         height: _cachedHeight,
         startCol: startCol,
         endCol: endCol,
@@ -371,6 +378,14 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       final containerWidth = constraints.maxWidth;
       final bottomPad = 18.0;
       final h = (constraints.maxHeight - bottomPad).clamp(0.0, constraints.maxHeight);
+      final dispW = math.max(containerWidth - 34, 100).floor();
+
+      if (dispW != _displayWidth && _cachedCombined != null) {
+        _displayWidth = dispW;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _rasterizeViewport(displayWidth: dispW);
+        });
+      }
 
       return Container(
         color: const Color(0xFF140D28),
@@ -401,7 +416,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                 child: RawImage(
                   image: img,
                   fit: BoxFit.fill,
-                  filterQuality: FilterQuality.high,
+                  filterQuality: FilterQuality.low,
                 ),
               ),
               Positioned.fill(
