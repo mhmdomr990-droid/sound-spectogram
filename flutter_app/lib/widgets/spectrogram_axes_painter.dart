@@ -104,9 +104,10 @@ class SpectrogramAxesPainter extends CustomPainter {
     final bins = frequencyBins;
     if (bins != null && bins.isNotEmpty) {
       final rowIdx = (yFrac * (bins.length - 1)).round().clamp(0, bins.length - 1);
-      return '${bins[rowIdx].round()}';
+      return '${bins[rowIdx].round()} Hz';
     }
-    return '${(24000 - yFrac * 24000).round()}';
+    final hz = (250 - yFrac * 250).round();
+    return '$hz Hz';
   }
 
   String _formatTime(double ms, bool withDate) {
