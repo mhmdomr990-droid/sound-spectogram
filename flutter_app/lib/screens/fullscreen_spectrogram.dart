@@ -187,9 +187,13 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
               children: [
                 _fsBtn(Icons.palette, 'الألوان', _toggleColorMap),
                 const SizedBox(width: 8),
+                _fsBtn(Icons.arrow_left, null, () => _canvasKey.currentState?.panLeft()),
+                const SizedBox(width: 8),
                 _fsBtn(Icons.zoom_in, null, () => _canvasKey.currentState?.zoomIn()),
                 const SizedBox(width: 8),
                 _fsBtn(Icons.zoom_out, null, () => _canvasKey.currentState?.zoomOut()),
+                const SizedBox(width: 8),
+                _fsBtn(Icons.arrow_right, null, () => _canvasKey.currentState?.panRight()),
                 const SizedBox(width: 8),
                 _fsBtn(Icons.fit_screen, null, () => _canvasKey.currentState?.fitToScreen()),
                 const SizedBox(width: 8),

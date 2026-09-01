@@ -31,11 +31,6 @@ class CanvasSeedSnapshot {
   });
 }
 
-/// Displays a batch of history packets as a scrollable spectrogram image.
-///
-/// Packets are normalized to [0, 1], truncated vertically to a shared row
-/// (frequency) count, and concatenated left-to-right along the time axis so
-/// that a multi-packet time range renders like the web dashboard.
 class SpectrogramCanvas extends StatefulWidget {
   final List<DeviceHistory> histories;
   final List<List<double>>? colorMap;
@@ -81,12 +76,18 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   DateTime? _startTime;
   DateTime? _endTime;
   int _colCount = 0;
-  double _zoomLevel = 1.0;
 
   List<List<double>>? _cachedCombined;
   int _cachedWidth = 0;
   int _cachedHeight = 0;
+
+  double _viewportStart = 0.0;
+  double _viewportEnd = 1.0;
+  double _scaleStart = 1.0;
+  Offset _lastFocalPoint = Offset.zero;
   Timer? _renderDebounce;
+
+  double get _viewportSpan => _viewportEnd - _viewportStart;
 
   CanvasSeedSnapshot? get seedSnapshot {
     if (_image == null) return null;
@@ -102,19 +103,41 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     );
   }
 
-  void zoomIn() => setState(() => _zoomLevel = (_zoomLevel * 1.15).clamp(0.05, 4.0));
-  void zoomOut() => setState(() => _zoomLevel = (_zoomLevel / 1.15).clamp(0.05, 4.0));
+  void zoomIn() {
+    final center = (_viewportStart + _viewportEnd) / 2;
+    final newSpan = (_viewportSpan * 0.9).clamp(0.005, 1.0);
+    _setViewport(center - newSpan / 2, center + newSpan / 2);
+  }
+
+  void zoomOut() {
+    final center = (_viewportStart + _viewportEnd) / 2;
+    final newSpan = (_viewportSpan / 0.9).clamp(0.005, 20.0);
+    _setViewport(center - newSpan / 2, center + newSpan / 2);
+  }
+
   void fitToScreen() {
-    final img = _image;
-    if (img == null) return;
-    final w = context.size?.width ?? 400;
-    final h = context.size?.height ?? 400;
-    final imageAreaHeight = h - 24;
-    final nativeHeight = imageAreaHeight > 0 ? imageAreaHeight : 400.0;
-    final aspectRatio = img.width / img.height;
-    final nativeWidth = nativeHeight * aspectRatio;
-    final fitZoom = (w - 34) / nativeWidth;
-    setState(() => _zoomLevel = fitZoom.clamp(0.05, 4.0));
+    _setViewport(0.0, 1.0);
+  }
+
+  void panLeft() {
+    final shift = _viewportSpan * 0.15;
+    _setViewport(_viewportStart - shift, _viewportEnd - shift);
+  }
+
+  void panRight() {
+    final shift = _viewportSpan * 0.15;
+    _setViewport(_viewportStart + shift, _viewportEnd + shift);
+  }
+
+  void _setViewport(double start, double end) {
+    final span = end - start;
+    if (span < 0.005) return;
+    if (span > 20.0) return;
+    setState(() {
+      _viewportStart = start;
+      _viewportEnd = end;
+    });
+    _rasterizeViewport();
   }
 
   @override
@@ -142,7 +165,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _renderDebounced();
     } else if (oldWidget.colorMap != widget.colorMap ||
         oldWidget.gainDb != widget.gainDb) {
-      _renderCached();
+      _rasterizeViewport();
     }
   }
 
@@ -195,13 +218,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     _cachedHeight = maxRows;
 
     final rawBlocks = histories.map((h) => RawBlockData(
-      h.data,
-      h.intensityType,
-      h.intensityRange[0],
-      h.intensityRange[1],
+      h.data, h.intensityType, h.intensityRange[0], h.intensityRange[1],
     )).toList();
 
-    ui.Image? image;
     try {
       final output = await SpectroIsolate.renderAndCache(
         rawBlocks: rawBlocks,
@@ -211,42 +230,48 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         width: totalCols,
         height: maxRows,
       );
-      image = output.image;
-      _cachedCombined = output.cachedCombined;
-    } catch (_) {
-      image = null;
-    }
 
-    if (!mounted || gen != _generation) {
-      image?.dispose();
-      return;
+      if (!mounted || gen != _generation) {
+        output.image.dispose();
+        return;
+      }
+      _cachedCombined = output.cachedCombined;
+      output.image.dispose();
+      _rasterizeViewport();
+    } catch (e) {
+      debugPrint('[SpectrogramCanvas._render] ERROR: $e');
     }
-    setState(() => _image = image);
   }
 
-  Future<void> _renderCached() async {
+  Future<void> _rasterizeViewport() async {
     final combined = _cachedCombined;
     if (combined == null || _cachedWidth == 0 || _cachedHeight == 0) return;
 
     final gen = ++_generation;
-    ui.Image? image;
+    final startCol = (_viewportStart * _cachedWidth).floor();
+    final endCol = (_viewportEnd * _cachedWidth).ceil();
+
     try {
-      image = await SpectroIsolate.rasterizeOnly(
+      final image = await SpectroIsolate.rasterizeOnly(
         cachedCombined: combined,
         colorMap: widget.colorMap ?? kColorMapMagma,
         gainDb: widget.gainDb,
         width: _cachedWidth,
         height: _cachedHeight,
+        startCol: startCol,
+        endCol: endCol,
       );
-    } catch (_) {
-      image = null;
-    }
 
-    if (!mounted || gen != _generation) {
-      image?.dispose();
-      return;
+      if (!mounted || gen != _generation) {
+        image.dispose();
+        return;
+      }
+      final old = _image;
+      setState(() => _image = image);
+      old?.dispose();
+    } catch (e) {
+      debugPrint('[SpectrogramCanvas._rasterizeViewport] ERROR: $e');
     }
-    setState(() => _image = image);
   }
 
   @override
@@ -269,71 +294,73 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         ),
       );
     }
+
     return LayoutBuilder(builder: (context, constraints) {
-      final imageAreaHeight = constraints.maxHeight - 24;
-      final nativeHeight = imageAreaHeight > 0 ? imageAreaHeight : 400.0;
-      final aspectRatio = img.width / img.height;
-      final nativeWidth = nativeHeight * aspectRatio;
-      final displayWidth = nativeWidth * _zoomLevel;
-      final displayHeight = nativeHeight * _zoomLevel;
+      final containerWidth = constraints.maxWidth;
+      final containerHeight = constraints.maxHeight - 24;
+      final h = containerHeight > 0 ? containerHeight : 300.0;
 
       return Container(
         color: const Color(0xFF140D28),
-        child: Stack(
-          children: [
-            SingleChildScrollView(
-              scrollDirection: Axis.vertical,
-              child: SizedBox(
-                width: math.max(constraints.maxWidth, displayWidth + 34),
-                height: math.max(constraints.maxHeight, displayHeight + 24),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: SizedBox(
-                    width: math.max(constraints.maxWidth, displayWidth + 34),
-                    height: math.max(constraints.maxHeight, displayHeight + 24),
-                    child: Stack(
-                      children: [
-                        Positioned(
-                          left: 32,
-                          top: 0,
-                          width: displayWidth,
-                          height: displayHeight,
-                          child: RawImage(
-                            image: img,
-                            fit: BoxFit.fill,
-                            filterQuality: FilterQuality.medium,
-                          ),
-                        ),
-                        Positioned.fill(
-                          child: CustomPaint(
-                            painter: SpectrogramAxesPainter(
-                              colCount: _colCount,
-                              frequencyBins: _frequencyBins,
-                              startTime: _startTime,
-                              endTime: _endTime,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+        child: GestureDetector(
+          onScaleStart: (details) {
+            _scaleStart = _viewportSpan;
+            _lastFocalPoint = details.focalPoint;
+          },
+          onScaleUpdate: (details) {
+            if (details.pointerCount == 1) {
+              final dx = details.focalPoint.dx - _lastFocalPoint.dx;
+              _lastFocalPoint = details.focalPoint;
+              final shift = dx / containerWidth * _viewportSpan;
+              _setViewport(_viewportStart - shift, _viewportEnd - shift);
+            } else {
+              final center = (_viewportStart + _viewportEnd) / 2;
+              final newSpan = (_scaleStart / details.scale).clamp(0.005, 1.0);
+              _setViewport(center - newSpan / 2, center + newSpan / 2);
+            }
+          },
+          child: Stack(
+            children: [
+              Positioned(
+                left: 32,
+                top: 0,
+                width: math.max(containerWidth - 34, 100),
+                height: h,
+                child: RawImage(
+                  image: img,
+                  fit: BoxFit.fill,
+                  filterQuality: FilterQuality.medium,
+                ),
+              ),
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: SpectrogramAxesPainter(
+                    colCount: (_viewportSpan * _colCount).round(),
+                    frequencyBins: _frequencyBins,
+                    startTime: _startTime,
+                    endTime: _endTime,
                   ),
                 ),
               ),
-            ),
-            Positioned(
-              top: 8,
-              right: 8,
-              child: Column(
-                children: [
-                  _zoomBtn(Icons.add, () => zoomIn()),
-                  const SizedBox(height: 4),
-                  _zoomBtn(Icons.remove, () => zoomOut()),
-                  const SizedBox(height: 4),
-                  _zoomBtn(Icons.fit_screen, () => fitToScreen()),
-                ],
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Column(
+                  children: [
+                    _zoomBtn(Icons.add, () => zoomIn()),
+                    const SizedBox(height: 4),
+                    _zoomBtn(Icons.remove, () => zoomOut()),
+                    const SizedBox(height: 4),
+                    _zoomBtn(Icons.fit_screen, () => fitToScreen()),
+                    const SizedBox(height: 4),
+                    _zoomBtn(Icons.arrow_left, () => panLeft()),
+                    const SizedBox(height: 4),
+                    _zoomBtn(Icons.arrow_right, () => panRight()),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
     });

@@ -57,7 +57,9 @@ class _RasterizeRequest {
   final double gainDb;
   final int width;
   final int height;
-  const _RasterizeRequest(this.combined, this.lut, this.gainDb, this.width, this.height);
+  final int startCol;
+  final int endCol;
+  const _RasterizeRequest(this.combined, this.lut, this.gainDb, this.width, this.height, {this.startCol = 0, this.endCol = -1});
 }
 
 class _RenderResult {
@@ -106,9 +108,11 @@ class SpectroIsolate {
     double gainDb = 0.0,
     required int width,
     required int height,
+    int startCol = 0,
+    int endCol = -1,
   }) async {
     final lut = ColorLUT.build(colorMap);
-    final req = _RasterizeRequest(cachedCombined, lut.rgba, gainDb, width, height);
+    final req = _RasterizeRequest(cachedCombined, lut.rgba, gainDb, width, height, startCol: startCol, endCol: endCol);
     final result = await compute(_rasterize, req);
     if (result == null) throw StateError('rasterizeOnly failed');
     return _decodeImage(result);
@@ -161,7 +165,7 @@ _RenderResult? _rasterize(_RasterizeRequest req) {
   final combined = req.combined;
   if (combined.isEmpty) return null;
 
-  final bytes = _doRasterize(combined, req.lut, req.gainDb, req.width, req.height);
+  final bytes = _doRasterize(combined, req.lut, req.gainDb, req.width, req.height, startCol: req.startCol, endCol: req.endCol);
   return _RenderResult(bytes, req.width, req.height);
 }
 
@@ -169,11 +173,15 @@ _RenderResult? _rasterize(_RasterizeRequest req) {
 // Rasterization — LUT-based
 // ---------------------------------------------------------------------------
 
-Uint8List _doRasterize(List<List<double>> combined, Uint8List lut, double gainDb, int width, int height) {
+Uint8List _doRasterize(List<List<double>> combined, Uint8List lut, double gainDb, int width, int height, {int startCol = 0, int endCol = -1}) {
   final dataHeight = combined.length;
   if (dataHeight == 0) return Uint8List(0);
   final dataWidth = combined[0].length;
   if (dataWidth == 0) return Uint8List(0);
+
+  if (endCol < 0) endCol = dataWidth;
+  final visibleCols = endCol - startCol;
+  if (visibleCols <= 0) return Uint8List(0);
 
   final total = width * height * 4;
   final bytes = Uint8List(total);
@@ -188,8 +196,8 @@ Uint8List _doRasterize(List<List<double>> combined, Uint8List lut, double gainDb
     final rowOffset = py * width * 4;
 
     for (var px = 0; px < width; px++) {
-      final colIndex = ((px * dataWidth) / width).floor().clamp(0, dataWidth - 1);
-      var value = (colIndex < row.length) ? row[colIndex] : 0.0;
+      final colIndex = startCol + ((px * visibleCols) / width).floor();
+      var value = (colIndex >= 0 && colIndex < row.length) ? row[colIndex] : 0.0;
       if (useGain && value > 0) {
         value = (value * scale).clamp(0.0, 1.0);
       }
