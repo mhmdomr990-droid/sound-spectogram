@@ -101,6 +101,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     return _startTime!.add(Duration(milliseconds: (_viewportEnd * totalMs).round()));
   }
 
+  void forceRender() {
+    _render();
+  }
+
   CanvasSeedSnapshot? get seedSnapshot {
     if (_image == null) return null;
     return CanvasSeedSnapshot(

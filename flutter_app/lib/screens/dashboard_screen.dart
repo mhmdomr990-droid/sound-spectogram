@@ -520,6 +520,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _gainDb = result.gainDb;
         _noiseThreshold = result.noiseThreshold;
       });
+      _canvasKey.currentState?.forceRender();
     }
   }
 
