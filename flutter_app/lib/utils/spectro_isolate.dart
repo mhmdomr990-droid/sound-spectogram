@@ -43,23 +43,21 @@ class RawBlockData {
 
 class _RenderRequest {
   final List<RawBlockData> rawBlocks;
-  final Uint8List lut;
   final double gainDb;
   final double noiseThreshold;
   final int width;
   final int height;
-  const _RenderRequest(this.rawBlocks, this.lut, this.gainDb, this.noiseThreshold, this.width, this.height);
+  const _RenderRequest(this.rawBlocks, this.gainDb, this.noiseThreshold, this.width, this.height);
 }
 
 class _RasterizeRequest {
   final List<List<double>> combined;
-  final Uint8List lut;
   final double gainDb;
   final int width;
   final int height;
   final int startCol;
   final int endCol;
-  const _RasterizeRequest(this.combined, this.lut, this.gainDb, this.width, this.height, {this.startCol = 0, this.endCol = -1});
+  const _RasterizeRequest(this.combined, this.gainDb, this.width, this.height, {this.startCol = 0, this.endCol = -1});
 }
 
 class _RenderResult {
@@ -94,8 +92,7 @@ class SpectroIsolate {
     required int width,
     required int height,
   }) async {
-    final lut = ColorLUT.build(colorMap);
-    final req = _RenderRequest(rawBlocks, lut.rgba, gainDb, noiseThreshold, width, height);
+    final req = _RenderRequest(rawBlocks, gainDb, noiseThreshold, width, height);
     final result = await compute(_renderRaw, req);
     if (result == null) throw StateError('renderAndCache failed');
     final image = await _decodeImage(result.imageBytes);
@@ -111,8 +108,7 @@ class SpectroIsolate {
     int startCol = 0,
     int endCol = -1,
   }) async {
-    final lut = ColorLUT.build(colorMap);
-    final req = _RasterizeRequest(cachedCombined, lut.rgba, gainDb, width, height, startCol: startCol, endCol: endCol);
+    final req = _RasterizeRequest(cachedCombined, gainDb, width, height, startCol: startCol, endCol: endCol);
     final result = await compute(_rasterize, req);
     if (result == null) throw StateError('rasterizeOnly failed');
     return _decodeImage(result);
@@ -153,7 +149,7 @@ _CacheResult? _renderRaw(_RenderRequest req) {
   final combined = _concatBlocks(denoisedBlocks);
   if (combined.isEmpty) return null;
 
-  final bytes = _doRasterize(combined, req.lut, req.gainDb, req.width, req.height);
+  final bytes = _doRasterizeIntensity(combined, req.gainDb, req.width, req.height);
 
   final cachedCombined = List<List<double>>.generate(
       combined.length, (r) => List<double>.from(combined[r]));
@@ -165,7 +161,7 @@ _RenderResult? _rasterize(_RasterizeRequest req) {
   final combined = req.combined;
   if (combined.isEmpty) return null;
 
-  final bytes = _doRasterize(combined, req.lut, req.gainDb, req.width, req.height, startCol: req.startCol, endCol: req.endCol);
+  final bytes = _doRasterizeIntensity(combined, req.gainDb, req.width, req.height, startCol: req.startCol, endCol: req.endCol);
   return _RenderResult(bytes, req.width, req.height);
 }
 
@@ -173,7 +169,7 @@ _RenderResult? _rasterize(_RasterizeRequest req) {
 // Rasterization — LUT-based
 // ---------------------------------------------------------------------------
 
-Uint8List _doRasterize(List<List<double>> combined, Uint8List lut, double gainDb, int width, int height, {int startCol = 0, int endCol = -1}) {
+Uint8List _doRasterizeIntensity(List<List<double>> combined, double gainDb, int width, int height, {int startCol = 0, int endCol = -1}) {
   final dataHeight = combined.length;
   if (dataHeight == 0) return Uint8List(0);
   final dataWidth = combined[0].length;
@@ -202,10 +198,10 @@ Uint8List _doRasterize(List<List<double>> combined, Uint8List lut, double gainDb
       final colEndExclusive = startCol + (((px + 1) * visibleCols) / width).floor();
 
       if (colStart >= row.length || colStart < 0) {
-        bytes[offset] = 0x14;
-        bytes[offset + 1] = 0x0D;
-        bytes[offset + 2] = 0x28;
-        bytes[offset + 3] = 0xFF;
+        bytes[offset] = 0;
+        bytes[offset + 1] = 0;
+        bytes[offset + 2] = 0;
+        bytes[offset + 3] = 0;
         continue;
       }
 
@@ -220,15 +216,10 @@ Uint8List _doRasterize(List<List<double>> combined, Uint8List lut, double gainDb
       if (useGain && value > 0) {
         value = (value * scale).clamp(0.0, 1.0);
       }
-      final scaled = value * 255.0;
-      final lo = scaled.floor().clamp(0, 255);
-      final hi = (lo + 1).clamp(0, 255);
-      final frac = scaled - lo;
-      final i4 = lo * 4;
-      final j4 = hi * 4;
-      bytes[offset]     = (lut[i4]     + (lut[j4]     - lut[i4])     * frac).round();
-      bytes[offset + 1] = (lut[i4 + 1] + (lut[j4 + 1] - lut[i4 + 1]) * frac).round();
-      bytes[offset + 2] = (lut[i4 + 2] + (lut[j4 + 2] - lut[i4 + 2]) * frac).round();
+      final byteVal = (value * 255).round().clamp(0, 255);
+      bytes[offset] = byteVal;
+      bytes[offset + 1] = byteVal;
+      bytes[offset + 2] = byteVal;
       bytes[offset + 3] = 0xFF;
     }
   }

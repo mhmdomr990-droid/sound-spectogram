@@ -88,6 +88,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   Offset _lastFocalPoint = Offset.zero;
   Timer? _renderDebounce;
 
+  ui.FragmentProgram? _shaderProgram;
+  ui.Image? _paletteTexture;
+  List<List<double>>? _lastColorMap;
+
   double get _viewportSpan => _viewportEnd - _viewportStart;
 
   DateTime? get _visStartTime {
@@ -216,6 +220,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   @override
   void initState() {
     super.initState();
+    _loadShader();
     if (widget.seedImage != null) {
       _image = widget.seedImage;
       _cachedCombined = widget.seedCachedCombined;
@@ -230,14 +235,74 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     }
   }
 
+  Future<void> _loadShader() async {
+    try {
+      _shaderProgram = await ui.FragmentProgram.fromAsset('shaders/spectrogram.frag');
+    } catch (e) {
+      debugPrint('[SpectrogramCanvas._loadShader] ERROR: $e');
+    }
+  }
+
+  Future<ui.Image> _buildPaletteTexture(List<List<double>> colorMap) async {
+    final lut = ColorLUT.build(colorMap);
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      lut.rgba,
+      256,
+      1,
+      ui.PixelFormat.rgba8888,
+      (img) => completer.complete(img),
+    );
+    return completer.future;
+  }
+
+  Future<ui.Image> _applyShader(ui.Image intensityImage, List<List<double>> colorMap, int outW, int outH) async {
+    if (_shaderProgram == null) {
+      return intensityImage;
+    }
+
+    if (_lastColorMap != colorMap || _paletteTexture == null) {
+      _paletteTexture?.dispose();
+      _paletteTexture = await _buildPaletteTexture(colorMap);
+      _lastColorMap = colorMap;
+    }
+
+    final paletteTex = _paletteTexture;
+    if (paletteTex == null) return intensityImage;
+
+    try {
+      final shader = _shaderProgram!.fragmentShader()
+        ..setImageSampler(0, intensityImage)
+        ..setImageSampler(1, paletteTex)
+        ..setFloat(0, outW.toDouble())
+        ..setFloat(1, outH.toDouble());
+
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, outW.toDouble(), outH.toDouble()),
+        Paint()..shader = shader,
+      );
+      final picture = recorder.endRecording();
+      final resultImage = await picture.toImage(outW, outH);
+      intensityImage.dispose();
+      return resultImage;
+    } catch (e) {
+      debugPrint('[SpectrogramCanvas._applyShader] ERROR: $e');
+      return intensityImage;
+    }
+  }
+
   @override
   void didUpdateWidget(covariant SpectrogramCanvas oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.histories, widget.histories) ||
         oldWidget.noiseThreshold != widget.noiseThreshold) {
       _renderDebounced();
-    } else if (oldWidget.colorMap != widget.colorMap ||
-        oldWidget.gainDb != widget.gainDb) {
+    } else if (oldWidget.colorMap != widget.colorMap || oldWidget.gainDb != widget.gainDb) {
+      _paletteTexture?.dispose();
+      _paletteTexture = null;
+      _lastColorMap = null;
       _rasterizeViewport();
     }
   }
@@ -309,8 +374,14 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         return;
       }
       _cachedCombined = output.cachedCombined;
-      output.image.dispose();
-      _rasterizeViewport();
+      final finalImage = await _applyShader(output.image, widget.colorMap ?? kColorMapMagma, totalCols, maxRows);
+      if (!mounted || gen != _generation) {
+        finalImage.dispose();
+        return;
+      }
+      final old = _image;
+      setState(() => _image = finalImage);
+      old?.dispose();
     } catch (e) {
       debugPrint('[SpectrogramCanvas._render] ERROR: $e');
     }
@@ -331,7 +402,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final outW = _displayWidth > 0 ? _displayWidth : _cachedWidth;
 
     try {
-      final image = await SpectroIsolate.rasterizeOnly(
+      final intensityImage = await SpectroIsolate.rasterizeOnly(
         cachedCombined: combined,
         colorMap: widget.colorMap ?? kColorMapMagma,
         gainDb: widget.gainDb,
@@ -342,11 +413,17 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       );
 
       if (!mounted || gen != _generation) {
-        image.dispose();
+        intensityImage.dispose();
+        return;
+      }
+
+      final finalImage = await _applyShader(intensityImage, widget.colorMap ?? kColorMapMagma, outW, _cachedHeight);
+      if (!mounted || gen != _generation) {
+        finalImage.dispose();
         return;
       }
       final old = _image;
-      setState(() => _image = image);
+      setState(() => _image = finalImage);
       old?.dispose();
     } catch (e) {
       debugPrint('[SpectrogramCanvas._rasterizeViewport] ERROR: $e');
@@ -357,6 +434,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   void dispose() {
     _renderDebounce?.cancel();
     _image?.dispose();
+    _paletteTexture?.dispose();
     super.dispose();
   }
 
