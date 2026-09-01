@@ -89,6 +89,18 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
 
   double get _viewportSpan => _viewportEnd - _viewportStart;
 
+  DateTime? get _visStartTime {
+    if (_startTime == null || _endTime == null) return _startTime;
+    final totalMs = _endTime!.difference(_startTime!).inMilliseconds;
+    return _startTime!.add(Duration(milliseconds: (_viewportStart * totalMs).round()));
+  }
+
+  DateTime? get _visEndTime {
+    if (_startTime == null || _endTime == null) return _endTime;
+    final totalMs = _endTime!.difference(_startTime!).inMilliseconds;
+    return _startTime!.add(Duration(milliseconds: (_viewportEnd * totalMs).round()));
+  }
+
   CanvasSeedSnapshot? get seedSnapshot {
     if (_image == null) return null;
     return CanvasSeedSnapshot(
@@ -101,6 +113,62 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       startTime: _startTime,
       endTime: _endTime,
     );
+  }
+
+  List<AiStatusBlock> _computeAiStatusBlocks() {
+    if (_startTime == null || _endTime == null || widget.histories.isEmpty) return [];
+    final totalMs = _endTime!.difference(_startTime!).inMilliseconds;
+    if (totalMs <= 0) return [];
+
+    final visSpan = _viewportEnd - _viewportStart;
+    final blocks = <AiStatusBlock>[];
+    for (final h in widget.histories) {
+      final hStart = DateTime.tryParse(h.startTime ?? h.timestamp);
+      final hEnd = DateTime.tryParse(h.endTime ?? h.timestamp);
+      if (hStart == null || hEnd == null) continue;
+
+      final absStartFrac = hStart.difference(_startTime!).inMilliseconds / totalMs;
+      final absEndFrac = hEnd.difference(_startTime!).inMilliseconds / totalMs;
+
+      final visStartFrac = (absStartFrac - _viewportStart) / visSpan;
+      final visEndFrac = (absEndFrac - _viewportStart) / visSpan;
+
+      if (visEndFrac < 0.0 || visStartFrac > 1.0) continue;
+
+      final color = _aiStatusColor(h.aiStatus);
+      final label = _aiStatusLabel(h.aiStatus);
+      if (color == null) continue;
+
+      blocks.add(AiStatusBlock(
+        startFraction: visStartFrac.clamp(0.0, 1.0),
+        endFraction: visEndFrac.clamp(0.0, 1.0),
+        color: color,
+        label: label,
+      ));
+    }
+    return blocks;
+  }
+
+  Color? _aiStatusColor(AiStatus s) {
+    switch (s) {
+      case AiStatus.notDetected:
+        return const Color(0xFF21A366);
+      case AiStatus.detected:
+        return const Color(0xFFD13438);
+      case AiStatus.possible:
+        return const Color(0xFFF59E0B);
+    }
+  }
+
+  String _aiStatusLabel(AiStatus s) {
+    switch (s) {
+      case AiStatus.notDetected:
+        return 'لا يوجد هدف';
+      case AiStatus.detected:
+        return 'هدف مكتشف';
+      case AiStatus.possible:
+        return 'هدف محتمل';
+    }
   }
 
   void zoomIn() {
@@ -337,8 +405,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                   painter: SpectrogramAxesPainter(
                     colCount: (_viewportSpan * _colCount).round(),
                     frequencyBins: _frequencyBins,
-                    startTime: _startTime,
-                    endTime: _endTime,
+                    startTime: _visStartTime,
+                    endTime: _visEndTime,
+                    aiStatusBlocks: _computeAiStatusBlocks(),
                   ),
                 ),
               ),

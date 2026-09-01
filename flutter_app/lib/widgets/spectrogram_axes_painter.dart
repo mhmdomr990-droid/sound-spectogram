@@ -2,13 +2,25 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// Combined axes painter: freq labels (left), grid (center), time labels (bottom).
-/// Drawn as an overlay on top of the image — it is transparent except for text/lines.
+class AiStatusBlock {
+  final double startFraction;
+  final double endFraction;
+  final Color color;
+  final String label;
+  const AiStatusBlock({
+    required this.startFraction,
+    required this.endFraction,
+    required this.color,
+    required this.label,
+  });
+}
+
 class SpectrogramAxesPainter extends CustomPainter {
   final int colCount;
   final List<double>? frequencyBins;
   final DateTime? startTime;
   final DateTime? endTime;
+  final List<AiStatusBlock> aiStatusBlocks;
 
   static const Color axisColor = Color(0xFFCFD7E6);
   static const Color textColor = Color(0xFFD8E2FF);
@@ -19,13 +31,14 @@ class SpectrogramAxesPainter extends CustomPainter {
     this.frequencyBins,
     this.startTime,
     this.endTime,
+    this.aiStatusBlocks = const [],
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     const left = 32.0;
     const topPad = 0.0;
-    const bottomPad = 20.0;
+    final bottomPad = aiStatusBlocks.isNotEmpty ? 56.0 : 20.0;
     final plotW = math.max(10.0, size.width - left - 2);
     final plotH = math.max(10.0, size.height - topPad - bottomPad);
 
@@ -94,6 +107,61 @@ class SpectrogramAxesPainter extends CustomPainter {
       )
       ..layout();
     title.paint(canvas, Offset(left + plotW / 2 - title.width / 2, topPad + plotH + 14));
+
+    // --- Y-axis title (rotated) ---
+    final yTitle = TextPainter(textDirection: TextDirection.rtl)
+      ..text = const TextSpan(
+        text: 'التردد (Hz)',
+        style: TextStyle(color: axisColor, fontSize: 7, fontFamily: 'sans-serif'),
+      )
+      ..layout();
+    canvas.save();
+    canvas.translate(14, topPad + plotH / 2);
+    canvas.rotate(-math.pi / 2);
+    yTitle.paint(canvas, Offset(-yTitle.width / 2, -yTitle.height / 2));
+    canvas.restore();
+
+    // --- AI Status bar ---
+    if (aiStatusBlocks.isNotEmpty) {
+      const statusBarHeight = 28.0;
+      final statusBarY = topPad + plotH + 24;
+      final blockPaint = Paint();
+      final blockTp = TextPainter(textDirection: TextDirection.rtl);
+
+      for (final block in aiStatusBlocks) {
+        final sx0 = (block.startFraction * plotW).clamp(0.0, plotW);
+        final sx1 = math.max(sx0 + 1, (block.endFraction * plotW).clamp(0.0, plotW));
+        final sw = sx1 - sx0;
+        if (sw <= 0) continue;
+
+        blockPaint.color = block.color;
+        canvas.drawRect(
+          Rect.fromLTWH(left + sx0, statusBarY, sw, statusBarHeight),
+          blockPaint,
+        );
+
+        if (sw >= 72) {
+          blockTp
+            ..text = TextSpan(
+              text: block.label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                fontFamily: 'sans-serif',
+              ),
+            )
+            ..layout();
+          blockTp.paint(
+            canvas,
+            Offset(
+              left + sx0 + sw / 2 - blockTp.width / 2,
+              statusBarY + statusBarHeight / 2 - blockTp.height / 2,
+            ),
+          );
+        }
+      }
+    }
   }
 
   int _chooseTicks(double widthPx, int minTicks, int maxTicks) {
@@ -125,5 +193,6 @@ class SpectrogramAxesPainter extends CustomPainter {
       o.colCount != colCount ||
       o.frequencyBins != frequencyBins ||
       o.startTime != startTime ||
-      o.endTime != endTime;
+      o.endTime != endTime ||
+      o.aiStatusBlocks.length != aiStatusBlocks.length;
 }
