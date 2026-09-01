@@ -196,23 +196,39 @@ Uint8List _doRasterize(List<List<double>> combined, Uint8List lut, double gainDb
     final rowOffset = py * width * 4;
 
     for (var px = 0; px < width; px++) {
-      final colIndex = startCol + ((px * visibleCols) / width).floor();
       final offset = rowOffset + px * 4;
-      if (colIndex < 0 || colIndex >= row.length) {
+
+      final colStart = startCol + ((px * visibleCols) / width).floor();
+      final colEndExclusive = startCol + (((px + 1) * visibleCols) / width).floor();
+
+      if (colStart >= row.length || colStart < 0) {
         bytes[offset] = 0x14;
         bytes[offset + 1] = 0x0D;
         bytes[offset + 2] = 0x28;
         bytes[offset + 3] = 0xFF;
         continue;
       }
-      var value = row[colIndex];
+
+      var maxValue = 0.0;
+      for (var ci = colStart; ci < colEndExclusive && ci < row.length; ci++) {
+        if (ci >= 0 && row[ci] > maxValue) {
+          maxValue = row[ci];
+        }
+      }
+
+      var value = maxValue;
       if (useGain && value > 0) {
         value = (value * scale).clamp(0.0, 1.0);
       }
-      final idx = (value * 255).round().clamp(0, 255);
-      bytes[offset] = lut[idx * 4];
-      bytes[offset + 1] = lut[idx * 4 + 1];
-      bytes[offset + 2] = lut[idx * 4 + 2];
+      final scaled = value * 255.0;
+      final lo = scaled.floor().clamp(0, 255);
+      final hi = (lo + 1).clamp(0, 255);
+      final frac = scaled - lo;
+      final i4 = lo * 4;
+      final j4 = hi * 4;
+      bytes[offset]     = (lut[i4]     + (lut[j4]     - lut[i4])     * frac).round();
+      bytes[offset + 1] = (lut[i4 + 1] + (lut[j4 + 1] - lut[i4 + 1]) * frac).round();
+      bytes[offset + 2] = (lut[i4 + 2] + (lut[j4 + 2] - lut[i4 + 2]) * frac).round();
       bytes[offset + 3] = 0xFF;
     }
   }

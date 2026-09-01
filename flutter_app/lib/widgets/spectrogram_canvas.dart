@@ -397,7 +397,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                 child: RawImage(
                   image: img,
                   fit: BoxFit.fill,
-                  filterQuality: FilterQuality.medium,
+                  filterQuality: FilterQuality.high,
                 ),
               ),
               Positioned.fill(
