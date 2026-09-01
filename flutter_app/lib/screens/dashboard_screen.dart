@@ -11,7 +11,7 @@ import '../utils/spectro.dart';
 import '../widgets/spectrogram_canvas.dart';
 import 'fullscreen_spectrogram.dart';
 
-enum _RangeMode { latestPacket, lastHour, last5h, last24h, custom }
+enum _RangeMode { latestPacket, lastHour, last5h, last24h, followLive, custom }
 
 class DashboardScreen extends StatefulWidget {
   final ApiClient api;
@@ -40,7 +40,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int _colorMapIndex = 0;
   double _gainDb = 0.0;
   double _noiseThreshold = 0.06;
-  _RangeMode _rangeMode = _RangeMode.lastHour;
+  _RangeMode _rangeMode = _RangeMode.followLive;
+  bool _followLiveActive = true;
+  static const _liveWindowMinutes = 15;
   final _canvasKey = GlobalKey<SpectrogramCanvasState>();
 
   StreamSubscription<DeviceHistory>? _dataSub;
@@ -67,7 +69,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _dataSub = widget.socket.onData.listen((h) {
       if (mounted) {
         setState(() {
-          _histories = [h];
+          if (_followLiveActive) {
+            final exists = _histories.any((e) => e.id == h.id);
+            if (!exists) {
+              final cutoff = DateTime.now().subtract(Duration(minutes: _liveWindowMinutes));
+              final updated = [..._histories, h];
+              _histories = updated.where((e) {
+                final ts = DateTime.tryParse(e.timestamp);
+                return ts != null ? ts.isAfter(cutoff) : true;
+              }).toList();
+            }
+          } else {
+            _histories = [h];
+          }
         });
       }
     });
@@ -112,6 +126,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (device == null) {
       return;
     }
+    if (_rangeMode == _RangeMode.followLive) {
+      _setFollowLive();
+      return;
+    }
     setState(() {
       _loadingHistory = true;
       _error = null;
@@ -139,6 +157,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           break;
         case _RangeMode.custom:
           result = await widget.api.fetchHistory(device.id);
+          break;
+        case _RangeMode.followLive:
+          result = [];
           break;
       }
       if (!mounted) return;
@@ -218,12 +239,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _setFollowLive() async {
+    final device = _selected;
+    if (device == null) return;
+    setState(() {
+      _loadingHistory = true;
+      _rangeMode = _RangeMode.followLive;
+      _followLiveActive = true;
+      _error = null;
+    });
+    try {
+      final to = DateTime.now();
+      final from = to.subtract(Duration(minutes: _liveWindowMinutes));
+      final result = await widget.api.fetchHistory(device.id, from: from, to: to);
+      if (!mounted) return;
+      setState(() {
+        _histories = result;
+        _loadingHistory = false;
+      });
+    } on Exception catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loadingHistory = false;
+        _followLiveActive = false;
+      });
+    }
+  }
+
   void _setRange(_RangeMode mode) {
-    if (_rangeMode == mode) {
+    if (_rangeMode == mode && mode != _RangeMode.followLive) {
+      return;
+    }
+    if (mode == _RangeMode.followLive) {
+      _setFollowLive();
       return;
     }
     setState(() {
       _rangeMode = mode;
+      _followLiveActive = false;
       _histories = const [];
     });
     _loadRange();
@@ -342,6 +396,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
               children: [
                 btn('آخر باكت', Icons.flash_on, () => _setRange(_RangeMode.latestPacket), active: mode(_RangeMode.latestPacket)),
+                btn('متابعة البث', Icons.play_circle, () => _setRange(_RangeMode.followLive), active: mode(_RangeMode.followLive)),
                 btn('آخر ساعة', Icons.timer, () => _setRange(_RangeMode.lastHour), active: mode(_RangeMode.lastHour)),
                 btn('آخر 5 ساعات', Icons.history, () => _setRange(_RangeMode.last5h), active: mode(_RangeMode.last5h)),
                 btn('آخر 24 ساعة', Icons.history, () => _setRange(_RangeMode.last24h), active: mode(_RangeMode.last24h)),
