@@ -214,30 +214,14 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       return;
     }
 
-    // Determine plot surface dimensions (match web renderer):
-    // - width: plot area width (logical pixels)
-    // - height: one pixel per frequency bin (rows)
-    final cssWidth = _layoutSize.width;
-    final cssHeight = _layoutSize.height;
-    if (cssWidth <= 0 || cssHeight <= 0) {
-      return;
-    }
-
-    // Compute plot box in CSS pixels. Use proportional left/right like
-    // the web layout, but treat top/bottom insets as fixed pixels so the
-    // axes painter and canvas align in mobile/fullscreen layouts.
-    final leftCss = cssWidth * _SpectroPainter._leftInset / 705;
-    final rightCss = cssWidth * _SpectroPainter._rightInset / 705;
-    final topCss = _SpectroPainter._topInset.toDouble();
-    final bottomCss = _SpectroPainter._bottomInset.toDouble();
-    final plotWcss = (cssWidth - leftCss - rightCss).clamp(1.0, cssWidth);
-    final plotHcss = (cssHeight - topCss - bottomCss).clamp(1.0, cssHeight);
-
-    // Render the image at the full available plot area so the mobile screen can
-    // use the whole height in fullscreen without leaving an empty band. This is
-    // intentionally a layout-size render, not a matrix-height render.
-    final width = plotWcss.round().clamp(1, 4096);
-    final height = plotHcss.round().clamp(1, 4096);
+    // Render the full matrix at its natural dimensions so the app does not
+    // crop or compress half of the spectrogram before drawing it to the screen.
+    // The painter will then scale the resulting image to the visible canvas,
+    // matching the web behavior while keeping the mobile fullscreen layout full.
+    final dataWidth = renderMatrix.isNotEmpty && renderMatrix.first.isNotEmpty ? renderMatrix.first.length : 1;
+    final dataHeight = renderMatrix.length;
+    final width = dataWidth.clamp(1, 4096);
+    final height = dataHeight.clamp(1, 4096);
 
     try {
       final result = await renderSpectrogramIsolate(
@@ -385,31 +369,19 @@ class _SpectroPainter extends CustomPainter {
       return;
     }
 
-    // Margins proportional to canvas size (keep horizontal ratio like web so
-    // the plot box occupies the same relative area).
-    // Compute margins using the same formulas as _render(), and align the
-    // destination rect to integer CSS pixels so image width/height match
-    // the raster produced in the isolate (which uses rounded sizes).
-    final left = w * _leftInset / 705;
-    final right = w * _rightInset / 705;
-    // Top/bottom are fixed pixel insets (match _render()).
-    final top = _topInset.toDouble();
-    final bottom = _bottomInset.toDouble();
-    final rawPlotW = (w - left - right).clamp(1.0, w);
-    final rawPlotH = (h - top - bottom).clamp(1.0, h);
-    // Use the full available plot area in fullscreen/mobile. This keeps the
-    // spectrogram visually anchored to the entire allocated height instead of
-    // leaving the image vertically constrained to its native raster height.
-    final plotW = rawPlotW.roundToDouble();
-    final plotH = rawPlotH.roundToDouble();
+    // Full-bleed mobile rendering: the spectrogram image must cover the
+    // visible canvas, including the full available height, while the floating
+    // controls remain as an overlay above it.
+    final left = 0.0;
+    final top = 0.0;
+    final plotW = w;
+    final plotH = h;
 
     final paint = Paint()
       ..isAntiAlias = false
       ..filterQuality = FilterQuality.none;
 
-    final rightCss = w * _rightInset / 705;
-    final leftPos = (w - rightCss - plotW).clamp(0.0, w - plotW);
-    final plotRect = Rect.fromLTWH(leftPos.roundToDouble(), top.roundToDouble(), plotW, plotH);
+    final plotRect = Rect.fromLTWH(0, 0, w, h);
     final sourceRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
     print('SPECTRO_PAINT image=${image.width}x${image.height} dest=${plotRect.width.toInt()}x${plotRect.height.toInt()} dpr=${ui.window.devicePixelRatio}');
     canvas.save();
