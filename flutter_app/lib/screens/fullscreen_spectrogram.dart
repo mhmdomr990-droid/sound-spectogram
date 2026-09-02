@@ -56,6 +56,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
   late int _colorMapIndex;
   late double _gainDb;
   late double _noiseThreshold;
+  bool _controlsVisible = true;
   final _canvasKey = GlobalKey<SpectrogramCanvasState>();
 
   @override
@@ -127,117 +128,142 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
               ),
             ),
             Positioned(
-              left: 0,
-              right: 0,
-              top: 0,
+              right: 8,
+              top: 8,
               child: SafeArea(
-                top: false,
+                top: true,
                 bottom: false,
-                child: Align(
-                  alignment: Alignment.topCenter,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 420),
-                    child: Container(
-                      margin: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-                      decoration: BoxDecoration(
-                        color: const Color(0xAA111111),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF111111),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Row(
-                                    children: [
-                                      const Icon(Icons.volume_up, size: 11, color: Colors.white70),
-                                      const SizedBox(width: 2),
-                                      Text(
-                                        '${_gainDb.toStringAsFixed(0)} dB',
-                                        style: const TextStyle(color: Colors.white70, fontSize: 8),
-                                      ),
-                                      Expanded(
-                                        child: SliderTheme(
-                                          data: SliderThemeData(trackHeight: 1, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 3)),
-                                          child: Slider(
-                                            value: _gainDb,
-                                            min: -24,
-                                            max: 24,
-                                            divisions: 48,
-                                            onChanged: (v) => setState(() => _gainDb = v),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Expanded(
-                                  child: Row(
-                                    children: [
-                                      const Icon(Icons.noise_aware, size: 11, color: Colors.white70),
-                                      const SizedBox(width: 2),
-                                      Text(
-                                        _noiseThreshold.toStringAsFixed(2),
-                                        style: const TextStyle(color: Colors.white70, fontSize: 8),
-                                      ),
-                                      Expanded(
-                                        child: SliderTheme(
-                                          data: SliderThemeData(trackHeight: 1, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 3)),
-                                          child: Slider(
-                                            value: _noiseThreshold,
-                                            min: 0.0,
-                                            max: 0.5,
-                                            divisions: 50,
-                                            onChanged: (v) => setState(() => _noiseThreshold = v),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 1),
-                          Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF111111),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
-                            child: Row(
-                              children: [
-                                Expanded(child: _fsBtn(Icons.palette, null, _toggleColorMap)),
-                                const SizedBox(width: 1),
-                                Expanded(child: _fsBtn(Icons.arrow_left, null, () => _canvasKey.currentState?.panLeft())),
-                                const SizedBox(width: 1),
-                                Expanded(child: _fsBtn(Icons.zoom_in, null, () => _canvasKey.currentState?.zoomIn())),
-                                const SizedBox(width: 1),
-                                Expanded(child: _fsBtn(Icons.zoom_out, null, () => _canvasKey.currentState?.zoomOut())),
-                                const SizedBox(width: 1),
-                                Expanded(child: _fsBtn(Icons.arrow_right, null, () => _canvasKey.currentState?.panRight())),
-                                const SizedBox(width: 1),
-                                Expanded(child: _fsBtn(Icons.fit_screen, null, () => _canvasKey.currentState?.fitToScreen())),
-                                const SizedBox(width: 1),
-                                Expanded(child: _fsBtn(Icons.fullscreen_exit, null, _exit)),
-                              ],
-                            ),
-                          ),
-                        ],
+                child: Material(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(18),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: () => setState(() => _controlsVisible = !_controlsVisible),
+                    child: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Icon(
+                        _controlsVisible ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                        color: Colors.white70,
+                        size: 20,
                       ),
                     ),
                   ),
                 ),
               ),
             ),
+            if (_controlsVisible)
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                child: SafeArea(
+                  top: false,
+                  bottom: false,
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: Container(
+                        margin: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                        decoration: BoxDecoration(
+                          color: const Color(0xAA111111),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF111111),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.volume_up, size: 11, color: Colors.white70),
+                                        const SizedBox(width: 2),
+                                        Text(
+                                          '${_gainDb.toStringAsFixed(0)} dB',
+                                          style: const TextStyle(color: Colors.white70, fontSize: 8),
+                                        ),
+                                        Expanded(
+                                          child: SliderTheme(
+                                            data: SliderThemeData(trackHeight: 1, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 3)),
+                                            child: Slider(
+                                              value: _gainDb,
+                                              min: -24,
+                                              max: 24,
+                                              divisions: 48,
+                                              onChanged: (v) => setState(() => _gainDb = v),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.noise_aware, size: 11, color: Colors.white70),
+                                        const SizedBox(width: 2),
+                                        Text(
+                                          _noiseThreshold.toStringAsFixed(2),
+                                          style: const TextStyle(color: Colors.white70, fontSize: 8),
+                                        ),
+                                        Expanded(
+                                          child: SliderTheme(
+                                            data: SliderThemeData(trackHeight: 1, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 3)),
+                                            child: Slider(
+                                              value: _noiseThreshold,
+                                              min: 0.0,
+                                              max: 0.5,
+                                              divisions: 50,
+                                              onChanged: (v) => setState(() => _noiseThreshold = v),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 1),
+                            Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF111111),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                              child: Row(
+                                children: [
+                                  Expanded(child: _fsBtn(Icons.palette, null, _toggleColorMap)),
+                                  const SizedBox(width: 1),
+                                  Expanded(child: _fsBtn(Icons.arrow_left, null, () => _canvasKey.currentState?.panLeft())),
+                                  const SizedBox(width: 1),
+                                  Expanded(child: _fsBtn(Icons.zoom_in, null, () => _canvasKey.currentState?.zoomIn())),
+                                  const SizedBox(width: 1),
+                                  Expanded(child: _fsBtn(Icons.zoom_out, null, () => _canvasKey.currentState?.zoomOut())),
+                                  const SizedBox(width: 1),
+                                  Expanded(child: _fsBtn(Icons.arrow_right, null, () => _canvasKey.currentState?.panRight())),
+                                  const SizedBox(width: 1),
+                                  Expanded(child: _fsBtn(Icons.fit_screen, null, () => _canvasKey.currentState?.fitToScreen())),
+                                  const SizedBox(width: 1),
+                                  Expanded(child: _fsBtn(Icons.fullscreen_exit, null, _exit)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
