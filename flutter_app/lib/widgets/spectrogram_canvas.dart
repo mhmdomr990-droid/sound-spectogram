@@ -231,6 +231,12 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final plotWcss = (cssWidth - leftCss - rightCss).clamp(1.0, cssWidth);
     final plotHcss = (cssHeight - topCss - bottomCss).clamp(1.0, cssHeight);
 
+    // Render the intensity surface at the exact CSS size of the on-screen
+    // plot box (same as the web renderer, which draws into a CSS-sized
+    // canvas). Keeping the texture 1:1 with the destination rect lets the
+    // painter use drawImage with no scaling, which renders correctly and
+    // fast on software/SwiftShader emulators (drawImageRect's scaled
+    // sampling clips the texture with a diagonal seam).
     final width = plotWcss.round().clamp(1, 4096);
     final height = plotHcss.round().clamp(1, 4096);
 
@@ -330,8 +336,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
             size: Size(constraints.maxWidth, constraints.maxHeight),
             painter: _SpectroPainter(
               img,
-              background: widget.background,
-              smoothVertical: widget.smoothVertical,
+                  background: widget.background,
+                  smoothVertical: widget.smoothVertical,
               frequencyLabels: widget.frequencyLabels,
               timeLabels: widget.timeLabels,
             ),
@@ -372,21 +378,27 @@ class _SpectroPainter extends CustomPainter {
     final w = size.width;
     final h = size.height;
 
-    final left = (w * _leftInset / 705).roundToDouble();
-    final top = (h * _topInset / 320).roundToDouble();
-    final plotW = image.width.toDouble();
-    final plotH = image.height.toDouble();
+    // Margins proportional to canvas size (keep horizontal ratio like web so
+    // the plot box occupies the same relative area).
+    final left = w * _leftInset / 705;
+    final right = w * _rightInset / 705;
+    final top = h * _topInset / 320;
+    final bottom = h * _bottomInset / 320;
+    final plotW = w - left - right;
+    final plotH = h - top - bottom;
 
     final paint = Paint()
       ..isAntiAlias = false
       ..filterQuality = FilterQuality.none;
 
+    final plotRect = Rect.fromLTWH(left, top, plotW, plotH);
+    final sourceRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
     canvas.save();
-    canvas.clipRect(Rect.fromLTWH(left, top, plotW, plotH));
-    canvas.drawImage(image, Offset(left, top), paint);
+    canvas.clipRect(plotRect);
+    canvas.drawImageRect(image, sourceRect, plotRect, paint);
     canvas.restore();
 
-    // 1) Grid lines (same colors/widths as dashboard).
+    // 2) Grid lines (same colors/widths as dashboard).
     final gridPaint = Paint()
       ..color = _gridColor
       ..strokeWidth = 1;
@@ -402,7 +414,8 @@ class _SpectroPainter extends CustomPainter {
     // 3) Axes stroke (left + bottom).
     final axisPaint = Paint()
       ..color = _axisColor
-      ..strokeWidth = 1.2;
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke;
     final axisPath = Path()
       ..moveTo(left, top)
       ..lineTo(left, top + plotH)
