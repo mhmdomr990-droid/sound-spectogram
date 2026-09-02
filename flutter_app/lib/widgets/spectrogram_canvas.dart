@@ -223,20 +223,19 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       return;
     }
 
-    // Compute plot box in CSS pixels using same proportions as painter.
+    // Compute plot box in CSS pixels. Use proportional left/right like
+    // the web layout, but treat top/bottom insets as fixed pixels so the
+    // axes painter and canvas align in mobile/fullscreen layouts.
     final leftCss = cssWidth * _SpectroPainter._leftInset / 705;
     final rightCss = cssWidth * _SpectroPainter._rightInset / 705;
-    final topCss = cssHeight * _SpectroPainter._topInset / 320;
-    final bottomCss = cssHeight * _SpectroPainter._bottomInset / 320;
+    final topCss = _SpectroPainter._topInset.toDouble();
+    final bottomCss = _SpectroPainter._bottomInset.toDouble();
     final plotWcss = (cssWidth - leftCss - rightCss).clamp(1.0, cssWidth);
     final plotHcss = (cssHeight - topCss - bottomCss).clamp(1.0, cssHeight);
 
-    // Render the intensity surface at the exact CSS size of the on-screen
-    // plot box (same as the web renderer, which draws into a CSS-sized
-    // canvas). Keeping the texture 1:1 with the destination rect lets the
-    // painter use drawImage with no scaling, which renders correctly and
-    // fast on software/SwiftShader emulators (drawImageRect's scaled
-    // sampling clips the texture with a diagonal seam).
+    // Render the image at the full available plot area so the mobile screen can
+    // use the whole height in fullscreen without leaving an empty band. This is
+    // intentionally a layout-size render, not a matrix-height render.
     final width = plotWcss.round().clamp(1, 4096);
     final height = plotHcss.round().clamp(1, 4096);
 
@@ -330,16 +329,18 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
             ),
           );
         }
-        return Container(
-          color: widget.background,
-          child: CustomPaint(
-            size: Size(constraints.maxWidth, constraints.maxHeight),
-            painter: _SpectroPainter(
-              img,
-                  background: widget.background,
-                  smoothVertical: widget.smoothVertical,
-              frequencyLabels: widget.frequencyLabels,
-              timeLabels: widget.timeLabels,
+        return SizedBox.expand(
+          child: Container(
+            color: widget.background,
+            child: CustomPaint(
+              size: Size(constraints.maxWidth, constraints.maxHeight),
+              painter: _SpectroPainter(
+                img,
+                background: widget.background,
+                smoothVertical: widget.smoothVertical,
+                frequencyLabels: widget.frequencyLabels,
+                timeLabels: widget.timeLabels,
+              ),
             ),
           ),
         );
@@ -362,12 +363,13 @@ class _SpectroPainter extends CustomPainter {
       this.smoothVertical = true});
 
   // Dashboard GUI metrics (proportional to the web's fixed layout).
-  static const double _leftInset = 66;
+  // Reduce left inset to match axes painter and give more horizontal room.
+  static const double _leftInset = 32;
   static const double _rightInset = 14;
   // Reduce top/bottom insets in fullscreen so the plot occupies more
   // of the available vertical space (matches `SpectrogramAxesPainter`).
   static const double _topInset = 0;
-  static const double _bottomInset = 18;
+  static const double _bottomInset = 0;
   static const int _xTicks = 5; // chooseTicks(625, 4, 8) -> 5
   static const int _yTicks = 5;
 
@@ -379,30 +381,40 @@ class _SpectroPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final w = size.width;
     final h = size.height;
+    if (w <= 0 || h <= 0 || image.width <= 0 || image.height <= 0) {
+      return;
+    }
 
     // Margins proportional to canvas size (keep horizontal ratio like web so
     // the plot box occupies the same relative area).
+    // Compute margins using the same formulas as _render(), and align the
+    // destination rect to integer CSS pixels so image width/height match
+    // the raster produced in the isolate (which uses rounded sizes).
     final left = w * _leftInset / 705;
     final right = w * _rightInset / 705;
-    final top = h * _topInset / 320;
-    final bottom = h * _bottomInset / 320;
-    final plotW = w - left - right;
-    final plotH = h - top - bottom;
+    // Top/bottom are fixed pixel insets (match _render()).
+    final top = _topInset.toDouble();
+    final bottom = _bottomInset.toDouble();
+    final rawPlotW = (w - left - right).clamp(1.0, w);
+    final rawPlotH = (h - top - bottom).clamp(1.0, h);
+    // Use the full available plot area in fullscreen/mobile. This keeps the
+    // spectrogram visually anchored to the entire allocated height instead of
+    // leaving the image vertically constrained to its native raster height.
+    final plotW = rawPlotW.roundToDouble();
+    final plotH = rawPlotH.roundToDouble();
 
     final paint = Paint()
       ..isAntiAlias = false
       ..filterQuality = FilterQuality.none;
 
-    final plotRect = Rect.fromLTWH(left, top, plotW, plotH);
+    final rightCss = w * _rightInset / 705;
+    final leftPos = (w - rightCss - plotW).clamp(0.0, w - plotW);
+    final plotRect = Rect.fromLTWH(leftPos.roundToDouble(), top.roundToDouble(), plotW, plotH);
     final sourceRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
-    // Debug info: log image vs destination sizes to diagnose clipping/scaling.
-    // ignore: avoid_print
     print('SPECTRO_PAINT image=${image.width}x${image.height} dest=${plotRect.width.toInt()}x${plotRect.height.toInt()} dpr=${ui.window.devicePixelRatio}');
     canvas.save();
-    canvas.clipRect(plotRect);
+    canvas.clipRect(Offset.zero & size);
     canvas.drawImageRect(image, sourceRect, plotRect, paint);
-    // Draw a thin red border around the plotRect to verify destination bounds.
-    canvas.drawRect(plotRect, Paint()..style = PaintingStyle.stroke..color = const Color(0x80FF3333)..strokeWidth = 1);
     canvas.restore();
 
     // 2) Grid lines (same colors/widths as dashboard).
