@@ -557,7 +557,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         border: Border.all(color: Colors.white12),
         borderRadius: BorderRadius.circular(4),
       ),
-      clipBehavior: Clip.antiAlias,
+      clipBehavior: Clip.hardEdge,
       child: SpectrogramCanvas(
         key: _canvasKey,
         histories: _histories,
