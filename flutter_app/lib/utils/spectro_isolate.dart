@@ -7,6 +7,133 @@ import 'package:flutter/foundation.dart';
 import 'spectro.dart';
 import '../models/device_history.dart';
 
+List<int> colorMapToColor(List<List<double>> colorMap, double value) {
+  final v = value.clamp(0.0, 1.0);
+  if (colorMap.isEmpty) return const [0, 0, 4];
+
+  List<double> normalizeStop(List<double> stop, int index, int total) {
+    if (stop.length >= 4) {
+      return [stop[1], stop[2], stop[3]];
+    }
+    if (stop.length >= 3) {
+      return [stop[0], stop[1], stop[2]];
+    }
+    final p = index / math.max(1, total - 1);
+    return [p, p, p];
+  }
+
+  for (var i = 0; i < colorMap.length - 1; i++) {
+    final a = colorMap[i];
+    final b = colorMap[i + 1];
+    final aPos = a.length >= 4 ? a[0] : i / math.max(1, colorMap.length - 1);
+    final bPos = b.length >= 4 ? b[0] : (i + 1) / math.max(1, colorMap.length - 1);
+    if (v >= aPos && v <= bPos) {
+      final t = (v - aPos) / ((bPos - aPos).abs() < 1e-9 ? 1.0 : (bPos - aPos));
+      final ca = normalizeStop(a, i, colorMap.length);
+      final cb = normalizeStop(b, i + 1, colorMap.length);
+      final r = (ca[0] + (cb[0] - ca[0]) * t).round().clamp(0, 255);
+      final g = (ca[1] + (cb[1] - ca[1]) * t).round().clamp(0, 255);
+      final bVal = (ca[2] + (cb[2] - ca[2]) * t).round().clamp(0, 255);
+      return [r, g, bVal];
+    }
+  }
+
+  final last = colorMap.last;
+  final rgb = last.length >= 4 ? [last[1], last[2], last[3]] : last;
+  return [rgb[0].round().clamp(0, 255), rgb[1].round().clamp(0, 255), rgb[2].round().clamp(0, 255)];
+}
+
+class RenderRequest {
+  final List<List<num>> matrix;
+  final int width;
+  final int height;
+  final double gamma;
+  final int inputValueMax;
+  final double noiseThreshold;
+  final int noiseFloorPercentile;
+  final bool isolatedPixelRemovalEnabled;
+  final bool morphologyEnabled;
+  final int neighborhoodSize;
+  final int minActiveNeighbors;
+  final String? intensityType;
+  final double dbMin;
+  final double dbMax;
+  final bool debug;
+  final double gainDb;
+  final String? startTimeIso;
+  final String? endTimeIso;
+  final int backgroundColor;
+
+  const RenderRequest({
+    required this.matrix,
+    required this.width,
+    required this.height,
+    this.gamma = 1.0,
+    this.inputValueMax = 255,
+    this.noiseThreshold = 0.06,
+    this.noiseFloorPercentile = 72,
+    this.isolatedPixelRemovalEnabled = true,
+    this.morphologyEnabled = true,
+    this.neighborhoodSize = 3,
+    this.minActiveNeighbors = 1,
+    this.intensityType,
+    this.dbMin = -95.0,
+    this.dbMax = -20.0,
+    this.debug = false,
+    this.gainDb = 0.0,
+    this.startTimeIso,
+    this.endTimeIso,
+    this.backgroundColor = 0xFF111026,
+  });
+}
+
+class RenderResult {
+  final Uint8List rgba;
+  final int width;
+  final int height;
+
+  const RenderResult(this.rgba, this.width, this.height);
+}
+
+Future<RenderResult> renderSpectrogramIsolate(RenderRequest req) async {
+  final result = await compute((RenderRequest request) {
+    return buildRgba(
+      request.matrix,
+      width: request.width,
+      height: request.height,
+      gamma: request.gamma,
+      inputValueMax: request.inputValueMax,
+      noiseThreshold: request.noiseThreshold,
+      noiseFloorPercentile: request.noiseFloorPercentile,
+      isolatedPixelRemovalEnabled: request.isolatedPixelRemovalEnabled,
+      morphologyEnabled: request.morphologyEnabled,
+      neighborhoodSize: request.neighborhoodSize,
+      minActiveNeighbors: request.minActiveNeighbors,
+      intensityType: request.intensityType,
+      dbMin: request.dbMin,
+      dbMax: request.dbMax,
+      debug: request.debug,
+      gainDb: request.gainDb,
+      startTimeIso: request.startTimeIso,
+      endTimeIso: request.endTimeIso,
+      backgroundColor: request.backgroundColor,
+    );
+  }, req);
+  return RenderResult(result.rgba, result.width, result.height);
+}
+
+Future<ui.Image> rgbaToUiImage(Uint8List rgba, int width, int height) async {
+  final completer = Completer<ui.Image>();
+  ui.decodeImageFromPixels(
+    rgba.buffer.asUint8List(rgba.offsetInBytes, rgba.lengthInBytes),
+    width,
+    height,
+    ui.PixelFormat.rgba8888,
+    completer.complete,
+  );
+  return completer.future;
+}
+
 // ---------------------------------------------------------------------------
 // Color LUT — pre-computed 256-entry RGBA lookup table per color map.
 // ---------------------------------------------------------------------------
@@ -130,7 +257,7 @@ _CacheResult? _renderRaw(_RenderRequest req) {
   final rawBlocks = req.rawBlocks;
   if (rawBlocks.isEmpty) return null;
 
-  final normalizedBlocks = <List<List<double>>>[];
+  final denoisedBlocks = <List<List<double>>>[];
   for (final raw in rawBlocks) {
     if (raw.data.isEmpty || raw.data[0].isEmpty) continue;
     final normalizedBlock = <List<double>>[];
@@ -142,20 +269,9 @@ _CacheResult? _renderRaw(_RenderRequest req) {
       }
       normalizedBlock.add(normalizedRow);
     }
-    normalizedBlocks.add(normalizedBlock);
+    denoisedBlocks.add(_processBlockMatrix(normalizedBlock, req.noiseThreshold));
   }
-  if (normalizedBlocks.isEmpty) return null;
-
-  final globalHist = _collectGlobalHistogram(normalizedBlocks);
-  final globalThreshold = math.max(
-    _quantileFromHistogram(globalHist, 0.72),
-    req.noiseThreshold,
-  );
-
-  final denoisedBlocks = <List<List<double>>>[];
-  for (final block in normalizedBlocks) {
-    denoisedBlocks.add(_processBlockMatrix(block, globalThreshold));
-  }
+  if (denoisedBlocks.isEmpty) return null;
 
   final combined = _concatBlocks(denoisedBlocks);
   if (combined.isEmpty) return null;
@@ -258,11 +374,15 @@ List<List<double>> _concatBlocks(List<List<List<double>>> denoisedBlocks) {
 // Noise suppression
 // ---------------------------------------------------------------------------
 
-List<List<double>> _processBlockMatrix(List<List<double>> matrix, double threshold) {
+List<List<double>> _processBlockMatrix(List<List<double>> matrix, double noiseThreshold) {
   final rows = matrix.length;
   if (rows == 0) return matrix;
   final cols = matrix[0].length;
   if (cols == 0) return matrix;
+
+  final histData = _collectNormalizedHistogram(matrix);
+  final threshold =
+      math.max(_quantileFromHistogram(histData, 0.72), noiseThreshold);
 
   final gated = List<List<double>>.generate(
       rows, (r) => List<double>.generate(cols, (c) => matrix[r][c]));
@@ -332,37 +452,6 @@ List<List<double>> _processBlockMatrix(List<List<double>> matrix, double thresho
 }
 
 // ---------------------------------------------------------------------------
-// Global histogram — matches web collectNormalizedHistogram
-// ---------------------------------------------------------------------------
-
-_HistogramData _collectGlobalHistogram(List<List<List<double>>> blocks) {
-  const binsCount = 1024;
-  final hist = List<int>.filled(binsCount, 0);
-  var total = 0;
-
-  for (final matrix in blocks) {
-    final rows = matrix.length;
-    if (rows == 0) continue;
-    final cols = matrix[0].length;
-    if (cols == 0) continue;
-    final rowStep = math.max(1, rows ~/ 64);
-    final colStep = math.max(1, cols ~/ 64);
-
-    for (var r = 0; r < rows; r += rowStep) {
-      for (var c = 0; c < cols; c += colStep) {
-        final v = matrix[r][c].clamp(0.0, 1.0);
-        final binIndex =
-            (v * (binsCount - 1)).floor().clamp(0, binsCount - 1);
-        hist[binIndex]++;
-        total++;
-      }
-    }
-  }
-
-  return _HistogramData(hist, total);
-}
-
-// ---------------------------------------------------------------------------
 // Histogram helpers
 // ---------------------------------------------------------------------------
 
@@ -370,6 +459,30 @@ class _HistogramData {
   final List<int> hist;
   final int total;
   const _HistogramData(this.hist, this.total);
+}
+
+_HistogramData _collectNormalizedHistogram(List<List<double>> matrix) {
+  const binsCount = 1024;
+  final hist = List<int>.filled(binsCount, 0);
+  var total = 0;
+
+  final rows = matrix.length;
+  if (rows == 0) return _HistogramData(hist, 0);
+  final cols = matrix[0].length;
+  final rowStep = math.max(1, rows ~/ 64);
+  final colStep = math.max(1, cols ~/ 64);
+
+  for (var r = 0; r < rows; r += rowStep) {
+    for (var c = 0; c < cols; c += colStep) {
+      final v = matrix[r][c].clamp(0.0, 1.0);
+      final binIndex =
+          (v * (binsCount - 1)).floor().clamp(0, binsCount - 1);
+      hist[binIndex]++;
+      total++;
+    }
+  }
+
+  return _HistogramData(hist, total);
 }
 
 double _quantileFromHistogram(_HistogramData data, double q) {

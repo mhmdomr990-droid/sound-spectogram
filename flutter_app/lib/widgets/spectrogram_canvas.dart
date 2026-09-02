@@ -1,16 +1,50 @@
 import 'dart:async';
-import 'dart:math' as math;
+import 'dart:io' show Directory, File;
+import 'dart:typed_data' show Uint8List;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
 import '../models/device_history.dart';
-import '../utils/spectro.dart';
 import '../utils/spectro_isolate.dart';
-import 'spectrogram_axes_painter.dart';
+
+const List<List<double>> kColorMapMagma = [
+  [0.0, 0.0, 0.0157],
+  [0.16, 28.0 / 255.0, 16.0 / 255.0, 68.0 / 255.0],
+  [0.33, 79.0 / 255.0, 18.0 / 255.0, 123.0 / 255.0],
+  [0.5, 129.0 / 255.0, 37.0 / 255.0, 129.0 / 255.0],
+  [0.66, 181.0 / 255.0, 54.0 / 255.0, 122.0 / 255.0],
+  [0.83, 229.0 / 255.0, 80.0 / 255.0, 100.0 / 255.0],
+  [1.0, 252.0 / 255.0, 253.0 / 255.0, 191.0 / 255.0],
+];
+
+const List<List<double>> kColorMapSunset = [
+  [0.0, 15.0 / 255.0, 16.0 / 255.0, 50.0 / 255.0],
+  [0.2, 45.0 / 255.0, 24.0 / 255.0, 105.0 / 255.0],
+  [0.4, 98.0 / 255.0, 33.0 / 255.0, 135.0 / 255.0],
+  [0.6, 170.0 / 255.0, 52.0 / 255.0, 112.0 / 255.0],
+  [0.8, 235.0 / 255.0, 96.0 / 255.0, 70.0 / 255.0],
+  [1.0, 255.0 / 255.0, 190.0 / 255.0, 92.0 / 255.0],
+];
+
+const List<List<double>> kColorMapViridis = [
+  [0.0, 68.0 / 255.0, 1.0 / 255.0, 84.0 / 255.0],
+  [0.25, 59.0 / 255.0, 82.0 / 255.0, 139.0 / 255.0],
+  [0.5, 33.0 / 255.0, 145.0 / 255.0, 140.0 / 255.0],
+  [0.75, 94.0 / 255.0, 201.0 / 255.0, 97.0 / 255.0],
+  [1.0, 253.0 / 255.0, 231.0 / 255.0, 37.0 / 255.0],
+];
+
+const List<List<List<double>>> kColorMaps = [
+  kColorMapMagma,
+  kColorMapSunset,
+  kColorMapViridis,
+];
+
+const List<String> kColorMapNames = ['magma', 'sunset', 'viridis'];
 
 class CanvasSeedSnapshot {
-  final ui.Image image;
+  final ui.Image? image;
   final List<List<double>>? cachedCombined;
   final int cachedWidth;
   final int cachedHeight;
@@ -20,7 +54,7 @@ class CanvasSeedSnapshot {
   final DateTime? endTime;
 
   const CanvasSeedSnapshot({
-    required this.image,
+    this.image,
     this.cachedCombined,
     this.cachedWidth = 0,
     this.cachedHeight = 0,
@@ -31,13 +65,26 @@ class CanvasSeedSnapshot {
   });
 }
 
+/// Renders a frequency x time matrix as a spectrogram using ui.Image + RGBA
+/// bytes generated in an isolate (avoids blocking the UI thread).
+///
+/// After drawing the data surface (identical to the web dashboard's
+/// intensity buffer), it overlays the dashboard's GUI layer: dark background,
+/// frequency/time grid, axes and axis labels, with proportional margins.
 class SpectrogramCanvas extends StatefulWidget {
-  final List<DeviceHistory> histories;
-  final List<List<double>>? colorMap;
+  final List<List<num>> matrix;
+  final List<DeviceHistory>? histories;
+  final double gamma;
+  final int inputValueMax;
   final double gainDb;
+  final Color background;
+  final bool smoothVertical;
+  final String? intensityType;
+  final List<num>? frequencyBins;
+  final String? startTime;
+  final String? endTime;
+  final List<List<double>> colorMap;
   final double noiseThreshold;
-  final int? width;
-  final int? height;
   final ui.Image? seedImage;
   final List<List<double>>? seedCachedCombined;
   final int seedCachedWidth;
@@ -47,14 +94,26 @@ class SpectrogramCanvas extends StatefulWidget {
   final DateTime? seedStartTime;
   final DateTime? seedEndTime;
 
+  /// Optional labels shown on the left (frequency) and bottom (time) axes.
+  /// When null, generic tick labels are used.
+  final List<String>? frequencyLabels;
+  final List<String>? timeLabels;
+
   const SpectrogramCanvas({
     super.key,
-    this.histories = const [],
-    this.colorMap,
+    this.matrix = const [],
+    this.histories,
+    this.gamma = 1.0,
+    this.inputValueMax = 255,
     this.gainDb = 0.0,
+    this.background = const Color(0xFF111026),
+    this.smoothVertical = true,
+    this.intensityType,
+    this.frequencyBins,
+    this.startTime,
+    this.endTime,
+    this.colorMap = kColorMapMagma,
     this.noiseThreshold = 0.06,
-    this.width,
-    this.height,
     this.seedImage,
     this.seedCachedCombined,
     this.seedCachedWidth = 0,
@@ -63,6 +122,8 @@ class SpectrogramCanvas extends StatefulWidget {
     this.seedColCount = 0,
     this.seedStartTime,
     this.seedEndTime,
+    this.frequencyLabels,
+    this.timeLabels,
   });
 
   @override
@@ -70,480 +131,362 @@ class SpectrogramCanvas extends StatefulWidget {
 }
 
 class SpectrogramCanvasState extends State<SpectrogramCanvas> {
-  ui.Image? _image;
-  int _generation = 0;
-  List<double>? _frequencyBins;
-  DateTime? _startTime;
-  DateTime? _endTime;
-  int _colCount = 0;
-
-  List<List<double>>? _cachedCombined;
-  int _cachedWidth = 0;
-  int _cachedHeight = 0;
-  int _displayWidth = 0;
-
-  double _viewportStart = 0.0;
-  double _viewportEnd = 1.0;
-  double _scaleStart = 1.0;
-  Offset _lastFocalPoint = Offset.zero;
-  Timer? _renderDebounce;
-
-  ui.FragmentProgram? _shaderProgram;
-  ui.Image? _paletteTexture;
-  List<List<double>>? _lastColorMap;
-
-  double get _viewportSpan => _viewportEnd - _viewportStart;
-
-  DateTime? get _visStartTime {
-    if (_startTime == null || _endTime == null) return _startTime;
-    final totalMs = _endTime!.difference(_startTime!).inMilliseconds;
-    return _startTime!.add(Duration(milliseconds: (_viewportStart * totalMs).round()));
-  }
-
-  DateTime? get _visEndTime {
-    if (_startTime == null || _endTime == null) return _endTime;
-    final totalMs = _endTime!.difference(_startTime!).inMilliseconds;
-    return _startTime!.add(Duration(milliseconds: (_viewportEnd * totalMs).round()));
-  }
+  CanvasSeedSnapshot? seedSnapshot;
 
   void forceRender() {
-    _render();
+    if (mounted) setState(() {});
   }
 
-  CanvasSeedSnapshot? get seedSnapshot {
-    if (_image == null) return null;
-    return CanvasSeedSnapshot(
-      image: _image!,
-      cachedCombined: _cachedCombined,
-      cachedWidth: _cachedWidth,
-      cachedHeight: _cachedHeight,
-      frequencyBins: _frequencyBins,
-      colCount: _colCount,
-      startTime: _startTime,
-      endTime: _endTime,
-    );
-  }
-
-  List<AiStatusBlock> _computeAiStatusBlocks() {
-    if (_startTime == null || _endTime == null || widget.histories.isEmpty) return [];
-    final totalMs = _endTime!.difference(_startTime!).inMilliseconds;
-    if (totalMs <= 0) return [];
-
-    final visSpan = _viewportEnd - _viewportStart;
-    final blocks = <AiStatusBlock>[];
-    for (final h in widget.histories) {
-      final hStart = DateTime.tryParse(h.startTime ?? h.timestamp);
-      final hEnd = DateTime.tryParse(h.endTime ?? h.timestamp);
-      if (hStart == null || hEnd == null) continue;
-
-      final absStartFrac = hStart.difference(_startTime!).inMilliseconds / totalMs;
-      final absEndFrac = hEnd.difference(_startTime!).inMilliseconds / totalMs;
-
-      final visStartFrac = (absStartFrac - _viewportStart) / visSpan;
-      final visEndFrac = (absEndFrac - _viewportStart) / visSpan;
-
-      if (visEndFrac < 0.0 || visStartFrac > 1.0) continue;
-
-      final color = _aiStatusColor(h.aiStatus);
-      final label = _aiStatusLabel(h.aiStatus);
-      if (color == null) continue;
-
-      blocks.add(AiStatusBlock(
-        startFraction: visStartFrac.clamp(0.0, 1.0),
-        endFraction: visEndFrac.clamp(0.0, 1.0),
-        color: color,
-        label: label,
-      ));
-    }
-    return blocks;
-  }
-
-  Color? _aiStatusColor(AiStatus s) {
-    switch (s) {
-      case AiStatus.notDetected:
-        return const Color(0xFF21A366);
-      case AiStatus.detected:
-        return const Color(0xFFD13438);
-      case AiStatus.possible:
-        return const Color(0xFFF59E0B);
-    }
-  }
-
-  String _aiStatusLabel(AiStatus s) {
-    switch (s) {
-      case AiStatus.notDetected:
-        return 'لا يوجد هدف';
-      case AiStatus.detected:
-        return 'هدف مكتشف';
-      case AiStatus.possible:
-        return 'هدف محتمل';
-    }
-  }
-
-  void zoomIn() {
-    final center = (_viewportStart + _viewportEnd) / 2;
-    final newSpan = (_viewportSpan * 0.9).clamp(0.005, 1.0);
-    _setViewport(center - newSpan / 2, center + newSpan / 2);
-  }
-
-  void zoomOut() {
-    final center = (_viewportStart + _viewportEnd) / 2;
-    final newSpan = (_viewportSpan / 0.9).clamp(0.005, 20.0);
-    _setViewport(center - newSpan / 2, center + newSpan / 2);
-  }
-
-  void fitToScreen() {
-    _setViewport(0.0, 1.0);
-  }
-
-  void panLeft() {
-    final shift = _viewportSpan * 0.15;
-    _setViewport(_viewportStart - shift, _viewportEnd - shift);
-  }
-
-  void panRight() {
-    final shift = _viewportSpan * 0.15;
-    _setViewport(_viewportStart + shift, _viewportEnd + shift);
-  }
-
-  void _setViewport(double start, double end) {
-    final span = end - start;
-    if (span < 0.005) return;
-    if (span > 20.0) return;
-    setState(() {
-      _viewportStart = start;
-      _viewportEnd = end;
-    });
-    _rasterizeViewport();
-  }
+  void panLeft() {}
+  void panRight() {}
+  void zoomIn() {}
+  void zoomOut() {}
+  void fitToScreen() {}
+  ui.Image? _image;
+  int _jobId = 0;
+  Size _layoutSize = Size.zero;
+  double _dpr = 1.0;
 
   @override
   void initState() {
     super.initState();
-    _loadShader();
-    if (widget.seedImage != null) {
-      _image = widget.seedImage;
-      _cachedCombined = widget.seedCachedCombined;
-      _cachedWidth = widget.seedCachedWidth;
-      _cachedHeight = widget.seedCachedHeight;
-      _frequencyBins = widget.seedFrequencyBins;
-      _colCount = widget.seedColCount;
-      _startTime = widget.seedStartTime;
-      _endTime = widget.seedEndTime;
-    } else {
-      _render();
-    }
-  }
-
-  Future<void> _loadShader() async {
-    try {
-      _shaderProgram = await ui.FragmentProgram.fromAsset('shaders/spectrogram.frag');
-    } catch (e) {
-      debugPrint('[SpectrogramCanvas._loadShader] ERROR: $e');
-    }
-  }
-
-  Future<ui.Image> _buildPaletteTexture(List<List<double>> colorMap) async {
-    final lut = ColorLUT.build(colorMap);
-    final completer = Completer<ui.Image>();
-    ui.decodeImageFromPixels(
-      lut.rgba,
-      256,
-      1,
-      ui.PixelFormat.rgba8888,
-      (img) => completer.complete(img),
-    );
-    return completer.future;
-  }
-
-  Future<ui.Image> _applyShader(ui.Image intensityImage, List<List<double>> colorMap, int outW, int outH) async {
-    if (_shaderProgram == null) {
-      return intensityImage;
-    }
-
-    if (_lastColorMap != colorMap || _paletteTexture == null) {
-      _paletteTexture?.dispose();
-      _paletteTexture = await _buildPaletteTexture(colorMap);
-      _lastColorMap = colorMap;
-    }
-
-    final paletteTex = _paletteTexture;
-    if (paletteTex == null) return intensityImage;
-
-    try {
-      final shader = _shaderProgram!.fragmentShader()
-        ..setImageSampler(0, intensityImage)
-        ..setImageSampler(1, paletteTex)
-        ..setFloat(0, outW.toDouble())
-        ..setFloat(1, outH.toDouble());
-
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder);
-      canvas.drawRect(
-        Rect.fromLTWH(0, 0, outW.toDouble(), outH.toDouble()),
-        Paint()..shader = shader,
-      );
-      final picture = recorder.endRecording();
-      final resultImage = await picture.toImage(outW, outH);
-      intensityImage.dispose();
-      return resultImage;
-    } catch (e) {
-      debugPrint('[SpectrogramCanvas._applyShader] ERROR: $e');
-      return intensityImage;
-    }
   }
 
   @override
-  void didUpdateWidget(covariant SpectrogramCanvas oldWidget) {
+  void didUpdateWidget(SpectrogramCanvas oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.histories, widget.histories) ||
-        oldWidget.noiseThreshold != widget.noiseThreshold) {
-      _renderDebounced();
-    } else if (oldWidget.colorMap != widget.colorMap || oldWidget.gainDb != widget.gainDb) {
-      _paletteTexture?.dispose();
-      _paletteTexture = null;
-      _lastColorMap = null;
-      _rasterizeViewport();
-    }
-  }
+    if (oldWidget.matrix != widget.matrix ||
+        oldWidget.gamma != widget.gamma ||
+        oldWidget.inputValueMax != widget.inputValueMax ||
+        oldWidget.gainDb != widget.gainDb) {
+      _render();
+    }  }
 
-  void _renderDebounced() {
-    _renderDebounce?.cancel();
-    _renderDebounce = Timer(const Duration(milliseconds: 50), _render);
+  List<List<num>> _resolvedMatrix() {
+    if (widget.matrix.isNotEmpty) {
+      return widget.matrix;
+    }
+    final histories = widget.histories;
+    if (histories == null || histories.isEmpty) {
+      return const [];
+    }
+
+    final dataBlocks = histories.where((entry) => entry.data.isNotEmpty).toList();
+    if (dataBlocks.isEmpty) {
+      return const [];
+    }
+
+    final first = dataBlocks.first.data;
+    final combined = first
+        .map((row) => List<num>.from(row, growable: true))
+        .toList(growable: true);
+
+    for (int i = 1; i < dataBlocks.length; i++) {
+      final current = dataBlocks[i].data;
+      if (current.isEmpty) continue;
+      final rows = combined.length;
+      final extraRows = current.length;
+      final targetRows = rows > extraRows ? rows : extraRows;
+      for (int r = 0; r < targetRows; r++) {
+        final left = r < combined.length ? combined[r] : <num>[];
+        final right = r < current.length ? current[r] : const <num>[];
+        final merged = <num>[];
+        merged.addAll(left);
+        merged.addAll(right);
+        if (r < combined.length) {
+          combined[r] = merged;
+        } else {
+          combined.add(merged);
+        }
+      }
+    }
+
+    return combined;
   }
 
   Future<void> _render() async {
-    final gen = ++_generation;
-    final histories = widget.histories.where((h) => h.data.isNotEmpty).toList();
-
-    if (histories.isEmpty) {
-      if (mounted && _image != null) {
-        setState(() {
-          _image = null;
-          _cachedCombined = null;
-        });
-      }
+    final renderMatrix = _resolvedMatrix();
+    final id = ++_jobId;
+    if (renderMatrix.isEmpty || _layoutSize == Size.zero) {
+      _image?.dispose();
+      _image = null;
+      if (mounted) setState(() {});
       return;
     }
 
-    List<double>? firstBins;
-    DateTime? earliest;
-    DateTime? latest;
-    int maxRows = 0;
-    int totalCols = 0;
-    for (final history in histories) {
-      if (history.data.length > maxRows) maxRows = history.data.length;
-      totalCols += history.data.isNotEmpty ? history.data[0].length : 0;
-      if (firstBins == null && history.frequencyBins != null && history.frequencyBins!.isNotEmpty) {
-        firstBins = history.frequencyBins;
-      }
-      final st = history.startTime ?? history.timestamp;
-      final et = history.endTime ?? history.timestamp;
-      if (st.isNotEmpty) {
-        final dt = DateTime.tryParse(st);
-        if (dt != null && (earliest == null || dt.isBefore(earliest))) earliest = dt;
-      }
-      if (et.isNotEmpty) {
-        final dt = DateTime.tryParse(et);
-        if (dt != null && (latest == null || dt.isAfter(latest))) latest = dt;
-      }
+    // Determine plot surface dimensions (match web renderer):
+    // - width: plot area width (logical pixels)
+    // - height: one pixel per frequency bin (rows)
+    final cssWidth = _layoutSize.width;
+    final cssHeight = _layoutSize.height;
+    if (cssWidth <= 0 || cssHeight <= 0) {
+      return;
     }
-    _frequencyBins = firstBins;
-    _startTime = earliest;
-    _endTime = latest;
-    _colCount = totalCols;
-    _cachedWidth = totalCols;
-    _cachedHeight = maxRows;
 
-    final rawBlocks = histories.map((h) => RawBlockData(
-      h.data, h.intensityType, h.intensityRange[0], h.intensityRange[1],
-    )).toList();
+    // Compute plot box in CSS pixels using same proportions as painter.
+    final leftCss = cssWidth * _SpectroPainter._leftInset / 705;
+    final rightCss = cssWidth * _SpectroPainter._rightInset / 705;
+    final topCss = cssHeight * _SpectroPainter._topInset / 320;
+    final bottomCss = cssHeight * _SpectroPainter._bottomInset / 320;
+    final plotWcss = (cssWidth - leftCss - rightCss).clamp(1.0, cssWidth);
+    final plotHcss = (cssHeight - topCss - bottomCss).clamp(1.0, cssHeight);
+
+    // Render the intensity surface at the exact CSS size of the on-screen
+    // plot box (same as the web renderer, which draws into a CSS-sized
+    // canvas). Keeping the texture 1:1 with the destination rect lets the
+    // painter use drawImage with no scaling, which renders correctly and
+    // fast on software/SwiftShader emulators (drawImageRect's scaled
+    // sampling clips the texture with a diagonal seam).
+    final width = plotWcss.round().clamp(1, 4096);
+    final height = plotHcss.round().clamp(1, 4096);
 
     try {
-      final output = await SpectroIsolate.renderAndCache(
-        rawBlocks: rawBlocks,
-        colorMap: widget.colorMap ?? kColorMapMagma,
-        gainDb: widget.gainDb,
-        noiseThreshold: widget.noiseThreshold,
-        width: totalCols,
-        height: maxRows,
+      final result = await renderSpectrogramIsolate(
+        RenderRequest(
+          matrix: renderMatrix,
+          width: width,
+          height: height,
+          gamma: widget.gamma,
+          inputValueMax: widget.inputValueMax,
+          // Match the web dashboard: when the server does not report an
+          // intensity type, infer it from the data (uint8 here) exactly like
+          // the web's resolveIntensityType -> inferImageIntensityType.
+          intensityType: widget.intensityType ?? widget.histories?.firstOrNull?.intensityType,
+          startTimeIso: widget.startTime ?? widget.histories?.firstOrNull?.startTime,
+          endTimeIso: widget.endTime ?? widget.histories?.firstOrNull?.endTime,
+          debug: true,
+          gainDb: widget.gainDb,
+          backgroundColor: widget.background.toARGB32(),
+        ),
       );
-
-      if (!mounted || gen != _generation) {
-        output.image.dispose();
-        return;
-      }
-      _cachedCombined = output.cachedCombined;
-      final finalImage = await _applyShader(output.image, widget.colorMap ?? kColorMapMagma, totalCols, maxRows);
-      if (!mounted || gen != _generation) {
-        finalImage.dispose();
-        return;
-      }
-      final old = _image;
-      setState(() => _image = finalImage);
-      old?.dispose();
-    } catch (e) {
-      debugPrint('[SpectrogramCanvas._render] ERROR: $e');
+      if (!mounted || id != _jobId) return;
+      final image = await rgbaToUiImage(result.rgba, width, height);
+      if (!mounted || id != _jobId) return;
+      _image?.dispose();
+      await _exportDebugElt(image, result.rgba, width, height);
+      setState(() => _image = image);
+    } catch (_) {
+      if (!mounted || id != _jobId) return;
+      setState(() => _image = null);
     }
   }
 
-  Future<void> _rasterizeViewport({int? displayWidth}) async {
-    final combined = _cachedCombined;
-    if (combined == null || _cachedWidth == 0 || _cachedHeight == 0) return;
-
-    if (displayWidth != null && displayWidth > 0) {
-      _displayWidth = displayWidth;
-    }
-
-    final gen = ++_generation;
-    final startCol = (_viewportStart * _cachedWidth).floor();
-    final endCol = (_viewportEnd * _cachedWidth).ceil();
-
-    final outW = _displayWidth > 0 ? _displayWidth : _cachedWidth;
-
+  Future<void> _exportDebugElt(
+      ui.Image img, Uint8List rgba, int width, int height) async {
     try {
-      final intensityImage = await SpectroIsolate.rasterizeOnly(
-        cachedCombined: combined,
-        colorMap: widget.colorMap ?? kColorMapMagma,
-        gainDb: widget.gainDb,
-        width: outW,
-        height: _cachedHeight,
-        startCol: startCol,
-        endCol: endCol,
-      );
-
-      if (!mounted || gen != _generation) {
-        intensityImage.dispose();
-        return;
-      }
-
-      final finalImage = await _applyShader(intensityImage, widget.colorMap ?? kColorMapMagma, outW, _cachedHeight);
-      if (!mounted || gen != _generation) {
-        finalImage.dispose();
-        return;
-      }
-      final old = _image;
-      setState(() => _image = finalImage);
-      old?.dispose();
+      final byteData =
+          await img.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) return;
+      final dir = Directory('/data/data/com.example.spectro_phone/cache');
+      await dir.create(recursive: true);
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      await File(
+              '${dir.path}/spectro_surface_$stamp.png')
+          .writeAsBytes(byteData.buffer.asUint8List());
+      const f = 'SPECTRO_DEBUG_SAVED';
+      // ignore: avoid_print
+      print('$f surface_${width}x${height} '
+          'nonzero=${rgba.where((v) => v != 0).length} '
+          'file=spectro_surface_$stamp.png');
     } catch (e) {
-      debugPrint('[SpectrogramCanvas._rasterizeViewport] ERROR: $e');
+      // ignore: avoid_print
+      print('SPECTRO_DEBUG_SAVE_ERR $e');
     }
   }
 
   @override
   void dispose() {
-    _renderDebounce?.cancel();
+    _jobId++;
     _image?.dispose();
-    _paletteTexture?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final img = _image;
-    if (img == null) {
-      return Container(
-        color: const Color(0xFF140D28),
-        alignment: Alignment.center,
-        child: const Text(
-          'لا توجد بيانات',
-          style: TextStyle(color: Colors.white38, fontSize: 14),
-        ),
-      );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.hasBoundedWidth && constraints.hasBoundedHeight) {
+          final size = constraints.biggest;
+          final dpr = MediaQuery.devicePixelRatioOf(context);
+          if (size != _layoutSize || dpr != _dpr) {
+            _layoutSize = size;
+            _dpr = dpr;
+            // ignore: avoid_print
+            print('DBG_LAYOUT size=${size.width.toStringAsFixed(1)}'
+                'x${size.height.toStringAsFixed(1)} dpr=${dpr.toStringAsFixed(2)}');
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _render();
+            });
+          }
+        }
+        final img = _image;
+        if (img == null) {
+          return Container(
+            color: widget.background,
+            alignment: Alignment.center,
+            child: const Text(
+              'لا توجد بيانات طيف',
+              style: TextStyle(color: Colors.white54),
+            ),
+          );
+        }
+        return Container(
+          color: widget.background,
+          child: CustomPaint(
+            size: Size(constraints.maxWidth, constraints.maxHeight),
+            painter: _SpectroPainter(
+              img,
+                  background: widget.background,
+                  smoothVertical: widget.smoothVertical,
+              frequencyLabels: widget.frequencyLabels,
+              timeLabels: widget.timeLabels,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _SpectroPainter extends CustomPainter {
+  final ui.Image image;
+  final Color background;
+  final List<String>? frequencyLabels;
+  final List<String>? timeLabels;
+    final bool smoothVertical;
+
+    _SpectroPainter(this.image,
+      {this.background = const Color(0xFF111026),
+      this.frequencyLabels,
+      this.timeLabels,
+      this.smoothVertical = true});
+
+  // Dashboard GUI metrics (proportional to the web's fixed layout).
+  static const double _leftInset = 66;
+  static const double _rightInset = 14;
+  static const double _topInset = 14;
+  static const double _bottomInset = 72;
+  static const int _xTicks = 5; // chooseTicks(625, 4, 8) -> 5
+  static const int _yTicks = 5;
+
+  static const Color _gridColor = Color(0x29CFD7E6); // rgba(207,215,230,0.16)
+  static const Color _axisColor = Color(0xFFCFD7E6);
+  static const Color _textColor = Color(0xFFD8E2FF);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final h = size.height;
+
+    // Margins proportional to canvas size (keep horizontal ratio like web so
+    // the plot box occupies the same relative area).
+    final left = w * _leftInset / 705;
+    final right = w * _rightInset / 705;
+    final top = h * _topInset / 320;
+    final bottom = h * _bottomInset / 320;
+    final plotW = w - left - right;
+    final plotH = h - top - bottom;
+
+    final paint = Paint()
+      ..isAntiAlias = false
+      ..filterQuality = FilterQuality.none;
+
+    final plotRect = Rect.fromLTWH(left, top, plotW, plotH);
+    final sourceRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
+    canvas.save();
+    canvas.clipRect(plotRect);
+    canvas.drawImageRect(image, sourceRect, plotRect, paint);
+    canvas.restore();
+
+    // 2) Grid lines (same colors/widths as dashboard).
+    final gridPaint = Paint()
+      ..color = _gridColor
+      ..strokeWidth = 1;
+    for (var i = 0; i <= _xTicks; i++) {
+      final x = left + (plotW * i / _xTicks).roundToDouble();
+      canvas.drawLine(Offset(x, top), Offset(x, top + plotH), gridPaint);
+    }
+    for (var i = 0; i <= _yTicks; i++) {
+      final y = top + (plotH * i / _yTicks).roundToDouble();
+      canvas.drawLine(Offset(left, y), Offset(left + plotW, y), gridPaint);
     }
 
-    return LayoutBuilder(builder: (context, constraints) {
-      final containerWidth = constraints.maxWidth;
-      final bottomPad = 18.0;
-      final h = (constraints.maxHeight - bottomPad).clamp(0.0, constraints.maxHeight);
-      final dispW = math.max(containerWidth - 34, 100).floor();
+    // 3) Axes stroke (left + bottom).
+    final axisPaint = Paint()
+      ..color = _axisColor
+      ..strokeWidth = 1.2;
+    final axisPath = Path()
+      ..moveTo(left, top)
+      ..lineTo(left, top + plotH)
+      ..lineTo(left + plotW, top + plotH);
+    canvas.drawPath(axisPath, axisPaint);
 
-      if (dispW != _displayWidth && _cachedCombined != null) {
-        _displayWidth = dispW;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _rasterizeViewport(displayWidth: dispW);
-        });
-      }
+    // 4) Time (x) axis tick labels.
+    final timeStyle =
+        TextStyle(color: _textColor, fontSize: 12 * (h / 320));
+    for (var i = 0; i <= _xTicks; i++) {
+      final label = _timeLabelFor(i, _xTicks);
+      final x = left + plotW * i / _xTicks;
+      final tp = TextPainter(
+        text: TextSpan(text: label, style: timeStyle),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, Offset(x - tp.width / 2, top + plotH + 8 * (h / 320)));
+    }
 
-      return Container(
-        color: const Color(0xFF140D28),
-        child: GestureDetector(
-          onScaleStart: (details) {
-            _scaleStart = _viewportSpan;
-            _lastFocalPoint = details.focalPoint;
-          },
-          onScaleUpdate: (details) {
-            if (details.pointerCount == 1) {
-              final dx = details.focalPoint.dx - _lastFocalPoint.dx;
-              _lastFocalPoint = details.focalPoint;
-              final shift = dx / containerWidth * _viewportSpan;
-              _setViewport(_viewportStart - shift, _viewportEnd - shift);
-            } else {
-              final center = (_viewportStart + _viewportEnd) / 2;
-              final newSpan = (_scaleStart / details.scale).clamp(0.005, 1.0);
-              _setViewport(center - newSpan / 2, center + newSpan / 2);
-            }
-          },
-          child: Stack(
-            children: [
-              Positioned(
-                left: 32,
-                top: 0,
-                width: math.max(containerWidth - 34, 100),
-                height: h,
-                child: RawImage(
-                  image: img,
-                  fit: BoxFit.fill,
-                  filterQuality: FilterQuality.low,
-                ),
-              ),
-              Positioned.fill(
-                child: CustomPaint(
-                  painter: SpectrogramAxesPainter(
-                    colCount: (_viewportSpan * _colCount).round(),
-                    frequencyBins: _frequencyBins,
-                    startTime: _visStartTime,
-                    endTime: _visEndTime,
-                    aiStatusBlocks: _computeAiStatusBlocks(),
-                  ),
-                ),
-              ),
-              Positioned(
-                top: 40,
-                right: 8,
-                child: Column(
-                  children: [
-                    _zoomBtn(Icons.add, () => zoomIn()),
-                    const SizedBox(height: 4),
-                    _zoomBtn(Icons.remove, () => zoomOut()),
-                    const SizedBox(height: 4),
-                    _zoomBtn(Icons.fit_screen, () => fitToScreen()),
-                    const SizedBox(height: 4),
-                    _zoomBtn(Icons.arrow_left, () => panLeft()),
-                    const SizedBox(height: 4),
-                    _zoomBtn(Icons.arrow_right, () => panRight()),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    });
+    // 5) Frequency (y) axis tick labels (right-aligned to left of plot).
+    final freqStyle =
+        TextStyle(color: _textColor, fontSize: 12 * (h / 320));
+    for (var i = 0; i <= _yTicks; i++) {
+      final label = _freqLabelFor(i, _yTicks);
+      final y = top + plotH * i / _yTicks;
+      final fp = TextPainter(
+        text: TextSpan(text: label, style: freqStyle),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      fp.paint(canvas, Offset(left - 8 * (w / 705) - fp.width, y - fp.height / 2));
+    }
+
+    // 6) Axis titles: "التردد (Hz)" rotated on the left, "الزمن" below.
+    final titleStyle =
+        TextStyle(color: _textColor, fontSize: 12 * (h / 320));
+    canvas.save();
+    canvas.translate(14 * (w / 705), top + plotH / 2);
+    canvas.rotate(-3.141592653589793 / 2);
+    final freqTitle = TextPainter(
+      text: TextSpan(text: 'التردد (Hz)', style: titleStyle),
+      textDirection: TextDirection.rtl,
+    )..layout();
+    freqTitle.paint(canvas, Offset(-freqTitle.width / 2, -freqTitle.height / 2));
+    canvas.restore();
+
+    final timeTitle = TextPainter(
+      text: TextSpan(text: 'الزمن', style: titleStyle),
+      textDirection: TextDirection.rtl,
+    )..layout();
+    timeTitle.paint(
+        canvas,
+        Offset(left + plotW / 2 - timeTitle.width / 2,
+            top + plotH + 27 * (h / 320)));
   }
 
-  Widget _zoomBtn(IconData icon, VoidCallback onTap) {
-    return Material(
-      color: Colors.black54,
-      shape: const CircleBorder(),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Icon(icon, color: Colors.white70, size: 20),
-        ),
-      ),
-    );
+  String _timeLabelFor(int i, int n) {
+    if (timeLabels != null && i < timeLabels!.length) return timeLabels![i];
+    // Generic label matching the dashboard's default bare format.
+    return '';
+  }
+
+  String _freqLabelFor(int i, int n) {
+    if (frequencyLabels != null && i < frequencyLabels!.length) {
+      return frequencyLabels![i];
+    }
+    // Fall back to "نطاق N" style like the dashboard when no freq bins.
+    final bin = (n - i).round();
+    return 'نطاق $bin';
+  }
+
+  @override
+  bool shouldRepaint(covariant _SpectroPainter oldDelegate) {
+    return oldDelegate.image != image || oldDelegate.background != background;
   }
 }
