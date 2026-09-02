@@ -364,8 +364,10 @@ class _SpectroPainter extends CustomPainter {
   // Dashboard GUI metrics (proportional to the web's fixed layout).
   static const double _leftInset = 66;
   static const double _rightInset = 14;
-  static const double _topInset = 14;
-  static const double _bottomInset = 72;
+  // Reduce top/bottom insets in fullscreen so the plot occupies more
+  // of the available vertical space (matches `SpectrogramAxesPainter`).
+  static const double _topInset = 0;
+  static const double _bottomInset = 18;
   static const int _xTicks = 5; // chooseTicks(625, 4, 8) -> 5
   static const int _yTicks = 5;
 
@@ -393,9 +395,14 @@ class _SpectroPainter extends CustomPainter {
 
     final plotRect = Rect.fromLTWH(left, top, plotW, plotH);
     final sourceRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
+    // Debug info: log image vs destination sizes to diagnose clipping/scaling.
+    // ignore: avoid_print
+    print('SPECTRO_PAINT image=${image.width}x${image.height} dest=${plotRect.width.toInt()}x${plotRect.height.toInt()} dpr=${ui.window.devicePixelRatio}');
     canvas.save();
     canvas.clipRect(plotRect);
     canvas.drawImageRect(image, sourceRect, plotRect, paint);
+    // Draw a thin red border around the plotRect to verify destination bounds.
+    canvas.drawRect(plotRect, Paint()..style = PaintingStyle.stroke..color = const Color(0x80FF3333)..strokeWidth = 1);
     canvas.restore();
 
     // 2) Grid lines (same colors/widths as dashboard).
