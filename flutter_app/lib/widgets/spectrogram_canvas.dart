@@ -332,13 +332,13 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                 final w = _layoutSize.width;
                 if (w <= 0) return;
                 if (details.pointerCount == 2) {
-                  final newSpan = (_scaleStart / details.scale).clamp(0.005, 1.0);
+                  final newSpan = (_scaleStart / details.scale).clamp(0.005, 5.0);
                   final anchor = (_lastFocalPoint.dx / w).clamp(0.0, 1.0);
                   final center = _viewportStart + (_viewportEnd - _viewportStart) * anchor;
                   var newStart = center - newSpan * anchor;
                   var newEnd = newStart + newSpan;
-                  if (newStart < 0.0) { newStart = 0.0; newEnd = newSpan; }
-                  if (newEnd > 1.0) { newEnd = 1.0; newStart = 1.0 - newSpan; }
+                  if (newStart < -(newSpan * 0.8)) newStart = -(newSpan * 0.8);
+                  if (newEnd > 1.0 + newSpan * 0.8) newEnd = 1.0 + newSpan * 0.8;
                   setState(() { _viewportStart = newStart; _viewportEnd = newEnd; });
                 } else if (details.pointerCount == 1) {
                   final dx = details.focalPoint.dx - _lastFocalPoint.dx;
@@ -347,8 +347,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                   final shift = dx / w * span;
                   var newStart = _viewportStart - shift;
                   var newEnd = _viewportEnd - shift;
-                  if (newStart < 0.0) { newStart = 0.0; newEnd = span; }
-                  if (newEnd > 1.0) { newEnd = 1.0; newStart = 1.0 - span; }
+                  if (newStart < -(span * 0.8)) newStart = -(span * 0.8);
+                  if (newEnd > 1.0 + span * 0.8) newEnd = 1.0 + span * 0.8;
                   setState(() { _viewportStart = newStart; _viewportEnd = newEnd; });
                 }
               },
@@ -425,13 +425,22 @@ class _SpectroPainter extends CustomPainter {
       ..filterQuality = FilterQuality.none;
 
     final plotRect = Rect.fromLTWH(0, 0, w, h);
-    final xStart = (viewportStart * image.width).round().clamp(0, image.width - 1);
-    final xEnd = (viewportEnd * image.width).round().clamp(xStart + 1, image.width);
-    final sourceRect = Rect.fromLTWH(xStart.toDouble(), 0, (xEnd - xStart).toDouble(), image.height.toDouble());
-    canvas.save();
-    canvas.clipRect(Offset.zero & size);
-    canvas.drawImageRect(image, sourceRect, plotRect, paint);
-    canvas.restore();
+    canvas.drawRect(plotRect, Paint()..color = const Color(0xFF140D28));
+    final span = viewportEnd - viewportStart;
+    if (span > 0) {
+      final dataStart = viewportStart.clamp(0.0, 1.0);
+      final dataEnd = viewportEnd.clamp(0.0, 1.0);
+      final srcX0 = (dataStart * image.width).round();
+      final srcX1 = (dataEnd * image.width).round();
+      final destX0 = ((dataStart - viewportStart) / span) * w;
+      final destX1 = ((dataEnd - viewportStart) / span) * w;
+      final src = Rect.fromLTWH(srcX0.toDouble(), 0, (srcX1 - srcX0).toDouble(), image.height.toDouble());
+      final dst = Rect.fromLTWH(destX0, 0, destX1 - destX0, h);
+      canvas.save();
+      canvas.clipRect(Offset.zero & size);
+      canvas.drawImageRect(image, src, dst, paint);
+      canvas.restore();
+    }
 
     // 2) Grid lines (same colors/widths as dashboard).
     final gridPaint = Paint()
