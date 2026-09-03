@@ -291,6 +291,20 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     super.dispose();
   }
 
+  List<CoverageInterval> _buildCoverageIntervals() {
+    final histories = widget.histories;
+    if (histories == null || histories.isEmpty) return const [];
+    final intervals = <CoverageInterval>[];
+    for (final h in histories) {
+      if (h.startTime == null || h.endTime == null) continue;
+      final s = DateTime.tryParse(h.startTime!);
+      final e = DateTime.tryParse(h.endTime!);
+      if (s == null || e == null) continue;
+      intervals.add(CoverageInterval(startMs: s.millisecondsSinceEpoch, endMs: e.millisecondsSinceEpoch));
+    }
+    return intervals;
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -363,7 +377,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                   viewportStart: _viewportStart,
                   viewportEnd: _viewportEnd,
                   startTimeIso: widget.startTime ?? widget.histories?.firstOrNull?.startTime,
-endTimeIso: widget.endTime ?? widget.histories?.lastOrNull?.endTime,
+                  endTimeIso: widget.endTime ?? widget.histories?.lastOrNull?.endTime,
+                  coverageIntervals: _buildCoverageIntervals(),
                 ),
               ),
             ),
@@ -372,6 +387,12 @@ endTimeIso: widget.endTime ?? widget.histories?.lastOrNull?.endTime,
       },
     );
   }
+}
+
+class CoverageInterval {
+  final int startMs;
+  final int endMs;
+  const CoverageInterval({required this.startMs, required this.endMs});
 }
 
 class _SpectroPainter extends CustomPainter {
@@ -384,6 +405,7 @@ class _SpectroPainter extends CustomPainter {
   final double viewportEnd;
   final String? startTimeIso;
   final String? endTimeIso;
+  final List<CoverageInterval>? coverageIntervals;
 
   _SpectroPainter(this.image,
       {this.background = const Color(0xFF111026),
@@ -393,7 +415,8 @@ class _SpectroPainter extends CustomPainter {
       this.viewportStart = 0.0,
       this.viewportEnd = 1.0,
       this.startTimeIso,
-      this.endTimeIso});
+      this.endTimeIso,
+      this.coverageIntervals});
 
   static const double _leftInset = 40;
   static const double _rightInset = 6;
@@ -406,6 +429,8 @@ class _SpectroPainter extends CustomPainter {
   static const Color _gridColor = Color(0x29CFD7E6);
   static const Color _axisColor = Color(0xFFCFD7E6);
   static const Color _textColor = Color(0xFFD8E2FF);
+  static const Color _gapFill = Color(0x423667C2);
+  static const Color _gapStroke = Color(0xE766C4E7);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -440,6 +465,79 @@ class _SpectroPainter extends CustomPainter {
       canvas.drawImageRect(image, src, dst, paint);
     }
 
+    // Compute viewport time range for labels and gaps.
+    final dataFromMs = _parseMs(startTimeIso);
+    final dataToMs = _parseMs(endTimeIso);
+    final fromMs = dataFromMs != null && dataToMs != null
+        ? (dataFromMs + ((dataToMs - dataFromMs) * viewportStart)).round()
+        : dataFromMs;
+    final toMs = dataFromMs != null && dataToMs != null
+        ? (dataFromMs + ((dataToMs - dataFromMs) * viewportEnd)).round()
+        : dataToMs;
+
+    // 2b) Gap overlays (time ranges with no data).
+    if (coverageIntervals != null && coverageIntervals!.isNotEmpty && span > 0 && fromMs != null && toMs != null) {
+      final totalMs = toMs - fromMs;
+      if (totalMs > 0) {
+        final sorted = List<CoverageInterval>.from(coverageIntervals!)
+          ..sort((a, b) => a.startMs.compareTo(b.startMs));
+        final merged = <CoverageInterval>[];
+        for (final iv in sorted) {
+          final clippedStart = iv.startMs.clamp(fromMs, toMs);
+          final clippedEnd = iv.endMs.clamp(fromMs, toMs);
+          if (clippedEnd <= clippedStart) continue;
+          if (merged.isNotEmpty && clippedStart <= merged.last.endMs) {
+            merged[merged.length - 1] = CoverageInterval(
+                startMs: merged.last.startMs,
+                endMs: clippedEnd > merged.last.endMs ? clippedEnd : merged.last.endMs);
+          } else {
+            merged.add(CoverageInterval(startMs: clippedStart, endMs: clippedEnd));
+          }
+        }
+        final gapFillPaint = Paint()..color = _gapFill;
+        final gapStrokePaint = Paint()
+          ..color = _gapStroke
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1;
+        final gapStyle = TextStyle(color: _gapStroke, fontSize: 11);
+        var cursor = fromMs;
+        for (final iv in merged) {
+          if (iv.startMs > cursor) {
+            final gx0 = pLeft + ((cursor - fromMs) / totalMs) * plotW;
+            final gx1 = pLeft + ((iv.startMs - fromMs) / totalMs) * plotW;
+            final gw = gx1 - gx0;
+            canvas.drawRect(Rect.fromLTWH(gx0, pTop, gw, plotH), gapFillPaint);
+            canvas.drawLine(Offset(gx0, pTop), Offset(gx0, pTop + plotH), gapStrokePaint);
+            canvas.drawLine(Offset(gx1, pTop), Offset(gx1, pTop + plotH), gapStrokePaint);
+            if (gw >= 72) {
+              final gapMin = ((iv.startMs - cursor) / 60000).round();
+              final gt = TextPainter(
+                text: TextSpan(text: 'لا توجد بيانات $gapMin د', style: gapStyle),
+                textDirection: TextDirection.rtl,
+              )..layout();
+              gt.paint(canvas, Offset(gx0 + gw / 2 - gt.width / 2, pTop + 4));
+            }
+          }
+          if (iv.endMs > cursor) cursor = iv.endMs;
+        }
+        if (cursor < toMs) {
+          final gx0 = pLeft + ((cursor - fromMs) / totalMs) * plotW;
+          final gx1 = pLeft + plotW;
+          final gw = gx1 - gx0;
+          canvas.drawRect(Rect.fromLTWH(gx0, pTop, gw, plotH), gapFillPaint);
+          canvas.drawLine(Offset(gx1, pTop), Offset(gx1, pTop + plotH), gapStrokePaint);
+          if (gw >= 72) {
+            final gapMin = ((toMs - cursor) / 60000).round();
+            final gt = TextPainter(
+              text: TextSpan(text: 'لا توجد بيانات $gapMin د', style: gapStyle),
+              textDirection: TextDirection.rtl,
+            )..layout();
+            gt.paint(canvas, Offset(gx0 + gw / 2 - gt.width / 2, pTop + 4));
+          }
+        }
+      }
+    }
+
     // 3) Grid lines.
     final gridPaint = Paint()..color = _gridColor..strokeWidth = 1;
     for (var i = 0; i <= _xTicks; i++) {
@@ -465,14 +563,6 @@ class _SpectroPainter extends CustomPainter {
 
     // 5) Time (x) axis labels.
     final timeStyle = TextStyle(color: _textColor, fontSize: 10);
-    final dataFromMs = _parseMs(startTimeIso);
-    final dataToMs = _parseMs(endTimeIso);
-    final fromMs = dataFromMs != null && dataToMs != null
-        ? (dataFromMs! + ((dataToMs - dataFromMs) * viewportStart)).round()
-        : dataFromMs;
-    final toMs = dataFromMs != null && dataToMs != null
-        ? (dataFromMs! + ((dataToMs - dataFromMs) * viewportEnd)).round()
-        : dataToMs;
     final withDate = (toMs != null && fromMs != null) && (toMs - fromMs > 24 * 3600 * 1000);
     for (var i = 0; i <= _xTicks; i++) {
       final label = _timeLabelFor(i, _xTicks, fromMs, toMs, withDate);
