@@ -362,6 +362,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                   timeLabels: widget.timeLabels,
                   viewportStart: _viewportStart,
                   viewportEnd: _viewportEnd,
+                  startTimeIso: widget.startTime ?? widget.histories?.firstOrNull?.startTime,
+                  endTimeIso: widget.endTime ?? widget.histories?.firstOrNull?.endTime,
                 ),
               ),
             ),
@@ -377,30 +379,31 @@ class _SpectroPainter extends CustomPainter {
   final Color background;
   final List<String>? frequencyLabels;
   final List<String>? timeLabels;
-    final bool smoothVertical;
-    final double viewportStart;
-    final double viewportEnd;
+  final bool smoothVertical;
+  final double viewportStart;
+  final double viewportEnd;
+  final String? startTimeIso;
+  final String? endTimeIso;
 
-    _SpectroPainter(this.image,
+  _SpectroPainter(this.image,
       {this.background = const Color(0xFF111026),
       this.frequencyLabels,
       this.timeLabels,
       this.smoothVertical = true,
       this.viewportStart = 0.0,
-      this.viewportEnd = 1.0});
+      this.viewportEnd = 1.0,
+      this.startTimeIso,
+      this.endTimeIso});
 
-  // Dashboard GUI metrics (proportional to the web's fixed layout).
-  // Reduce left inset to match axes painter and give more horizontal room.
-  static const double _leftInset = 32;
-  static const double _rightInset = 14;
-  // Reduce top/bottom insets in fullscreen so the plot occupies more
-  // of the available vertical space (matches `SpectrogramAxesPainter`).
-  static const double _topInset = 0;
-  static const double _bottomInset = 0;
-  static const int _xTicks = 5; // chooseTicks(625, 4, 8) -> 5
+  static const double _leftInset = 40;
+  static const double _rightInset = 6;
+  static const double _topInset = 4;
+  static const double _bottomInset = 36;
+  static const int _xTicks = 5;
   static const int _yTicks = 5;
+  static const double _maxFrequency = 250.0;
 
-  static const Color _gridColor = Color(0x29CFD7E6); // rgba(207,215,230,0.16)
+  static const Color _gridColor = Color(0x29CFD7E6);
   static const Color _axisColor = Color(0xFFCFD7E6);
   static const Color _textColor = Color(0xFFD8E2FF);
 
@@ -408,95 +411,90 @@ class _SpectroPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final w = size.width;
     final h = size.height;
-    if (w <= 0 || h <= 0 || image.width <= 0 || image.height <= 0) {
-      return;
-    }
+    if (w <= 0 || h <= 0 || image.width <= 0 || image.height <= 0) return;
 
-    // Full-bleed mobile rendering: the spectrogram image must cover the
-    // visible canvas, including the full available height, while the floating
-    // controls remain as an overlay above it.
-    final left = 0.0;
-    final top = 0.0;
-    final plotW = w;
-    final plotH = h;
+    final pLeft = _leftInset;
+    final pTop = _topInset;
+    final plotW = w - _leftInset - _rightInset;
+    final plotH = h - _topInset - _bottomInset;
+    if (plotW <= 0 || plotH <= 0) return;
 
     final paint = Paint()
       ..isAntiAlias = false
       ..filterQuality = FilterQuality.none;
 
-    final plotRect = Rect.fromLTWH(0, 0, w, h);
-    canvas.drawRect(plotRect, Paint()..color = const Color(0xFF140D28));
+    // 1) Background.
+    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFF140D28));
+
+    // 2) Spectrogram image with viewport.
     final span = viewportEnd - viewportStart;
     if (span > 0) {
       final dataStart = viewportStart.clamp(0.0, 1.0);
       final dataEnd = viewportEnd.clamp(0.0, 1.0);
       final srcX0 = (dataStart * image.width).round();
       final srcX1 = (dataEnd * image.width).round();
-      final destX0 = ((dataStart - viewportStart) / span) * w;
-      final destX1 = ((dataEnd - viewportStart) / span) * w;
+      final destX0 = pLeft + ((dataStart - viewportStart) / span) * plotW;
+      final destX1 = pLeft + ((dataEnd - viewportStart) / span) * plotW;
       final src = Rect.fromLTWH(srcX0.toDouble(), 0, (srcX1 - srcX0).toDouble(), image.height.toDouble());
-      final dst = Rect.fromLTWH(destX0, 0, destX1 - destX0, h);
-      canvas.save();
-      canvas.clipRect(Offset.zero & size);
+      final dst = Rect.fromLTWH(destX0, pTop, destX1 - destX0, plotH);
       canvas.drawImageRect(image, src, dst, paint);
-      canvas.restore();
     }
 
-    // 2) Grid lines (same colors/widths as dashboard).
-    final gridPaint = Paint()
-      ..color = _gridColor
-      ..strokeWidth = 1;
+    // 3) Grid lines.
+    final gridPaint = Paint()..color = _gridColor..strokeWidth = 1;
     for (var i = 0; i <= _xTicks; i++) {
-      final x = left + (plotW * i / _xTicks).roundToDouble();
-      canvas.drawLine(Offset(x, top), Offset(x, top + plotH), gridPaint);
+      final x = pLeft + (plotW * i / _xTicks).roundToDouble();
+      canvas.drawLine(Offset(x, pTop), Offset(x, pTop + plotH), gridPaint);
     }
     for (var i = 0; i <= _yTicks; i++) {
-      final y = top + (plotH * i / _yTicks).roundToDouble();
-      canvas.drawLine(Offset(left, y), Offset(left + plotW, y), gridPaint);
+      final y = pTop + (plotH * i / _yTicks).roundToDouble();
+      canvas.drawLine(Offset(pLeft, y), Offset(pLeft + plotW, y), gridPaint);
     }
 
-    // 3) Axes stroke (left + bottom).
+    // 4) Axes stroke (left + bottom).
     final axisPaint = Paint()
       ..color = _axisColor
       ..strokeWidth = 1.2
       ..style = PaintingStyle.stroke;
-    final axisPath = Path()
-      ..moveTo(left, top)
-      ..lineTo(left, top + plotH)
-      ..lineTo(left + plotW, top + plotH);
-    canvas.drawPath(axisPath, axisPaint);
+    canvas.drawPath(
+        Path()
+          ..moveTo(pLeft, pTop)
+          ..lineTo(pLeft, pTop + plotH)
+          ..lineTo(pLeft + plotW, pTop + plotH),
+        axisPaint);
 
-    // 4) Time (x) axis tick labels.
-    final timeStyle =
-        TextStyle(color: _textColor, fontSize: 12 * (h / 320));
+    // 5) Time (x) axis labels.
+    final timeStyle = TextStyle(color: _textColor, fontSize: 10);
+    final fromMs = _parseMs(startTimeIso);
+    final toMs = _parseMs(endTimeIso);
+    final withDate = (toMs != null && fromMs != null) && (toMs - fromMs > 24 * 3600 * 1000);
     for (var i = 0; i <= _xTicks; i++) {
-      final label = _timeLabelFor(i, _xTicks);
-      final x = left + plotW * i / _xTicks;
+      final label = _timeLabelFor(i, _xTicks, fromMs, toMs, withDate);
+      final x = pLeft + plotW * i / _xTicks;
       final tp = TextPainter(
         text: TextSpan(text: label, style: timeStyle),
         textDirection: TextDirection.ltr,
       )..layout();
-      tp.paint(canvas, Offset(x - tp.width / 2, top + plotH + 8 * (h / 320)));
+      tp.paint(canvas, Offset(x - tp.width / 2, pTop + plotH + 6));
     }
 
-    // 5) Frequency (y) axis tick labels (right-aligned to left of plot).
-    final freqStyle =
-        TextStyle(color: _textColor, fontSize: 12 * (h / 320));
+    // 6) Frequency (y) axis labels — 0 to 250 Hz.
+    final freqStyle = TextStyle(color: _textColor, fontSize: 10);
     for (var i = 0; i <= _yTicks; i++) {
-      final label = _freqLabelFor(i, _yTicks);
-      final y = top + plotH * i / _yTicks;
+      final hz = (i * _maxFrequency / _yTicks).round();
+      final label = '$hz Hz';
+      final y = pTop + plotH * i / _yTicks;
       final fp = TextPainter(
         text: TextSpan(text: label, style: freqStyle),
         textDirection: TextDirection.ltr,
       )..layout();
-      fp.paint(canvas, Offset(left - 8 * (w / 705) - fp.width, y - fp.height / 2));
+      fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
     }
 
-    // 6) Axis titles: "التردد (Hz)" rotated on the left, "الزمن" below.
-    final titleStyle =
-        TextStyle(color: _textColor, fontSize: 12 * (h / 320));
+    // 7) Axis titles.
+    final titleStyle = TextStyle(color: _textColor, fontSize: 10);
     canvas.save();
-    canvas.translate(14 * (w / 705), top + plotH / 2);
+    canvas.translate(10, pTop + plotH / 2);
     canvas.rotate(-3.141592653589793 / 2);
     final freqTitle = TextPainter(
       text: TextSpan(text: 'التردد (Hz)', style: titleStyle),
@@ -509,25 +507,31 @@ class _SpectroPainter extends CustomPainter {
       text: TextSpan(text: 'الزمن', style: titleStyle),
       textDirection: TextDirection.rtl,
     )..layout();
-    timeTitle.paint(
-        canvas,
-        Offset(left + plotW / 2 - timeTitle.width / 2,
-            top + plotH + 27 * (h / 320)));
+    timeTitle.paint(canvas, Offset(pLeft + plotW / 2 - timeTitle.width / 2, pTop + plotH + 20));
   }
 
-  String _timeLabelFor(int i, int n) {
+  static int? _parseMs(String? iso) {
+    if (iso == null || iso.isEmpty) return null;
+    final d = DateTime.tryParse(iso);
+    return d?.millisecondsSinceEpoch;
+  }
+
+  static String _fmtTime(int ms, bool withDate) {
+    final d = DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
+    final hh = d.hour.toString().padLeft(2, '0');
+    final mm = d.minute.toString().padLeft(2, '0');
+    if (!withDate) return '$hh:$mm';
+    final y = d.year;
+    final mon = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$y-$mon-$day $hh:$mm';
+  }
+
+  String _timeLabelFor(int i, int n, int? fromMs, int? toMs, bool withDate) {
     if (timeLabels != null && i < timeLabels!.length) return timeLabels![i];
-    // Generic label matching the dashboard's default bare format.
-    return '';
-  }
-
-  String _freqLabelFor(int i, int n) {
-    if (frequencyLabels != null && i < frequencyLabels!.length) {
-      return frequencyLabels![i];
-    }
-    // Fall back to "نطاق N" style like the dashboard when no freq bins.
-    final bin = (n - i).round();
-    return 'نطاق $bin';
+    if (fromMs == null || toMs == null) return '';
+    final labelMs = fromMs + ((toMs - fromMs) * i / n).round();
+    return _fmtTime(labelMs, withDate);
   }
 
   @override
