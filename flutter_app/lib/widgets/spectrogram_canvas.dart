@@ -99,6 +99,10 @@ class SpectrogramCanvas extends StatefulWidget {
   final List<String>? frequencyLabels;
   final List<String>? timeLabels;
 
+  /// Requested time range for live mode (overrides data timestamps for axis labels).
+  final String? requestStartTime;
+  final String? requestEndTime;
+
   const SpectrogramCanvas({
     super.key,
     this.matrix = const [],
@@ -124,6 +128,8 @@ class SpectrogramCanvas extends StatefulWidget {
     this.seedEndTime,
     this.frequencyLabels,
     this.timeLabels,
+    this.requestStartTime,
+    this.requestEndTime,
   });
 
   @override
@@ -153,6 +159,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _jobId = 0;
   Size _layoutSize = Size.zero;
   double _dpr = 1.0;
+  Timer? _renderDebounce;
 
   @override
   void initState() {
@@ -167,7 +174,16 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         oldWidget.inputValueMax != widget.inputValueMax ||
         oldWidget.gainDb != widget.gainDb) {
       _render();
-    }  }
+    }
+    if (oldWidget.histories != widget.histories ||
+        oldWidget.requestStartTime != widget.requestStartTime ||
+        oldWidget.requestEndTime != widget.requestEndTime) {
+      _renderDebounce?.cancel();
+      _renderDebounce = Timer(const Duration(milliseconds: 100), () {
+        if (mounted) _render();
+      });
+    }
+  }
 
   List<List<num>> _resolvedMatrix() {
     if (widget.matrix.isNotEmpty) {
@@ -286,6 +302,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
 
   @override
   void dispose() {
+    _renderDebounce?.cancel();
     _jobId++;
     _image?.dispose();
     super.dispose();
@@ -376,8 +393,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                   timeLabels: widget.timeLabels,
                   viewportStart: _viewportStart,
                   viewportEnd: _viewportEnd,
-                  startTimeIso: widget.startTime ?? widget.histories?.firstOrNull?.startTime,
-                  endTimeIso: widget.endTime ?? widget.histories?.lastOrNull?.endTime,
+                  startTimeIso: widget.requestStartTime ?? widget.startTime ?? widget.histories?.firstOrNull?.startTime,
+                  endTimeIso: widget.requestEndTime ?? widget.endTime ?? widget.histories?.lastOrNull?.endTime,
                   coverageIntervals: _buildCoverageIntervals(),
                 ),
               ),

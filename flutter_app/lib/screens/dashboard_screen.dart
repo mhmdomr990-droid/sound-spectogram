@@ -43,10 +43,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   _RangeMode _rangeMode = _RangeMode.followLive;
   bool _followLiveActive = true;
   static const _liveWindowMinutes = 15;
+  String? _requestStartTime;
+  String? _requestEndTime;
   final _canvasKey = GlobalKey<SpectrogramCanvasState>();
 
   StreamSubscription<DeviceHistory>? _dataSub;
   StreamSubscription<SocketStatus>? _statusSub;
+  final List<DeviceHistory> _pendingLivePackets = [];
 
   @override
   void initState() {
@@ -70,6 +73,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (mounted) {
         setState(() {
           if (_followLiveActive) {
+            if (_loadingHistory) {
+              _pendingLivePackets.add(h);
+              return;
+            }
             final exists = _histories.any((e) => e.id == h.id);
             if (!exists) {
               final cutoff = DateTime.now().subtract(Duration(minutes: _liveWindowMinutes));
@@ -78,6 +85,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 final ts = DateTime.tryParse(e.timestamp);
                 return ts != null ? ts.isAfter(cutoff) : true;
               }).toList();
+              final now = DateTime.now();
+              _requestStartTime = now.subtract(Duration(minutes: _liveWindowMinutes)).toIso8601String();
+              _requestEndTime = now.toIso8601String();
             }
           } else {
             _histories = [h];
@@ -242,19 +252,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _setFollowLive() async {
     final device = _selected;
     if (device == null) return;
+    final to = DateTime.now();
+    final from = to.subtract(Duration(minutes: _liveWindowMinutes));
     setState(() {
       _loadingHistory = true;
       _rangeMode = _RangeMode.followLive;
       _followLiveActive = true;
       _error = null;
+      _requestStartTime = from.toUtc().toIso8601String();
+      _requestEndTime = to.toUtc().toIso8601String();
     });
     try {
-      final to = DateTime.now();
-      final from = to.subtract(Duration(minutes: _liveWindowMinutes));
       final result = await widget.api.fetchHistory(device.id, from: from, to: to);
       if (!mounted) return;
       setState(() {
         _histories = result;
+        if (_pendingLivePackets.isNotEmpty) {
+          for (final p in _pendingLivePackets) {
+            final exists = _histories.any((e) => e.id == p.id);
+            if (!exists) _histories = [..._histories, p];
+          }
+          _pendingLivePackets.clear();
+        }
         _loadingHistory = false;
       });
     } on Exception catch (e) {
@@ -279,6 +298,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _rangeMode = mode;
       _followLiveActive = false;
       _histories = const [];
+      _requestStartTime = null;
+      _requestEndTime = null;
     });
     _loadRange();
   }
@@ -564,6 +585,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         colorMap: kColorMaps[_colorMapIndex],
         gainDb: _gainDb,
         noiseThreshold: _noiseThreshold,
+        requestStartTime: _requestStartTime,
+        requestEndTime: _requestEndTime,
       ),
     );
   }
