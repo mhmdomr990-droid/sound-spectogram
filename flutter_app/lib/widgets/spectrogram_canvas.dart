@@ -516,7 +516,7 @@ class _SpectroPainter extends CustomPainter {
           ..color = _gapStroke
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1;
-        final gapStyle = TextStyle(color: _gapStroke, fontSize: 11);
+        final gapStyle = TextStyle(color: Color(0xF2E1F4FF), fontSize: 11);
         var cursor = fromMs;
         for (final iv in merged) {
           if (iv.startMs > cursor) {
@@ -526,7 +526,7 @@ class _SpectroPainter extends CustomPainter {
             canvas.drawRect(Rect.fromLTWH(gx0, pTop, gw, plotH), gapFillPaint);
             canvas.drawLine(Offset(gx0, pTop), Offset(gx0, pTop + plotH), gapStrokePaint);
             canvas.drawLine(Offset(gx1, pTop), Offset(gx1, pTop + plotH), gapStrokePaint);
-            if (gw >= 72) {
+            if (gw >= 52) {
               final gapMin = ((iv.startMs - cursor) / 60000).round();
               final gt = TextPainter(
                 text: TextSpan(text: 'لا توجد بيانات $gapMin د', style: gapStyle),
@@ -542,8 +542,9 @@ class _SpectroPainter extends CustomPainter {
           final gx1 = pLeft + plotW;
           final gw = gx1 - gx0;
           canvas.drawRect(Rect.fromLTWH(gx0, pTop, gw, plotH), gapFillPaint);
+          canvas.drawLine(Offset(gx0, pTop), Offset(gx0, pTop + plotH), gapStrokePaint);
           canvas.drawLine(Offset(gx1, pTop), Offset(gx1, pTop + plotH), gapStrokePaint);
-          if (gw >= 72) {
+          if (gw >= 52) {
             final gapMin = ((toMs - cursor) / 60000).round();
             final gt = TextPainter(
               text: TextSpan(text: 'لا توجد بيانات $gapMin د', style: gapStyle),

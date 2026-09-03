@@ -42,7 +42,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double _noiseThreshold = 0.06;
   _RangeMode _rangeMode = _RangeMode.followLive;
   bool _followLiveActive = true;
-  static const _liveWindowMinutes = 15;
+  int _liveWindowMinutes = 20;
   String? _requestStartTime;
   String? _requestEndTime;
   final _canvasKey = GlobalKey<SpectrogramCanvasState>();
@@ -82,12 +82,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
               final cutoff = DateTime.now().subtract(Duration(minutes: _liveWindowMinutes));
               final updated = [..._histories, h];
               _histories = updated.where((e) {
-                final ts = DateTime.tryParse(e.timestamp);
-                return ts != null ? ts.isAfter(cutoff) : true;
+                final end = DateTime.tryParse(e.endTime ?? '');
+                return end != null ? end.isAfter(cutoff) : true;
               }).toList();
-              final now = DateTime.now();
-              _requestStartTime = now.subtract(Duration(minutes: _liveWindowMinutes)).toIso8601String();
-              _requestEndTime = now.toIso8601String();
+              final lastEnd = _histories.isNotEmpty ? _histories.last.endTime : null;
+              final anchor = lastEnd != null ? DateTime.tryParse(lastEnd) ?? DateTime.now() : DateTime.now();
+              _requestStartTime = anchor.subtract(Duration(minutes: _liveWindowMinutes)).toIso8601String();
+              _requestEndTime = anchor.toIso8601String();
             }
           } else {
             _histories = [h];
@@ -259,8 +260,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _rangeMode = _RangeMode.followLive;
       _followLiveActive = true;
       _error = null;
-      _requestStartTime = from.toUtc().toIso8601String();
-      _requestEndTime = to.toUtc().toIso8601String();
+      _requestStartTime = from.toIso8601String();
+      _requestEndTime = to.toIso8601String();
     });
     try {
       final result = await widget.api.fetchHistory(device.id, from: from, to: to);
@@ -273,6 +274,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
             if (!exists) _histories = [..._histories, p];
           }
           _pendingLivePackets.clear();
+        }
+        if (_histories.isNotEmpty) {
+          final lastEnd = _histories.last.endTime;
+          final anchor = lastEnd != null ? DateTime.tryParse(lastEnd) ?? DateTime.now() : DateTime.now();
+          _requestStartTime = anchor.subtract(Duration(minutes: _liveWindowMinutes)).toIso8601String();
+          _requestEndTime = anchor.toIso8601String();
         }
         _loadingHistory = false;
       });
@@ -418,6 +425,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
               children: [
                 btn('آخر باكت', Icons.flash_on, () => _setRange(_RangeMode.latestPacket), active: mode(_RangeMode.latestPacket)),
                 btn('متابعة البث', Icons.play_circle, () => _setRange(_RangeMode.followLive), active: mode(_RangeMode.followLive)),
+                Container(
+                  height: 24,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: DropdownButton<int>(
+                    value: _liveWindowMinutes,
+                    isDense: true,
+                    underline: const SizedBox.shrink(),
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                    dropdownColor: const Color(0xFF1A1A2E),
+                    items: [5, 10, 15, 20, 30].map((m) =>
+                      DropdownMenuItem(value: m, child: Text('$m د', style: const TextStyle(fontSize: 11)))
+                    ).toList(),
+                    onChanged: (v) {
+                      if (v != null) setState(() => _liveWindowMinutes = v);
+                      if (_rangeMode == _RangeMode.followLive) _setFollowLive();
+                    },
+                  ),
+                ),
                 btn('آخر ساعة', Icons.timer, () => _setRange(_RangeMode.lastHour), active: mode(_RangeMode.lastHour)),
                 btn('آخر 5 ساعات', Icons.history, () => _setRange(_RangeMode.last5h), active: mode(_RangeMode.last5h)),
                 btn('آخر 24 ساعة', Icons.history, () => _setRange(_RangeMode.last24h), active: mode(_RangeMode.last24h)),
@@ -532,6 +557,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           seedColCount: snap?.colCount ?? 0,
           seedStartTime: snap?.startTime,
           seedEndTime: snap?.endTime,
+          requestStartTime: _requestStartTime,
+          requestEndTime: _requestEndTime,
         ),
       ),
     );

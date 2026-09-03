@@ -31,6 +31,8 @@ class FullscreenSpectrogram extends StatefulWidget {
   final int seedColCount;
   final DateTime? seedStartTime;
   final DateTime? seedEndTime;
+  final String? requestStartTime;
+  final String? requestEndTime;
 
   const FullscreenSpectrogram({
     super.key,
@@ -46,6 +48,8 @@ class FullscreenSpectrogram extends StatefulWidget {
     this.seedColCount = 0,
     this.seedStartTime,
     this.seedEndTime,
+    this.requestStartTime,
+    this.requestEndTime,
   });
 
   @override
@@ -125,6 +129,8 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                 seedColCount: widget.seedColCount,
                 seedStartTime: widget.seedStartTime,
                 seedEndTime: widget.seedEndTime,
+                requestStartTime: widget.requestStartTime,
+                requestEndTime: widget.requestEndTime,
               ),
             ),
             Positioned(
