@@ -465,8 +465,14 @@ class _SpectroPainter extends CustomPainter {
 
     // 5) Time (x) axis labels.
     final timeStyle = TextStyle(color: _textColor, fontSize: 10);
-    final fromMs = _parseMs(startTimeIso);
-    final toMs = _parseMs(endTimeIso);
+    final dataFromMs = _parseMs(startTimeIso);
+    final dataToMs = _parseMs(endTimeIso);
+    final fromMs = dataFromMs != null && dataToMs != null
+        ? (dataFromMs! + ((dataToMs - dataFromMs) * viewportStart)).round()
+        : dataFromMs;
+    final toMs = dataFromMs != null && dataToMs != null
+        ? (dataFromMs! + ((dataToMs - dataFromMs) * viewportEnd)).round()
+        : dataToMs;
     final withDate = (toMs != null && fromMs != null) && (toMs - fromMs > 24 * 3600 * 1000);
     for (var i = 0; i <= _xTicks; i++) {
       final label = _timeLabelFor(i, _xTicks, fromMs, toMs, withDate);
