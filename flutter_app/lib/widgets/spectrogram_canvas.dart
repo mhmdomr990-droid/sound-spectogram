@@ -133,15 +133,22 @@ class SpectrogramCanvas extends StatefulWidget {
 class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   CanvasSeedSnapshot? seedSnapshot;
 
+  // Viewport: horizontal (time-axis) range [0..1]
+  double _viewportStart = 0.0;
+  double _viewportEnd = 1.0;
+  double _scaleStart = 1.0;
+  Offset _lastFocalPoint = Offset.zero;
+
   void forceRender() {
     if (mounted) setState(() {});
   }
 
-  void panLeft() {}
-  void panRight() {}
-  void zoomIn() {}
-  void zoomOut() {}
-  void fitToScreen() {}
+  void fitToScreen() {
+    setState(() {
+      _viewportStart = 0.0;
+      _viewportEnd = 1.0;
+    });
+  }
   ui.Image? _image;
   int _jobId = 0;
   Size _layoutSize = Size.zero;
@@ -316,14 +323,46 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         return SizedBox.expand(
           child: Container(
             color: widget.background,
-            child: CustomPaint(
-              size: Size(constraints.maxWidth, constraints.maxHeight),
-              painter: _SpectroPainter(
-                img,
-                background: widget.background,
-                smoothVertical: widget.smoothVertical,
-                frequencyLabels: widget.frequencyLabels,
-                timeLabels: widget.timeLabels,
+            child: GestureDetector(
+              onScaleStart: (details) {
+                _scaleStart = _viewportEnd - _viewportStart;
+                _lastFocalPoint = details.focalPoint;
+              },
+              onScaleUpdate: (details) {
+                final w = _layoutSize.width;
+                if (w <= 0) return;
+                if (details.pointerCount == 2) {
+                  final newSpan = (_scaleStart / details.scale).clamp(0.005, 1.0);
+                  final anchor = (_lastFocalPoint.dx / w).clamp(0.0, 1.0);
+                  final center = _viewportStart + (_viewportEnd - _viewportStart) * anchor;
+                  var newStart = center - newSpan * anchor;
+                  var newEnd = newStart + newSpan;
+                  if (newStart < 0.0) { newStart = 0.0; newEnd = newSpan; }
+                  if (newEnd > 1.0) { newEnd = 1.0; newStart = 1.0 - newSpan; }
+                  setState(() { _viewportStart = newStart; _viewportEnd = newEnd; });
+                } else if (details.pointerCount == 1) {
+                  final dx = details.focalPoint.dx - _lastFocalPoint.dx;
+                  _lastFocalPoint = details.focalPoint;
+                  final span = _viewportEnd - _viewportStart;
+                  final shift = dx / w * span;
+                  var newStart = _viewportStart - shift;
+                  var newEnd = _viewportEnd - shift;
+                  if (newStart < 0.0) { newStart = 0.0; newEnd = span; }
+                  if (newEnd > 1.0) { newEnd = 1.0; newStart = 1.0 - span; }
+                  setState(() { _viewportStart = newStart; _viewportEnd = newEnd; });
+                }
+              },
+              child: CustomPaint(
+                size: Size(constraints.maxWidth, constraints.maxHeight),
+                painter: _SpectroPainter(
+                  img,
+                  background: widget.background,
+                  smoothVertical: widget.smoothVertical,
+                  frequencyLabels: widget.frequencyLabels,
+                  timeLabels: widget.timeLabels,
+                  viewportStart: _viewportStart,
+                  viewportEnd: _viewportEnd,
+                ),
               ),
             ),
           ),
@@ -339,12 +378,16 @@ class _SpectroPainter extends CustomPainter {
   final List<String>? frequencyLabels;
   final List<String>? timeLabels;
     final bool smoothVertical;
+    final double viewportStart;
+    final double viewportEnd;
 
     _SpectroPainter(this.image,
       {this.background = const Color(0xFF111026),
       this.frequencyLabels,
       this.timeLabels,
-      this.smoothVertical = true});
+      this.smoothVertical = true,
+      this.viewportStart = 0.0,
+      this.viewportEnd = 1.0});
 
   // Dashboard GUI metrics (proportional to the web's fixed layout).
   // Reduce left inset to match axes painter and give more horizontal room.
@@ -382,8 +425,9 @@ class _SpectroPainter extends CustomPainter {
       ..filterQuality = FilterQuality.none;
 
     final plotRect = Rect.fromLTWH(0, 0, w, h);
-    final sourceRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
-    print('SPECTRO_PAINT image=${image.width}x${image.height} dest=${plotRect.width.toInt()}x${plotRect.height.toInt()} dpr=${ui.window.devicePixelRatio}');
+    final xStart = (viewportStart * image.width).round().clamp(0, image.width - 1);
+    final xEnd = (viewportEnd * image.width).round().clamp(xStart + 1, image.width);
+    final sourceRect = Rect.fromLTWH(xStart.toDouble(), 0, (xEnd - xStart).toDouble(), image.height.toDouble());
     canvas.save();
     canvas.clipRect(Offset.zero & size);
     canvas.drawImageRect(image, sourceRect, plotRect, paint);
@@ -479,6 +523,9 @@ class _SpectroPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SpectroPainter oldDelegate) {
-    return oldDelegate.image != image || oldDelegate.background != background;
+    return oldDelegate.image != image ||
+        oldDelegate.background != background ||
+        oldDelegate.viewportStart != viewportStart ||
+        oldDelegate.viewportEnd != viewportEnd;
   }
 }
