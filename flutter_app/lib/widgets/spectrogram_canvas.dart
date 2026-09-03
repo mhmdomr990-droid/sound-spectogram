@@ -481,8 +481,8 @@ class _SpectroPainter extends CustomPainter {
     // 6) Frequency (y) axis labels — 0 to 250 Hz.
     final freqStyle = TextStyle(color: _textColor, fontSize: 10);
     for (var i = 0; i <= _yTicks; i++) {
-      final hz = (i * _maxFrequency / _yTicks).round();
-      final label = '$hz Hz';
+      final hz = ((_yTicks - i) * _maxFrequency / _yTicks).round();
+      final label = '$hz';
       final y = pTop + plotH * i / _yTicks;
       final fp = TextPainter(
         text: TextSpan(text: label, style: freqStyle),
@@ -517,7 +517,7 @@ class _SpectroPainter extends CustomPainter {
   }
 
   static String _fmtTime(int ms, bool withDate) {
-    final d = DateTime.fromMillisecondsSinceEpoch(ms, isUtc: true);
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
     final hh = d.hour.toString().padLeft(2, '0');
     final mm = d.minute.toString().padLeft(2, '0');
     if (!withDate) return '$hh:$mm';
