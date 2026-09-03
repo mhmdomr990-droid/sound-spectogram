@@ -1,13 +1,9 @@
-import { UserRole } from "../../entities/User";
+import { AuthorizedUser } from "../../utils/types";
 
 declare global {
   namespace Express {
     interface Request {
-      user?: {
-        userId: number;
-        username: string;
-        role: UserRole;
-      };
+      user?: AuthorizedUser;
     }
   }
 }

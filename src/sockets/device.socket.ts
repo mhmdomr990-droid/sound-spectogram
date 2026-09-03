@@ -1,7 +1,11 @@
 import { Server, Socket } from "socket.io";
+import { AppDataSource } from "../config/data-source";
+import { User, UserRole } from "../entities/User";
 import { HistoryService } from "../services/history.service";
+import { verifyJwt } from "../utils/jwt";
 
 const historyService = new HistoryService();
+const userRepo = AppDataSource.getRepository(User);
 
 interface SocketAck {
   ok: boolean;
@@ -16,7 +20,10 @@ async function handleIncomingDeviceData(
 ): Promise<void> {
   try {
     const savedPayload = await historyService.saveIncomingDeviceData(payload);
-    io.emit("device:data", savedPayload);
+    io.to("all-devices").emit("device:data", savedPayload);
+    if (Number.isFinite(savedPayload.deviceId)) {
+      io.to(`device:${savedPayload.deviceId}`).emit("device:data", savedPayload);
+    }
 
     if (typeof ack === "function") {
       ack({ ok: true, data: savedPayload });
@@ -40,12 +47,15 @@ async function handleIncomingDeviceData(
 
     try {
       const livePayload = await historyService.buildBroadcastPayload(payload);
-      io.emit("device:data", livePayload);
+      io.to("all-devices").emit("device:data", livePayload);
+      if (Number.isFinite(livePayload.deviceId)) {
+        io.to(`device:${livePayload.deviceId}`).emit("device:data", livePayload);
+      }
     } catch (fallbackError) {
       console.error("Failed to build fallback live payload", fallbackError);
     }
 
-    io.emit("device:error", { message });
+    io.to("dashboards").emit("device:error", { message });
 
     if (typeof ack === "function") {
       ack({ ok: false, message });
@@ -56,6 +66,35 @@ async function handleIncomingDeviceData(
 export function registerDeviceSocket(io: Server): void {
   io.on("connection", (socket: Socket) => {
     console.log(`Socket connected: ${socket.id}`);
+
+    const token = String(socket.handshake.auth?.token || "").trim();
+    if (token) {
+      try {
+        const payload = verifyJwt(token);
+        void userRepo
+          .findOne({ where: { id: payload.userId, username: payload.username, role: payload.role }, relations: { devices: true } })
+          .then((user) => {
+            if (!user) {
+              return;
+            }
+
+            socket.join("dashboards");
+            if (user.role !== UserRole.ADMIN) {
+              user.devices.forEach((device) => {
+                socket.join(`device:${device.id}`);
+              });
+            } else {
+              socket.join("all-devices");
+            }
+          })
+          .catch((error) => {
+            console.error("Failed to join socket rooms", error);
+          });
+      } catch (_error) {
+        socket.disconnect(true);
+        return;
+      }
+    }
 
     socket.on("disconnect", (reason: string) => {
       console.log(`Socket disconnected: ${socket.id} (${reason})`);

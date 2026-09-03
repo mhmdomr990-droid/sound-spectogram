@@ -55,9 +55,9 @@ export const deviceController = {
     }
   },
 
-  getDevices: async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  getDevices: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const devices = await deviceService.getDevices();
+      const devices = await deviceService.getDevicesForUser(req.user);
       res.json(devices);
     } catch (error) {
       next(error);
@@ -71,7 +71,7 @@ export const deviceController = {
         throw new HttpError(400, "id must be a positive integer");
       }
 
-      const device = await deviceService.getDeviceById(id);
+      const device = await deviceService.requireDeviceAccess(req.user, id);
       res.json(device);
     } catch (error) {
       next(error);

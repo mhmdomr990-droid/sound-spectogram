@@ -13,6 +13,23 @@ function parseRole(value: unknown): UserRole {
   throw new HttpError(400, "role must be admin or emp");
 }
 
+function parseDeviceIds(value: unknown): number[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new HttpError(400, "deviceIds must be an array of positive integers");
+  }
+
+  const parsed = value.map((item) => Number(item));
+  if (parsed.some((item) => !isPositiveInteger(item))) {
+    throw new HttpError(400, "deviceIds must be an array of positive integers");
+  }
+
+  return Array.from(new Set(parsed));
+}
+
 export const userController = {
   login: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -39,6 +56,7 @@ export const userController = {
         username?: string;
         password?: string;
         role?: UserRole;
+        deviceIds?: unknown;
       };
 
       if (!name || !username || !password || !role) {
@@ -49,7 +67,8 @@ export const userController = {
         name,
         username,
         password,
-        role: parseRole(role)
+        role: parseRole(role),
+        deviceIds: parseDeviceIds((req.body as { deviceIds?: unknown }).deviceIds)
       });
 
       res.status(201).json(user);
@@ -93,13 +112,22 @@ export const userController = {
         username?: string;
         password?: string;
         role?: UserRole;
+        deviceIds?: unknown;
       };
+
+      const parsedDeviceIds = parseDeviceIds(body.deviceIds);
 
       if (body.role !== undefined) {
         parseRole(body.role);
       }
 
-      const updated = await userService.updateUser(id, body);
+      const updated = await userService.updateUser(id, {
+        name: body.name,
+        username: body.username,
+        password: body.password,
+        role: body.role,
+        deviceIds: parsedDeviceIds
+      });
       res.json(updated);
     } catch (error) {
       next(error);

@@ -16,6 +16,7 @@ import {
   validateIncomingDevicePayload
 } from "../utils/validation";
 import { DeviceService } from "./device.service";
+import { AuthorizedUser } from "../utils/types";
 
 export class HistoryService {
   private static readonly LEGACY_TIME_SKEW_MS = 3 * 60 * 60 * 1000;
@@ -243,11 +244,12 @@ export class HistoryService {
     };
   }
 
-  async getLatest24Hours(deviceId: number, decodeData = false): Promise<DeviceHistory[]> {
+  async getLatest24Hours(deviceId: number, decodeData = false, user?: AuthorizedUser): Promise<DeviceHistory[]> {
     if (!isPositiveInteger(deviceId)) {
       throw new HttpError(400, "device id must be a positive integer");
     }
 
+    await this.deviceService.requireDeviceAccess(user, deviceId);
     await this.deviceService.verifyDeviceExists(deviceId);
 
     const fromDate = this.formatLocalNaiveDateTime(new Date(Date.now() - 24 * 60 * 60 * 1000));
@@ -269,11 +271,12 @@ export class HistoryService {
     return this.normalizeHistoryItemsRaw(items);
   }
 
-  async getLatestPacket(deviceId: number, decodeData = false): Promise<DeviceHistory | null> {
+  async getLatestPacket(deviceId: number, decodeData = false, user?: AuthorizedUser): Promise<DeviceHistory | null> {
     if (!isPositiveInteger(deviceId)) {
       throw new HttpError(400, "device id must be a positive integer");
     }
 
+    await this.deviceService.requireDeviceAccess(user, deviceId);
     await this.deviceService.verifyDeviceExists(deviceId);
 
     const item = await this.historyRepo.findOne({
@@ -296,7 +299,13 @@ export class HistoryService {
     return this.normalizeHistoryItemsRaw([item])[0] || null;
   }
 
-  async getHistoryByDateRange(deviceId: number, from: string, to: string, decodeData = false): Promise<DeviceHistory[]> {
+  async getHistoryByDateRange(
+    deviceId: number,
+    from: string,
+    to: string,
+    decodeData = false,
+    user?: AuthorizedUser
+  ): Promise<DeviceHistory[]> {
     if (!isPositiveInteger(deviceId)) {
       throw new HttpError(400, "device id must be a positive integer");
     }
@@ -311,6 +320,7 @@ export class HistoryService {
       throw new HttpError(400, "from must be before to");
     }
 
+    await this.deviceService.requireDeviceAccess(user, deviceId);
     await this.deviceService.verifyDeviceExists(deviceId);
 
     const items = await this.historyRepo.find({

@@ -1,7 +1,9 @@
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import { AppDataSource } from "../config/data-source";
 import { Device } from "../entities/Device";
+import { UserRole } from "../entities/User";
 import { HttpError } from "../utils/http-error";
+import { AuthorizedUser } from "../utils/types";
 import { DeviceIdentifier } from "../utils/types";
 
 interface CreateDeviceInput {
@@ -40,11 +42,45 @@ export class DeviceService {
     return this.deviceRepo.find({ order: { id: "ASC" } });
   }
 
+  async getDevicesForUser(user?: AuthorizedUser): Promise<Device[]> {
+    if (!user || user.role === UserRole.ADMIN) {
+      return this.getDevices();
+    }
+
+    const allowedIds = Array.isArray(user.allowedDeviceIds)
+      ? Array.from(new Set(user.allowedDeviceIds.filter((deviceId) => Number.isInteger(deviceId) && deviceId > 0)))
+      : [];
+
+    if (allowedIds.length === 0) {
+      return [];
+    }
+
+    return this.deviceRepo.find({
+      where: { id: In(allowedIds) },
+      order: { id: "ASC" }
+    });
+  }
+
   async getDeviceById(id: number): Promise<Device> {
     const device = await this.deviceRepo.findOne({ where: { id } });
     if (!device) {
       throw new HttpError(404, "Device not found");
     }
+    return device;
+  }
+
+  async requireDeviceAccess(user: AuthorizedUser | undefined, deviceId: number): Promise<Device> {
+    const device = await this.getDeviceById(deviceId);
+
+    if (!user || user.role === UserRole.ADMIN) {
+      return device;
+    }
+
+    const allowedIds = Array.isArray(user.allowedDeviceIds) ? user.allowedDeviceIds : [];
+    if (!allowedIds.includes(device.id)) {
+      throw new HttpError(403, "You do not have permission to access this device");
+    }
+
     return device;
   }
 

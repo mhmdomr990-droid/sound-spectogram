@@ -24,68 +24,28 @@
     <main class="main-content">
       <p id="globalMessage" class="global-message"></p>
 
-      <div class="dashboard-layout">
+      <div id="dashboardLayout" class="dashboard-layout">
         <section class="left-panel">
           <section id="historyPanel" class="tab-panel active">
-            <h2 id="selectedDeviceTitle">اختر جهازًا</h2>
-            <div class="inline-form range-actions-row">
-              <button id="resetViewBtn" type="button">إعادة الضبط</button>
-              <button id="clearMarkersBtn" type="button" class="ghost-btn">إزالة كل العلامات</button>
-            </div>
-
-            <div class="spectro-toolbar" id="spectroToolbar">
-              <button id="panLeftBtn" type="button" class="ghost-btn" title="تحريك لليسار (السهم الأيسر)">يسار</button>
-              <button id="panRightBtn" type="button" class="ghost-btn" title="تحريك لليمين (السهم الأيمن)">يمين</button>
-              <button id="zoomOutBtn" type="button" class="ghost-btn" title="تصغير (-)">تصغير</button>
-              <button id="zoomInBtn" type="button" class="ghost-btn" title="تكبير (+)">تكبير</button>
-              <button id="fitPacketsBtn" type="button" class="ghost-btn" title="ملاءمة كل الباكتات في العرض (F)">ملاءمة العرض</button>
-              <button id="colorMapBtn" type="button" class="ghost-btn hidden" title="تبديل خريطة الألوان">الألوان: magma</button>
-              <button id="followLiveBtn" type="button" class="ghost-btn" title="العودة إلى آخر ساعة مباشرة (L)">متابعة البث  </button>
-              <div class="ai-status-legend ai-status-legend-toolbar" aria-label="دليل حالات الذكاء الاصطناعي">
-                <span class="ai-status-item">
-                  <span class="ai-status-swatch status-not-detected"></span>
-                  غير مكتشف
-                </span>
-                <span class="ai-status-item">
-                  <span class="ai-status-swatch status-detected"></span>
-                  مكتشف
-                </span>
-                <span class="ai-status-item">
-                  <span class="ai-status-swatch status-possible"></span>
-                  محتمل
-                </span>
-                <span class="ai-status-item">
-                  <span class="ai-status-swatch status-unknown"></span>
-                  غير محدد
-                </span>
+            <div class="history-header-row">
+              <h2 id="selectedDeviceTitle">اختر جهازًا</h2>
+              <div class="history-top-controls">
+                <label class="gain-slider-label gain-slider-top" for="displayGainInput">
+                  الكسب (dB)
+                  <div class="gain-slider-wrap">
+                    <input
+                      id="displayGainInput"
+                      type="range"
+                      min="-24"
+                      max="24"
+                      step="1"
+                      value="0"
+                      title="كسب بصري للعرض فقط"
+                    />
+                    <span id="displayGainValue" class="gain-slider-value">0 dB</span>
+                  </div>
+                </label>
               </div>
-            </div>
-            <div class="frequency-range-controls">
-              <label>
-                أقل تردد (Hz)
-                <input id="freqMinInput" type="number" step="1" placeholder="أقل Hz" />
-              </label>
-              <label>
-                أعلى تردد (Hz)
-                <input id="freqMaxInput" type="number" step="1" placeholder="أعلى Hz" />
-              </label>
-              <button id="applyFreqRangeBtn" type="button" class="ghost-btn">تطبيق</button>
-              <button id="clearFreqRangeBtn" type="button" class="ghost-btn">مسح</button>
-              <label class="gain-slider-label" for="displayGainInput">
-                الكسب (dB)
-                <div class="gain-slider-wrap">
-                  <input
-                    id="displayGainInput"
-                    type="range"
-                    min="-24"
-                    max="24"
-                    step="1"
-                    value="0"
-                    title="كسب بصري للعرض فقط"
-                  />
-                  <span id="displayGainValue" class="gain-slider-value">0 dB</span>
-                </div>
-              </label>
             </div>
             <p class="spectro-hint">
               اسحب لتحريك العرض. عجلة الفأرة تكبر/تصغر عند المؤشر. Shift + العجلة للتحريك الأفقي. Alt + العجلة لتكبير دقيق.
@@ -98,6 +58,24 @@
                 <div class="spectrogram-loader-text">جاري تحميل بيانات الطيف...</div>
               </div>
               <canvas id="spectrogramCanvas" width="960" height="480" tabindex="0" aria-label="منطقة عرض الطيف"></canvas>
+            </div>
+            <div class="ai-status-legend ai-status-legend-below" aria-label="دليل حالات الذكاء الاصطناعي">
+              <span class="ai-status-item">
+                <span class="ai-status-swatch status-not-detected"></span>
+                غير مكتشف
+              </span>
+              <span class="ai-status-item">
+                <span class="ai-status-swatch status-detected"></span>
+                مكتشف
+              </span>
+              <span class="ai-status-item">
+                <span class="ai-status-swatch status-possible"></span>
+                محتمل
+              </span>
+              <span class="ai-status-item">
+                <span class="ai-status-swatch status-unknown"></span>
+                غير محدد
+              </span>
             </div>
             <div id="gapTooltip" class="gap-tooltip hidden"></div>
             <div id="probeTooltip" class="probe-tooltip hidden"></div>
@@ -137,6 +115,11 @@
                 <option value="admin">admin</option>
                 <option value="emp">emp</option>
               </select>
+              <div id="userDeviceAssignmentGroup" class="user-device-assignment-group hidden">
+                <label for="userDeviceIds">الأجهزة المسموحة للموظف</label>
+                <select id="userDeviceIds" name="deviceIds" multiple size="6"></select>
+                <p class="form-hint">اختر جهازًا أو أكثر، وسيشاهد الموظف هذه الأجهزة فقط.</p>
+              </div>
               <div class="form-actions">
                 <button type="submit" id="userSaveBtn">إضافة مستخدم</button>
                 <button type="button" id="userCancelBtn">إلغاء</button>
@@ -152,6 +135,7 @@
                     <th>الاسم</th>
                     <th>اسم المستخدم</th>
                     <th>الدور</th>
+                    <th>الأجهزة المسموحة</th>
                     <th class="admin-only">إجراءات</th>
                   </tr>
                 </thead>
@@ -196,7 +180,9 @@
           </section>
         </section>
 
-        <aside class="right-panel">
+        <aside id="rightPanel" class="right-panel">
+          <button id="toggleRightPanelBtn" type="button" class="right-panel-toggle ghost-btn" aria-expanded="true">إغلاق القائمة</button>
+
           <div class="side-card hidden">
             <h3>معلومات الجهاز</h3>
             <p id="sideDeviceInfo" class="history-info">لا يوجد جهاز محدد.</p>
@@ -205,6 +191,39 @@
           <div class="side-card">
             <h3>الأجهزة</h3>
             <select id="deviceList" class="device-select-dropdown" aria-label="اختيار الجهاز"></select>
+          </div>
+
+          <div class="side-card history-display-tools-card">
+            <h3 class="side-subtitle">أدوات العرض</h3>
+            <div class="inline-form range-actions-row side-controls-row">
+              <button id="resetViewBtn" type="button">إعادة الضبط</button>
+              <button id="clearMarkersBtn" type="button" class="ghost-btn">إزالة كل العلامات</button>
+            </div>
+
+            <div class="spectro-toolbar side-spectro-toolbar">
+              <div class="toolbar-icon-row">
+                <button id="panLeftBtn" type="button" class="ghost-btn toolbar-icon-btn" title="تحريك لليسار (السهم الأيسر)">←</button>
+                <button id="panRightBtn" type="button" class="ghost-btn toolbar-icon-btn" title="تحريك لليمين (السهم الأيمن)">→</button>
+                <button id="zoomOutBtn" type="button" class="ghost-btn toolbar-icon-btn" title="تصغير (-)">-</button>
+                <button id="zoomInBtn" type="button" class="ghost-btn toolbar-icon-btn" title="تكبير (+)">+</button>
+              </div>
+              <button id="followLiveBtn" type="button" class="ghost-btn" title="العودة إلى آخر ساعة مباشرة (L)">متابعة البث</button>
+              <button id="fitPacketsBtn" type="button" class="ghost-btn" title="ملاءمة كل الباكتات في العرض (F)">ملاءمة العرض</button>
+              <button id="colorMapBtn" type="button" class="ghost-btn hidden" title="تبديل خريطة الألوان">الألوان: magma</button>
+            </div>
+
+            <div class="frequency-range-controls side-frequency-controls">
+              <label>
+                أقل تردد (Hz)
+                <input id="freqMinInput" type="number" step="1" placeholder="أقل Hz" />
+              </label>
+              <label>
+                أعلى تردد (Hz)
+                <input id="freqMaxInput" type="number" step="1" placeholder="أعلى Hz" />
+              </label>
+              <button id="applyFreqRangeBtn" type="button" class="ghost-btn">تطبيق</button>
+              <button id="clearFreqRangeBtn" type="button" class="ghost-btn">مسح</button>
+            </div>
           </div>
 
           <div class="side-card">

@@ -35,3 +35,18 @@ CREATE TABLE IF NOT EXISTS device_histories (
     ON DELETE CASCADE
     ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS user_devices (
+  userId INT NOT NULL,
+  deviceId INT NOT NULL,
+  PRIMARY KEY (userId, deviceId),
+  KEY idx_user_devices_device (deviceId),
+  CONSTRAINT fk_user_devices_user
+    FOREIGN KEY (userId) REFERENCES users (id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE,
+  CONSTRAINT fk_user_devices_device
+    FOREIGN KEY (deviceId) REFERENCES devices (id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

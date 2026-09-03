@@ -44,3 +44,10 @@ export interface JwtUserPayload {
   username: string;
   role: UserRole;
 }
+
+export interface AuthorizedUser {
+  userId: number;
+  username: string;
+  role: UserRole;
+  allowedDeviceIds?: number[];
+}
