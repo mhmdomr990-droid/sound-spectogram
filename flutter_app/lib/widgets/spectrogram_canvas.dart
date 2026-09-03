@@ -363,7 +363,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                   viewportStart: _viewportStart,
                   viewportEnd: _viewportEnd,
                   startTimeIso: widget.startTime ?? widget.histories?.firstOrNull?.startTime,
-                  endTimeIso: widget.endTime ?? widget.histories?.firstOrNull?.endTime,
+endTimeIso: widget.endTime ?? widget.histories?.lastOrNull?.endTime,
                 ),
               ),
             ),
