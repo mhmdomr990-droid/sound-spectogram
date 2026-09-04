@@ -53,6 +53,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   StreamSubscription<DeviceHistory>? _dataSub;
   StreamSubscription<SocketStatus>? _statusSub;
   final List<DeviceHistory> _pendingLivePackets = [];
+  final Set<int> _historyIds = {};
+  Timer? _flushTimer;
 
   @override
   void initState() {
@@ -67,6 +69,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
+    _flushTimer?.cancel();
     _dataSub?.cancel();
     _statusSub?.cancel();
     super.dispose();
@@ -78,32 +81,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
     _dataSub = widget.socket.onData.listen((h) {
       if (mounted) {
-        setState(() {
-          if (_followLiveActive) {
-            if (_loadingHistory) {
-              _pendingLivePackets.add(h);
-              return;
-            }
-            final exists = _histories.any((e) => e.id == h.id);
-            if (!exists) {
-              final cutoff = DateTime.now().subtract(Duration(minutes: _liveWindowMinutes));
-              final updated = [..._histories, h];
-              _histories = updated.where((e) {
-                final end = DateTime.tryParse(e.endTime ?? '');
-                return end != null ? end.isAfter(cutoff) : true;
-              }).toList();
-              final lastEnd = _histories.isNotEmpty ? _histories.last.endTime : null;
-              final anchor = lastEnd != null ? DateTime.tryParse(lastEnd) ?? DateTime.now() : DateTime.now();
-              _requestStartTime = anchor.subtract(Duration(minutes: _liveWindowMinutes)).toIso8601String();
-              _requestEndTime = anchor.toIso8601String();
-            }
-          } else {
-            _histories = [h];
+        if (_followLiveActive) {
+          if (_loadingHistory) {
+            _pendingLivePackets.add(h);
+            return;
           }
-        });
+          if (_historyIds.contains(h.id)) return;
+          _historyIds.add(h.id);
+          _pendingLivePackets.add(h);
+          _flushTimer ??= Timer(const Duration(milliseconds: 500), _flushPendingPackets);
+        } else {
+          setState(() => _histories = [h]);
+        }
       }
     });
     widget.socket.connect(_hostFromApi());
+  }
+
+  void _flushPendingPackets() {
+    _flushTimer = null;
+    if (_pendingLivePackets.isEmpty || !mounted) return;
+    setState(() {
+      final cutoff = DateTime.now().subtract(Duration(minutes: _liveWindowMinutes));
+      _histories = [..._histories, ..._pendingLivePackets].where((e) {
+        final end = DateTime.tryParse(e.endTime ?? '');
+        return end != null ? end.isAfter(cutoff) : true;
+      }).toList();
+      _pendingLivePackets.clear();
+      final lastEnd = _histories.isNotEmpty ? _histories.last.endTime : null;
+      final anchor = lastEnd != null ? DateTime.tryParse(lastEnd) ?? DateTime.now() : DateTime.now();
+      _requestStartTime = anchor.subtract(Duration(minutes: _liveWindowMinutes)).toIso8601String();
+      _requestEndTime = anchor.toIso8601String();
+    });
   }
 
   String _apiHost() => widget.api.baseUrl.replaceFirst(RegExp(r'^https?://'), '');
@@ -278,10 +287,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!mounted) return;
       setState(() {
         _histories = result;
+        _historyIds
+          ..clear()
+          ..addAll(result.map((e) => e.id));
         if (_pendingLivePackets.isNotEmpty) {
           for (final p in _pendingLivePackets) {
-            final exists = _histories.any((e) => e.id == p.id);
-            if (!exists) _histories = [..._histories, p];
+            if (!_historyIds.contains(p.id)) {
+              _histories = [..._histories, p];
+              _historyIds.add(p.id);
+            }
           }
           _pendingLivePackets.clear();
         }
@@ -315,6 +329,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _rangeMode = mode;
       _followLiveActive = false;
       _histories = const [];
+      _historyIds.clear();
       _requestStartTime = null;
       _requestEndTime = null;
     });
@@ -332,6 +347,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _rangeMode = _RangeMode.test;
       _followLiveActive = false;
       _histories = testHistories;
+      _historyIds
+        ..clear()
+        ..addAll(testHistories.map((e) => e.id));
       _requestStartTime = firstStart;
       _requestEndTime = lastEnd;
       if (_selected == null) {

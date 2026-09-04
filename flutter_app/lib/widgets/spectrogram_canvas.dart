@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io' show Directory, File;
 import 'dart:typed_data' show Uint8List;
 import 'dart:ui' as ui;
 
@@ -173,7 +172,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         oldWidget.gamma != widget.gamma ||
         oldWidget.inputValueMax != widget.inputValueMax ||
         oldWidget.gainDb != widget.gainDb) {
-      _render();
+      _renderDebounce?.cancel();
+      _renderDebounce = Timer(const Duration(milliseconds: 100), () {
+        if (mounted) _render();
+      });
     }
     if (oldWidget.histories != widget.histories ||
         oldWidget.requestStartTime != widget.requestStartTime ||
@@ -337,7 +339,6 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       final image = await rgbaToUiImage(result.rgba, width, height);
       if (!mounted || id != _jobId) return;
       _image?.dispose();
-      await _exportDebugElt(image, result.rgba, width, height);
       setState(() => _image = image);
     } catch (_) {
       if (!mounted || id != _jobId) return;
@@ -345,28 +346,6 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     }
   }
 
-  Future<void> _exportDebugElt(
-      ui.Image img, Uint8List rgba, int width, int height) async {
-    try {
-      final byteData =
-          await img.toByteData(format: ui.ImageByteFormat.png);
-      if (byteData == null) return;
-      final dir = Directory('/data/data/com.example.spectro_phone/cache');
-      await dir.create(recursive: true);
-      final stamp = DateTime.now().millisecondsSinceEpoch;
-      await File(
-              '${dir.path}/spectro_surface_$stamp.png')
-          .writeAsBytes(byteData.buffer.asUint8List());
-      const f = 'SPECTRO_DEBUG_SAVED';
-      // ignore: avoid_print
-      print('$f surface_${width}x${height} '
-          'nonzero=${rgba.where((v) => v != 0).length} '
-          'file=spectro_surface_$stamp.png');
-    } catch (e) {
-      // ignore: avoid_print
-      print('SPECTRO_DEBUG_SAVE_ERR $e');
-    }
-  }
 
   @override
   void dispose() {
@@ -446,9 +425,6 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
           if (size != _layoutSize || dpr != _dpr) {
             _layoutSize = size;
             _dpr = dpr;
-            // ignore: avoid_print
-            print('DBG_LAYOUT size=${size.width.toStringAsFixed(1)}'
-                'x${size.height.toStringAsFixed(1)} dpr=${dpr.toStringAsFixed(2)}');
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) _render();
             });
