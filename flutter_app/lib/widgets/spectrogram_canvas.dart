@@ -171,13 +171,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     if (oldWidget.matrix != widget.matrix ||
         oldWidget.gamma != widget.gamma ||
         oldWidget.inputValueMax != widget.inputValueMax ||
-        oldWidget.gainDb != widget.gainDb) {
-      _renderDebounce?.cancel();
-      _renderDebounce = Timer(const Duration(milliseconds: 100), () {
-        if (mounted) _render();
-      });
-    }
-    if (oldWidget.histories != widget.histories ||
+        oldWidget.gainDb != widget.gainDb ||
+        oldWidget.histories != widget.histories ||
         oldWidget.requestStartTime != widget.requestStartTime ||
         oldWidget.requestEndTime != widget.requestEndTime) {
       _renderDebounce?.cancel();
@@ -330,7 +325,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
           intensityType: widget.intensityType ?? widget.histories?.firstOrNull?.intensityType,
           startTimeIso: widget.startTime ?? widget.histories?.firstOrNull?.startTime,
           endTimeIso: widget.endTime ?? widget.histories?.firstOrNull?.endTime,
-          debug: true,
+          debug: false,
           gainDb: widget.gainDb,
           backgroundColor: widget.background.toARGB32(),
         ),
@@ -473,20 +468,22 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                   setState(() { _viewportStart = newStart; _viewportEnd = newEnd; });
                 }
               },
-              child: CustomPaint(
-                size: Size(constraints.maxWidth, constraints.maxHeight),
-                painter: _SpectroPainter(
-                  img,
-                  background: widget.background,
-                  smoothVertical: widget.smoothVertical,
-                  frequencyLabels: widget.frequencyLabels,
-                  timeLabels: widget.timeLabels,
-                  viewportStart: _viewportStart,
-                  viewportEnd: _viewportEnd,
-                  startTimeIso: widget.requestStartTime ?? widget.startTime ?? widget.histories?.firstOrNull?.startTime,
-                  endTimeIso: widget.requestEndTime ?? widget.endTime ?? widget.histories?.lastOrNull?.endTime,
-                  coverageIntervals: _buildCoverageIntervals(),
-                  totalCols: _totalCols(),
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: Size(constraints.maxWidth, constraints.maxHeight),
+                  painter: _SpectroPainter(
+                    img,
+                    background: widget.background,
+                    smoothVertical: widget.smoothVertical,
+                    frequencyLabels: widget.frequencyLabels,
+                    timeLabels: widget.timeLabels,
+                    viewportStart: _viewportStart,
+                    viewportEnd: _viewportEnd,
+                    startTimeIso: widget.requestStartTime ?? widget.startTime ?? widget.histories?.firstOrNull?.startTime,
+                    endTimeIso: widget.requestEndTime ?? widget.endTime ?? widget.histories?.lastOrNull?.endTime,
+                    coverageIntervals: _buildCoverageIntervals(),
+                    totalCols: _totalCols(),
+                  ),
                 ),
               ),
             ),
