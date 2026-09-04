@@ -148,6 +148,22 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
                 const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  height: 40,
+                  child: OutlinedButton.icon(
+                    onPressed: _loading ? null : () {
+                      Navigator.of(context).pushReplacementNamed('/test');
+                    },
+                    icon: const Icon(Icons.science, size: 18),
+                    label: const Text('دخول اختبار', style: TextStyle(fontSize: 13)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white54,
+                      side: const BorderSide(color: Colors.white24),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
                 Text(
                   widget.baseUrl,
                   style: const TextStyle(color: Colors.white24, fontSize: 12),

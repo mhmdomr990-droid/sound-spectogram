@@ -8,7 +8,7 @@ import 'services/auth_service.dart';
 import 'services/socket_service.dart';
 
 /// Server base URL. The emulator reaches the host machine via 10.0.2.2.
-const String kServerBaseUrl = 'http://192.168.1.8:3111';
+const String kServerBaseUrl = 'http://localhost:3111';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -62,6 +62,12 @@ class _SpectroAppState extends State<SpectroApp> {
               api: widget.api,
               auth: widget.auth,
               socket: widget.socket,
+            ),
+        '/test': (_) => DashboardScreen(
+              api: widget.api,
+              auth: widget.auth,
+              socket: widget.socket,
+              startInTestMode: true,
             ),
       },
     );

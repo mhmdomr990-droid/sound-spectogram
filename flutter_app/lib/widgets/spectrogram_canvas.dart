@@ -185,6 +185,28 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     }
   }
 
+  static int? _stateParseMs(String? iso) {
+    if (iso == null || iso.isEmpty) return null;
+    final d = DateTime.tryParse(iso);
+    return d?.millisecondsSinceEpoch;
+  }
+
+  double? _computeColsPerMs(List<DeviceHistory> histories) {
+    int totalDataCols = 0;
+    int totalDataMs = 0;
+    for (final h in histories) {
+      if (h.data.isEmpty) continue;
+      final s = _stateParseMs(h.startTime);
+      final e = _stateParseMs(h.endTime);
+      if (s != null && e != null && e > s) {
+        totalDataCols += h.data[0].length;
+        totalDataMs += e - s;
+      }
+    }
+    if (totalDataMs <= 0 || totalDataCols <= 0) return null;
+    return totalDataCols / totalDataMs;
+  }
+
   List<List<num>> _resolvedMatrix() {
     if (widget.matrix.isNotEmpty) {
       return widget.matrix;
@@ -194,10 +216,56 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       return const [];
     }
 
-    final dataBlocks = histories.where((entry) => entry.data.isNotEmpty).toList();
-    if (dataBlocks.isEmpty) {
-      return const [];
+    final fromMs = _stateParseMs(widget.requestStartTime ?? histories.first.startTime);
+    final toMs = _stateParseMs(widget.requestEndTime ?? histories.last.endTime);
+    if (fromMs == null || toMs == null || toMs <= fromMs) {
+      return _resolvedMatrixFallback(histories);
     }
+
+    final colsPerMs = _computeColsPerMs(histories);
+    if (colsPerMs == null) {
+      return _resolvedMatrixFallback(histories);
+    }
+
+    final rangeMs = toMs - fromMs;
+    final totalCols = (rangeMs * colsPerMs).round();
+    if (totalCols <= 0) return const [];
+
+    int targetRows = 0;
+    for (final h in histories) {
+      if (h.data.length > targetRows) targetRows = h.data.length;
+    }
+    if (targetRows == 0) return const [];
+
+    final combined = List.generate(targetRows, (_) => List<num>.filled(totalCols, 0));
+
+    for (final h in histories) {
+      if (h.data.isEmpty) continue;
+      final s = _stateParseMs(h.startTime);
+      final e = _stateParseMs(h.endTime);
+      if (s == null || e == null || e <= s) continue;
+
+      final startCol = ((s - fromMs) * colsPerMs).round().clamp(0, totalCols);
+      final endCol = ((e - fromMs) * colsPerMs).round().clamp(0, totalCols);
+      final srcRows = h.data.length;
+      final srcCols = h.data[0].length;
+
+      for (int r = 0; r < targetRows; r++) {
+        if (r >= srcRows) continue;
+        final srcRow = h.data[r];
+        final width = (endCol - startCol).clamp(0, srcCols);
+        for (int c = 0; c < width; c++) {
+          combined[r][startCol + c] = srcRow[c < srcCols ? c : srcCols - 1];
+        }
+      }
+    }
+
+    return combined;
+  }
+
+  List<List<num>> _resolvedMatrixFallback(List<DeviceHistory> histories) {
+    final dataBlocks = histories.where((entry) => entry.data.isNotEmpty).toList();
+    if (dataBlocks.isEmpty) return const [];
 
     final first = dataBlocks.first.data;
     final combined = first
@@ -311,15 +379,61 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   List<CoverageInterval> _buildCoverageIntervals() {
     final histories = widget.histories;
     if (histories == null || histories.isEmpty) return const [];
+
+    final fromMs = _stateParseMs(widget.requestStartTime ?? histories.first.startTime);
+    final toMs = _stateParseMs(widget.requestEndTime ?? histories.last.endTime);
+    if (fromMs == null || toMs == null || toMs <= fromMs) {
+      return _buildCoverageIntervalsFallback(histories);
+    }
+
+    final colsPerMs = _computeColsPerMs(histories);
+    if (colsPerMs == null) return _buildCoverageIntervalsFallback(histories);
+
     final intervals = <CoverageInterval>[];
     for (final h in histories) {
-      if (h.startTime == null || h.endTime == null) continue;
-      final s = DateTime.tryParse(h.startTime!);
-      final e = DateTime.tryParse(h.endTime!);
-      if (s == null || e == null) continue;
-      intervals.add(CoverageInterval(startMs: s.millisecondsSinceEpoch, endMs: e.millisecondsSinceEpoch));
+      if (h.data.isEmpty) continue;
+      final s = _stateParseMs(h.startTime);
+      final e = _stateParseMs(h.endTime);
+      if (s == null || e == null || e <= s) continue;
+      final startCol = ((s - fromMs) * colsPerMs).round().clamp(0, 1 << 30);
+      final endCol = ((e - fromMs) * colsPerMs).round().clamp(0, 1 << 30);
+      if (endCol > startCol) {
+        intervals.add(CoverageInterval(startMs: startCol, endMs: endCol));
+      }
     }
     return intervals;
+  }
+
+  List<CoverageInterval> _buildCoverageIntervalsFallback(List<DeviceHistory> histories) {
+    final intervals = <CoverageInterval>[];
+    int cumCols = 0;
+    for (final h in histories) {
+      if (h.data.isEmpty) continue;
+      final blockCols = h.data[0].length;
+      intervals.add(CoverageInterval(startMs: cumCols, endMs: cumCols + blockCols));
+      cumCols += blockCols;
+    }
+    return intervals;
+  }
+
+  int _totalCols() {
+    final histories = widget.histories;
+    if (histories == null || histories.isEmpty) return 0;
+
+    final fromMs = _stateParseMs(widget.requestStartTime ?? (histories.isNotEmpty ? histories.first.startTime : null));
+    final toMs = _stateParseMs(widget.requestEndTime ?? (histories.isNotEmpty ? histories.last.endTime : null));
+    if (fromMs == null || toMs == null || toMs <= fromMs) {
+      int total = 0;
+      for (final h in histories) {
+        if (h.data.isEmpty) continue;
+        total += h.data[0].length;
+      }
+      return total;
+    }
+
+    final colsPerMs = _computeColsPerMs(histories);
+    if (colsPerMs == null) return 0;
+    return ((toMs - fromMs) * colsPerMs).round();
   }
 
   @override
@@ -396,6 +510,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                   startTimeIso: widget.requestStartTime ?? widget.startTime ?? widget.histories?.firstOrNull?.startTime,
                   endTimeIso: widget.requestEndTime ?? widget.endTime ?? widget.histories?.lastOrNull?.endTime,
                   coverageIntervals: _buildCoverageIntervals(),
+                  totalCols: _totalCols(),
                 ),
               ),
             ),
@@ -423,6 +538,7 @@ class _SpectroPainter extends CustomPainter {
   final String? startTimeIso;
   final String? endTimeIso;
   final List<CoverageInterval>? coverageIntervals;
+  final int totalCols;
 
   _SpectroPainter(this.image,
       {this.background = const Color(0xFF111026),
@@ -433,7 +549,8 @@ class _SpectroPainter extends CustomPainter {
       this.viewportEnd = 1.0,
       this.startTimeIso,
       this.endTimeIso,
-      this.coverageIntervals});
+      this.coverageIntervals,
+      this.totalCols = 0});
 
   static const double _leftInset = 40;
   static const double _rightInset = 6;
@@ -482,7 +599,7 @@ class _SpectroPainter extends CustomPainter {
       canvas.drawImageRect(image, src, dst, paint);
     }
 
-    // Compute viewport time range for labels and gaps.
+    // Compute viewport time range for labels.
     final dataFromMs = _parseMs(startTimeIso);
     final dataToMs = _parseMs(endTimeIso);
     final fromMs = dataFromMs != null && dataToMs != null
@@ -492,16 +609,19 @@ class _SpectroPainter extends CustomPainter {
         ? (dataFromMs + ((dataToMs - dataFromMs) * viewportEnd)).round()
         : dataToMs;
 
-    // 2b) Gap overlays (time ranges with no data).
-    if (coverageIntervals != null && coverageIntervals!.isNotEmpty && span > 0 && fromMs != null && toMs != null) {
-      final totalMs = toMs - fromMs;
-      if (totalMs > 0) {
+    // 2b) Gap overlays using column-based positioning (matches image layout).
+    if (coverageIntervals != null && coverageIntervals!.isNotEmpty && span > 0 && totalCols > 0) {
+      final tc = totalCols;
+      final visStartCol = (viewportStart * tc).round();
+      final visEndCol = (viewportEnd * tc).round();
+      final visCols = visEndCol - visStartCol;
+      if (visCols > 0) {
         final sorted = List<CoverageInterval>.from(coverageIntervals!)
           ..sort((a, b) => a.startMs.compareTo(b.startMs));
         final merged = <CoverageInterval>[];
         for (final iv in sorted) {
-          final clippedStart = iv.startMs.clamp(fromMs, toMs);
-          final clippedEnd = iv.endMs.clamp(fromMs, toMs);
+          final clippedStart = iv.startMs.clamp(visStartCol, visEndCol);
+          final clippedEnd = iv.endMs.clamp(visStartCol, visEndCol);
           if (clippedEnd <= clippedStart) continue;
           if (merged.isNotEmpty && clippedStart <= merged.last.endMs) {
             merged[merged.length - 1] = CoverageInterval(
@@ -517,17 +637,17 @@ class _SpectroPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1;
         final gapStyle = TextStyle(color: Color(0xF2E1F4FF), fontSize: 11);
-        var cursor = fromMs;
+        var cursor = visStartCol;
         for (final iv in merged) {
           if (iv.startMs > cursor) {
-            final gx0 = pLeft + ((cursor - fromMs) / totalMs) * plotW;
-            final gx1 = pLeft + ((iv.startMs - fromMs) / totalMs) * plotW;
+            final gx0 = pLeft + ((cursor - visStartCol) / visCols) * plotW;
+            final gx1 = pLeft + ((iv.startMs - visStartCol) / visCols) * plotW;
             final gw = gx1 - gx0;
             canvas.drawRect(Rect.fromLTWH(gx0, pTop, gw, plotH), gapFillPaint);
             canvas.drawLine(Offset(gx0, pTop), Offset(gx0, pTop + plotH), gapStrokePaint);
             canvas.drawLine(Offset(gx1, pTop), Offset(gx1, pTop + plotH), gapStrokePaint);
             if (gw >= 52) {
-              final gapMin = ((iv.startMs - cursor) / 60000).round();
+              final gapMin = ((iv.startMs - cursor) / visCols * (toMs! - fromMs!) / 60000).round();
               final gt = TextPainter(
                 text: TextSpan(text: 'لا توجد بيانات $gapMin د', style: gapStyle),
                 textDirection: TextDirection.rtl,
@@ -537,15 +657,15 @@ class _SpectroPainter extends CustomPainter {
           }
           if (iv.endMs > cursor) cursor = iv.endMs;
         }
-        if (cursor < toMs) {
-          final gx0 = pLeft + ((cursor - fromMs) / totalMs) * plotW;
+        if (cursor < visEndCol) {
+          final gx0 = pLeft + ((cursor - visStartCol) / visCols) * plotW;
           final gx1 = pLeft + plotW;
           final gw = gx1 - gx0;
           canvas.drawRect(Rect.fromLTWH(gx0, pTop, gw, plotH), gapFillPaint);
           canvas.drawLine(Offset(gx0, pTop), Offset(gx0, pTop + plotH), gapStrokePaint);
           canvas.drawLine(Offset(gx1, pTop), Offset(gx1, pTop + plotH), gapStrokePaint);
           if (gw >= 52) {
-            final gapMin = ((toMs - cursor) / 60000).round();
+            final gapMin = ((visEndCol - cursor) / visCols * (toMs! - fromMs!) / 60000).round();
             final gt = TextPainter(
               text: TextSpan(text: 'لا توجد بيانات $gapMin د', style: gapStyle),
               textDirection: TextDirection.rtl,
