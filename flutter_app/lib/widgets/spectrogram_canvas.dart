@@ -155,6 +155,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     });
   }
   ui.Image? _image;
+  bool _imageOwned = false;
   int _jobId = 0;
   Size _layoutSize = Size.zero;
   double _dpr = 1.0;
@@ -163,18 +164,21 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   @override
   void initState() {
     super.initState();
+    _image = widget.seedImage;
+    _imageOwned = false;
   }
 
   @override
   void didUpdateWidget(SpectrogramCanvas oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.matrix != widget.matrix ||
+    final renderingChanged = oldWidget.matrix != widget.matrix ||
         oldWidget.gamma != widget.gamma ||
         oldWidget.inputValueMax != widget.inputValueMax ||
-        oldWidget.gainDb != widget.gainDb ||
-        oldWidget.histories != widget.histories ||
+        oldWidget.gainDb != widget.gainDb;
+    final dataChanged = oldWidget.histories != widget.histories ||
         oldWidget.requestStartTime != widget.requestStartTime ||
-        oldWidget.requestEndTime != widget.requestEndTime) {
+        oldWidget.requestEndTime != widget.requestEndTime;
+    if (renderingChanged || (dataChanged && widget.seedImage == null)) {
       _renderDebounce?.cancel();
       _renderDebounce = Timer(const Duration(milliseconds: 100), () {
         if (mounted) _render();
@@ -296,9 +300,14 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final renderMatrix = _resolvedMatrix();
     final id = ++_jobId;
     if (renderMatrix.isEmpty || _layoutSize == Size.zero) {
-      _image?.dispose();
+      final stale = _image;
       _image = null;
       if (mounted) setState(() {});
+      if (stale != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          try { stale.dispose(); } catch (_) {}
+        });
+      }
       return;
     }
 
@@ -333,8 +342,29 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       if (!mounted || id != _jobId) return;
       final image = await rgbaToUiImage(result.rgba, width, height);
       if (!mounted || id != _jobId) return;
-      _image?.dispose();
-      setState(() => _image = image);
+      seedSnapshot = CanvasSeedSnapshot(
+        image: image,
+        cachedCombined: null,
+        cachedWidth: width,
+        cachedHeight: height,
+        frequencyBins: null,
+        colCount: renderMatrix.isNotEmpty ? renderMatrix.first.length : 0,
+        startTime: widget.histories?.firstOrNull?.startTime != null
+            ? DateTime.tryParse(widget.histories!.first.startTime!)
+            : null,
+        endTime: widget.histories?.isNotEmpty == true && widget.histories!.last.endTime != null
+            ? DateTime.tryParse(widget.histories!.last.endTime!)
+            : null,
+      );
+      final oldImage = _image;
+      _imageOwned = true;
+      _image = image;
+      setState(() {});
+      if (oldImage != null && oldImage != image) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          try { oldImage.dispose(); } catch (_) {}
+        });
+      }
     } catch (_) {
       if (!mounted || id != _jobId) return;
       setState(() => _image = null);
@@ -346,7 +376,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   void dispose() {
     _renderDebounce?.cancel();
     _jobId++;
-    _image?.dispose();
+    if (_imageOwned) _image?.dispose();
     super.dispose();
   }
 

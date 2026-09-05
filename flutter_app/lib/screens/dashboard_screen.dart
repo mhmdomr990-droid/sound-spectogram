@@ -7,7 +7,6 @@ import '../models/device_history.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/socket_service.dart';
-import '../utils/spectro.dart';
 import '../utils/test_data.dart';
 import '../widgets/spectrogram_canvas.dart';
 import 'fullscreen_spectrogram.dart';
@@ -40,9 +39,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _loadingHistory = false;
   String? _error;
   SocketStatus _socketStatus = SocketStatus.disconnected;
-  int _colorMapIndex = 0;
   double _gainDb = 0.0;
-  double _noiseThreshold = 0.06;
   _RangeMode _rangeMode = _RangeMode.followLive;
   bool _followLiveActive = true;
   int _liveWindowMinutes = 20;
@@ -494,21 +491,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 btn('آخر ساعة', Icons.timer, () => _setRange(_RangeMode.lastHour), active: mode(_RangeMode.lastHour)),
                 btn('آخر 5 ساعات', Icons.history, () => _setRange(_RangeMode.last5h), active: mode(_RangeMode.last5h)),
-                btn('آخر 24 ساعة', Icons.history, () => _setRange(_RangeMode.last24h), active: mode(_RangeMode.last24h)),
                 btn('تحميل النطاق', Icons.date_range, _pickCustomRange, active: mode(_RangeMode.custom)),
                 btn('اختبار', Icons.science, _setTestMode, active: mode(_RangeMode.test)),
-              ],
-            ),
-          ),
-          SizedBox(
-            height: 32,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-              children: [
-                btn('الألوان: ${kColorMapNames[_colorMapIndex]}', null, _toggleColorMap),
-                if (_rangeMode != _RangeMode.latestPacket)
-                  btn('إعادة الضبط', Icons.refresh, _loadRange),
               ],
             ),
           ),
@@ -538,31 +522,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
-            child: Row(
-              children: [
-                const Icon(Icons.noise_aware, size: 14, color: Colors.white70),
-                const SizedBox(width: 4),
-                Text(
-                  'الضوضاء: ${_noiseThreshold.toStringAsFixed(2)}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 10),
-                ),
-                Expanded(
-                  child: SliderTheme(
-                    data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5)),
-                    child: Slider(
-                      value: _noiseThreshold,
-                      min: 0.0,
-                      max: 0.5,
-                      divisions: 50,
-                      onChanged: (v) => setState(() => _noiseThreshold = v),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
             padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
             child: SizedBox(
               width: double.infinity,
@@ -583,12 +542,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  void _toggleColorMap() {
-    setState(() {
-      _colorMapIndex = (_colorMapIndex + 1) % kColorMaps.length;
-    });
-  }
-
   void _openFullscreen() async {
     if (_histories.isEmpty) return;
     final snap = _canvasKey.currentState?.seedSnapshot;
@@ -596,9 +549,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       MaterialPageRoute(
         builder: (_) => FullscreenSpectrogram(
           histories: _histories,
-          colorMapIndex: _colorMapIndex,
           gainDb: _gainDb,
-          noiseThreshold: _noiseThreshold,
           seedImage: snap?.image,
           seedCachedCombined: snap?.cachedCombined,
           seedCachedWidth: snap?.cachedWidth ?? 0,
@@ -614,9 +565,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
     if (result != null && mounted) {
       setState(() {
-        _colorMapIndex = result.colorMapIndex;
         _gainDb = result.gainDb;
-        _noiseThreshold = result.noiseThreshold;
       });
       _canvasKey.currentState?.forceRender();
     }
@@ -659,9 +608,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: SpectrogramCanvas(
         key: _canvasKey,
         histories: _histories,
-        colorMap: kColorMaps[_colorMapIndex],
         gainDb: _gainDb,
-        noiseThreshold: _noiseThreshold,
         requestStartTime: _requestStartTime,
         requestEndTime: _requestEndTime,
       ),

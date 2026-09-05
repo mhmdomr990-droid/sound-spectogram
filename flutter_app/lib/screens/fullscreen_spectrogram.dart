@@ -7,22 +7,16 @@ import '../models/device_history.dart';
 import '../widgets/spectrogram_canvas.dart';
 
 class FullscreenResult {
-  final int colorMapIndex;
   final double gainDb;
-  final double noiseThreshold;
 
   const FullscreenResult({
-    required this.colorMapIndex,
     required this.gainDb,
-    required this.noiseThreshold,
   });
 }
 
 class FullscreenSpectrogram extends StatefulWidget {
   final List<DeviceHistory> histories;
-  final int colorMapIndex;
   final double gainDb;
-  final double noiseThreshold;
   final ui.Image? seedImage;
   final List<List<double>>? seedCachedCombined;
   final int seedCachedWidth;
@@ -37,9 +31,7 @@ class FullscreenSpectrogram extends StatefulWidget {
   const FullscreenSpectrogram({
     super.key,
     required this.histories,
-    required this.colorMapIndex,
     required this.gainDb,
-    required this.noiseThreshold,
     this.seedImage,
     this.seedCachedCombined,
     this.seedCachedWidth = 0,
@@ -57,18 +49,14 @@ class FullscreenSpectrogram extends StatefulWidget {
 }
 
 class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
-  late int _colorMapIndex;
   late double _gainDb;
-  late double _noiseThreshold;
   bool _controlsVisible = true;
   final _canvasKey = GlobalKey<SpectrogramCanvasState>();
 
   @override
   void initState() {
     super.initState();
-    _colorMapIndex = widget.colorMapIndex;
     _gainDb = widget.gainDb;
-    _noiseThreshold = widget.noiseThreshold;
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
@@ -88,16 +76,8 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
 
   void _exit() {
     Navigator.of(context).pop(FullscreenResult(
-      colorMapIndex: _colorMapIndex,
       gainDb: _gainDb,
-      noiseThreshold: _noiseThreshold,
     ));
-  }
-
-  void _toggleColorMap() {
-    setState(() {
-      _colorMapIndex = (_colorMapIndex + 1) % kColorMaps.length;
-    });
   }
 
   @override
@@ -118,9 +98,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
               child: SpectrogramCanvas(
                 key: _canvasKey,
                 histories: widget.histories,
-                colorMap: kColorMaps[_colorMapIndex],
                 gainDb: _gainDb,
-                noiseThreshold: _noiseThreshold,
                 seedImage: widget.seedImage,
                 seedCachedCombined: widget.seedCachedCombined,
                 seedCachedWidth: widget.seedCachedWidth,
@@ -208,31 +186,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                             ),
                                           ),
                                         ),
-                                      ],
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: Row(
-                                      children: [
-                                        const Icon(Icons.noise_aware, size: 11, color: Colors.white70),
-                                        const SizedBox(width: 2),
-                                        Text(
-                                          _noiseThreshold.toStringAsFixed(2),
-                                          style: const TextStyle(color: Colors.white70, fontSize: 8),
-                                        ),
-                                        Expanded(
-                                          child: SliderTheme(
-                                            data: SliderThemeData(trackHeight: 1, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 3)),
-                                            child: Slider(
-                                              value: _noiseThreshold,
-                                              min: 0.0,
-                                              max: 0.5,
-                                              divisions: 50,
-                                              onChanged: (v) => setState(() => _noiseThreshold = v),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
+                                       ],
                                     ),
                                   ),
                                 ],
@@ -247,8 +201,6 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                               padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
                               child: Row(
                                 children: [
-                                  Expanded(child: _fsBtn(Icons.palette, null, _toggleColorMap)),
-                                  const SizedBox(width: 1),
                                   Expanded(child: _fsBtn(Icons.fit_screen, null, () => _canvasKey.currentState?.fitToScreen())),
                                   const SizedBox(width: 1),
                                   Expanded(child: _fsBtn(Icons.fullscreen_exit, null, _exit)),
