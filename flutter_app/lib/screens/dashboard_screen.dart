@@ -51,8 +51,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   StreamSubscription<DeviceHistory>? _dataSub;
   StreamSubscription<SocketStatus>? _statusSub;
   final List<DeviceHistory> _pendingLivePackets = [];
-  final Set<int> _historyIds = {};
-  Timer? _flushTimer;
+  final Set<String> _historyKeys = {};
+  Timer? _pollTimer;
 
   @override
   void initState() {
@@ -68,7 +68,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     _gainNotifier.dispose();
-    _flushTimer?.cancel();
+    _pollTimer?.cancel();
     _dataSub?.cancel();
     _statusSub?.cancel();
     super.dispose();
@@ -79,39 +79,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (mounted) setState(() => _socketStatus = s);
     });
     _dataSub = widget.socket.onData.listen((h) {
-      if (mounted) {
-        if (_followLiveActive) {
-          if (_loadingHistory) {
-            _pendingLivePackets.add(h);
-            return;
-          }
-          if (_historyIds.contains(h.id)) return;
-          _historyIds.add(h.id);
-          _pendingLivePackets.add(h);
-          _flushTimer ??= Timer(const Duration(milliseconds: 500), _flushPendingPackets);
-        } else {
-          setState(() => _histories = [h]);
-        }
+      if (!mounted || !_followLiveActive || _selected == null) return;
+      if (h.deviceId != _selected!.id) return;
+      final key = '${h.deviceId}|${h.startTime}|${h.endTime}';
+      if (_historyKeys.contains(key)) return;
+      if (_loadingHistory) {
+        _historyKeys.add(key);
+        _pendingLivePackets.add(h);
+        return;
       }
+      _historyKeys.add(key);
+      _insertPacketLive(h);
     });
-    widget.socket.connect(_hostFromApi());
+    widget.socket.connect(_hostFromApi(), token: widget.auth.token);
   }
 
-  void _flushPendingPackets() {
-    _flushTimer = null;
-    if (_pendingLivePackets.isEmpty || !mounted) return;
+  void _insertPacketLive(DeviceHistory h) {
+    final newHistories = [..._histories, h]..sort((a, b) {
+        final aStart = DateTime.tryParse(a.startTime ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bStart = DateTime.tryParse(b.startTime ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return aStart.compareTo(bStart);
+      });
+    final cutoff = DateTime.now().subtract(Duration(minutes: _liveWindowMinutes));
+    final filtered = newHistories.where((e) {
+      final end = DateTime.tryParse(e.endTime ?? '');
+      return end != null ? end.isAfter(cutoff) : true;
+    }).toList();
+    final lastEnd = filtered.isNotEmpty ? filtered.last.endTime : null;
+    final anchor = lastEnd != null ? DateTime.tryParse(lastEnd) ?? DateTime.now() : DateTime.now();
     setState(() {
-      final cutoff = DateTime.now().subtract(Duration(minutes: _liveWindowMinutes));
-      _histories = [..._histories, ..._pendingLivePackets].where((e) {
-        final end = DateTime.tryParse(e.endTime ?? '');
-        return end != null ? end.isAfter(cutoff) : true;
-      }).toList();
-      _pendingLivePackets.clear();
-      final lastEnd = _histories.isNotEmpty ? _histories.last.endTime : null;
-      final anchor = lastEnd != null ? DateTime.tryParse(lastEnd) ?? DateTime.now() : DateTime.now();
+      _histories = filtered;
       _requestStartTime = anchor.subtract(Duration(minutes: _liveWindowMinutes)).toIso8601String();
       _requestEndTime = anchor.toIso8601String();
     });
+    _canvasKey.currentState?.forceRender();
   }
 
   String _apiHost() => widget.api.baseUrl.replaceFirst(RegExp(r'^https?://'), '');
@@ -286,14 +287,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!mounted) return;
       setState(() {
         _histories = result;
-        _historyIds
+        _historyKeys
           ..clear()
-          ..addAll(result.map((e) => e.id));
+          ..addAll(result.map((e) => '${e.deviceId}|${e.startTime}|${e.endTime}'));
         if (_pendingLivePackets.isNotEmpty) {
           for (final p in _pendingLivePackets) {
-            if (!_historyIds.contains(p.id)) {
+            final pk = '${p.deviceId}|${p.startTime}|${p.endTime}';
+            if (!_historyKeys.contains(pk)) {
               _histories = [..._histories, p];
-              _historyIds.add(p.id);
+              _historyKeys.add(pk);
             }
           }
           _pendingLivePackets.clear();
@@ -306,6 +308,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
         _loadingHistory = false;
       });
+      _startPolling();
     } on Exception catch (e) {
       if (!mounted) return;
       setState(() {
@@ -313,6 +316,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _loadingHistory = false;
         _followLiveActive = false;
       });
+      _stopPolling();
+    }
+  }
+
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) => _pollLatest());
+  }
+
+  void _stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+  }
+
+  Future<void> _pollLatest() async {
+    final device = _selected;
+    if (!mounted || !_followLiveActive || device == null || _loadingHistory) return;
+    try {
+      final h = await widget.api.fetchLatest('/devices/', device.id);
+      if (!mounted || !_followLiveActive) return;
+      final key = '${h.deviceId}|${h.startTime}|${h.endTime}';
+      if (_historyKeys.contains(key)) return;
+      _historyKeys.add(key);
+      _insertPacketLive(h);
+    } on Exception {
+      // Ignore polling errors silently
     }
   }
 
@@ -324,11 +353,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _setFollowLive();
       return;
     }
+    _stopPolling();
     setState(() {
       _rangeMode = mode;
       _followLiveActive = false;
       _histories = const [];
-      _historyIds.clear();
+      _historyKeys.clear();
       _requestStartTime = null;
       _requestEndTime = null;
     });
@@ -339,6 +369,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (_rangeMode == _RangeMode.test) {
       return;
     }
+    _stopPolling();
     final testHistories = generateTestData();
     final firstStart = testHistories.first.startTime;
     final lastEnd = testHistories.last.endTime;
@@ -346,9 +377,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _rangeMode = _RangeMode.test;
       _followLiveActive = false;
       _histories = testHistories;
-      _historyIds
+      _historyKeys
         ..clear()
-        ..addAll(testHistories.map((e) => e.id));
+        ..addAll(testHistories.map((e) => '${e.deviceId}|${e.startTime}|${e.endTime}'));
       _requestStartTime = firstStart;
       _requestEndTime = lastEnd;
       if (_selected == null) {

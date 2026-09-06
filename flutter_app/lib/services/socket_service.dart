@@ -18,20 +18,20 @@ class SocketService {
   Stream<DeviceHistory> get onData => _onData.stream;
   Stream<SocketStatus> get onStatus => _onStatus.stream;
 
-  void connect(String serverUrl) {
+  void connect(String serverUrl, {String? token}) {
     if (_started) {
       return;
     }
     _started = true;
 
-    final base = serverUrl.replaceFirst(RegExp(r'^https?://'), '').replaceAll(RegExp(r'/$'), '');
+    final base = serverUrl.replaceFirst(RegExp(r'^wss?://'), '').replaceFirst(RegExp(r'^https?://'), '').replaceAll(RegExp(r'/$'), '');
 
-    _socket = io.io(
-      'ws://$base',
-      io.OptionBuilder()
-          .setTransports(['websocket'])
-          .build(),
-    );
+    final opts = io.OptionBuilder()
+        .setTransports(['websocket'])
+        .setAuth({'token': token})
+        .build();
+
+    _socket = io.io('ws://$base', opts);
 
     _socket!.onConnect((_) {
       _onStatus.add(SocketStatus.connected);

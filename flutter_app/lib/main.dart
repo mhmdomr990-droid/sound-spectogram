@@ -8,7 +8,7 @@ import 'services/auth_service.dart';
 import 'services/socket_service.dart';
 
 /// Server base URL. The emulator reaches the host machine via 10.0.2.2.
-const String kServerBaseUrl = 'http://localhost:3111';
+const String kServerBaseUrl = 'http://172.20.20.92:3111';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

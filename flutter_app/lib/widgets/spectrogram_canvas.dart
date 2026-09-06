@@ -147,7 +147,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   Offset _lastFocalPoint = Offset.zero;
 
   void forceRender() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    _renderDebounce?.cancel();
+    _render();
   }
 
   void fitToScreen() {
