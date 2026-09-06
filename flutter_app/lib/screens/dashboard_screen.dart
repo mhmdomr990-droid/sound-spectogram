@@ -43,7 +43,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final ValueNotifier<double> _gainNotifier = ValueNotifier<double>(0.0);
   _RangeMode _rangeMode = _RangeMode.followLive;
   bool _followLiveActive = true;
-  int _liveWindowMinutes = 20;
+  int _liveWindowMinutes = 15;
   String? _requestStartTime;
   String? _requestEndTime;
   final _canvasKey = GlobalKey<SpectrogramCanvasState>();
