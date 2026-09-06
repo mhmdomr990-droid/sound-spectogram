@@ -15,7 +15,7 @@ class FullscreenResult {
 }
 
 class FullscreenSpectrogram extends StatefulWidget {
-  final List<DeviceHistory> histories;
+  final ValueNotifier<(List<DeviceHistory>, String?, String?)> liveDataNotifier;
   final double gainDb;
   final ui.Image? seedImage;
   final List<List<double>>? seedCachedCombined;
@@ -25,12 +25,10 @@ class FullscreenSpectrogram extends StatefulWidget {
   final int seedColCount;
   final DateTime? seedStartTime;
   final DateTime? seedEndTime;
-  final String? requestStartTime;
-  final String? requestEndTime;
 
   const FullscreenSpectrogram({
     super.key,
-    required this.histories,
+    required this.liveDataNotifier,
     required this.gainDb,
     this.seedImage,
     this.seedCachedCombined,
@@ -40,8 +38,6 @@ class FullscreenSpectrogram extends StatefulWidget {
     this.seedColCount = 0,
     this.seedStartTime,
     this.seedEndTime,
-    this.requestStartTime,
-    this.requestEndTime,
   });
 
   @override
@@ -95,20 +91,26 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
         body: Stack(
           children: [
             Positioned.fill(
-              child: SpectrogramCanvas(
-                key: _canvasKey,
-                histories: widget.histories,
-                gainDb: _gainDb,
-                seedImage: widget.seedImage,
-                seedCachedCombined: widget.seedCachedCombined,
-                seedCachedWidth: widget.seedCachedWidth,
-                seedCachedHeight: widget.seedCachedHeight,
-                seedFrequencyBins: widget.seedFrequencyBins,
-                seedColCount: widget.seedColCount,
-                seedStartTime: widget.seedStartTime,
-                seedEndTime: widget.seedEndTime,
-                requestStartTime: widget.requestStartTime,
-                requestEndTime: widget.requestEndTime,
+              child: ValueListenableBuilder<(List<DeviceHistory>, String?, String?)>(
+                valueListenable: widget.liveDataNotifier,
+                builder: (context, data, _) {
+                  final (histories, startTime, endTime) = data;
+                  return SpectrogramCanvas(
+                    key: _canvasKey,
+                    histories: histories,
+                    gainDb: _gainDb,
+                    seedImage: widget.seedImage,
+                    seedCachedCombined: widget.seedCachedCombined,
+                    seedCachedWidth: widget.seedCachedWidth,
+                    seedCachedHeight: widget.seedCachedHeight,
+                    seedFrequencyBins: widget.seedFrequencyBins,
+                    seedColCount: widget.seedColCount,
+                    seedStartTime: widget.seedStartTime,
+                    seedEndTime: widget.seedEndTime,
+                    requestStartTime: startTime,
+                    requestEndTime: endTime,
+                  );
+                },
               ),
             ),
             Positioned(

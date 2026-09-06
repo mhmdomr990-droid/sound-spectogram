@@ -35,6 +35,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Device> _devices = [];
   Device? _selected;
   List<DeviceHistory> _histories = [];
+  final ValueNotifier<(List<DeviceHistory>, String?, String?)> _liveDataNotifier = ValueNotifier((const [], null, null));
   bool _loadingDevices = true;
   bool _loadingHistory = false;
   String? _error;
@@ -68,6 +69,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     _gainNotifier.dispose();
+    _liveDataNotifier.dispose();
     _pollTimer?.cancel();
     _dataSub?.cancel();
     _statusSub?.cancel();
@@ -112,6 +114,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _requestStartTime = anchor.subtract(Duration(minutes: _liveWindowMinutes)).toIso8601String();
       _requestEndTime = anchor.toIso8601String();
     });
+    _liveDataNotifier.value = (List.unmodifiable(filtered), _requestStartTime, _requestEndTime);
     _canvasKey.currentState?.forceRender();
   }
 
@@ -308,6 +311,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
         _loadingHistory = false;
       });
+      _liveDataNotifier.value = (List.unmodifiable(_histories), _requestStartTime, _requestEndTime);
       _startPolling();
     } on Exception catch (e) {
       if (!mounted) return;
@@ -589,7 +593,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final result = await Navigator.of(context).push<FullscreenResult>(
       MaterialPageRoute(
         builder: (_) => FullscreenSpectrogram(
-          histories: _histories,
+          liveDataNotifier: _liveDataNotifier,
           gainDb: _gainDb,
           seedImage: snap?.image,
           seedCachedCombined: snap?.cachedCombined,
@@ -599,8 +603,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           seedColCount: snap?.colCount ?? 0,
           seedStartTime: snap?.startTime,
           seedEndTime: snap?.endTime,
-          requestStartTime: _requestStartTime,
-          requestEndTime: _requestEndTime,
         ),
       ),
     );

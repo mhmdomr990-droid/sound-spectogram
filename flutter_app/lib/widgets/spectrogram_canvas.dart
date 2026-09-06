@@ -200,7 +200,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _cachedTotalCols = 0;
       _coverageCacheKey = null;
     }
-    if (renderingChanged || (dataChanged && widget.seedImage == null)) {
+    if (renderingChanged || dataChanged) {
       _renderDebounce?.cancel();
       _renderDebounce = Timer(const Duration(milliseconds: 100), () {
         if (mounted) _render();
