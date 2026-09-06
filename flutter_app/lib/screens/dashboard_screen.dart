@@ -40,6 +40,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String? _error;
   SocketStatus _socketStatus = SocketStatus.disconnected;
   double _gainDb = 0.0;
+  final ValueNotifier<double> _gainNotifier = ValueNotifier<double>(0.0);
   _RangeMode _rangeMode = _RangeMode.followLive;
   bool _followLiveActive = true;
   int _liveWindowMinutes = 20;
@@ -66,6 +67,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
+    _gainNotifier.dispose();
     _flushTimer?.cancel();
     _dataSub?.cancel();
     _statusSub?.cancel();
@@ -407,7 +409,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: _loadingDevices
           ? const LinearProgressIndicator()
           : SizedBox(
-              height: 36,
+              height: 40,
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 children: [
@@ -435,22 +437,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
     Widget btn(String label, IconData? icon, VoidCallback onTap, {bool active = false}) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4),
-        child: OutlinedButton(
+          child: OutlinedButton(
           onPressed: onTap,
           style: OutlinedButton.styleFrom(
             foregroundColor: active ? scheme.primary : Colors.white70,
             side: BorderSide(color: active ? scheme.primary : Colors.white24),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
             visualDensity: VisualDensity.compact,
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               if (icon != null) ...[
-                Icon(icon, size: 16),
+                Icon(icon, size: 18),
                 const SizedBox(width: 4),
               ],
-              Text(label, style: const TextStyle(fontSize: 10)),
+              Text(label, style: const TextStyle(fontSize: 12)),
             ],
           ),
         ),
@@ -464,7 +466,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Column(
         children: [
           SizedBox(
-            height: 32,
+            height: 38,
             child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
@@ -472,16 +474,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 btn('آخر باكت', Icons.flash_on, () => _setRange(_RangeMode.latestPacket), active: mode(_RangeMode.latestPacket)),
                 btn('متابعة البث', Icons.play_circle, () => _setRange(_RangeMode.followLive), active: mode(_RangeMode.followLive)),
                 Container(
-                  height: 24,
+                  height: 28,
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: DropdownButton<int>(
                     value: _liveWindowMinutes,
                     isDense: true,
                     underline: const SizedBox.shrink(),
-                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
                     dropdownColor: const Color(0xFF1A1A2E),
                     items: [5, 10, 15, 20, 30].map((m) =>
-                      DropdownMenuItem(value: m, child: Text('$m د', style: const TextStyle(fontSize: 11)))
+                      DropdownMenuItem(value: m, child: Text('$m د', style: const TextStyle(fontSize: 13)))
                     ).toList(),
                     onChanged: (v) {
                       if (v != null) setState(() => _liveWindowMinutes = v);
@@ -496,43 +498,51 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
-            child: Row(
-              children: [
-                const Icon(Icons.volume_up, size: 14, color: Colors.white70),
-                const SizedBox(width: 4),
-                Text(
-                  'الكسب: ${_gainDb.toStringAsFixed(0)} dB',
-                  style: const TextStyle(color: Colors.white70, fontSize: 10),
-                ),
-                Expanded(
-                  child: SliderTheme(
-                    data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5)),
-                    child: Slider(
-                      value: _gainDb,
-                      min: -24,
-                      max: 24,
-                      divisions: 48,
-                      onChanged: (v) => setState(() => _gainDb = v),
-                    ),
-                  ),
-                ),
-              ],
+            Padding(
+              padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
+              child: ValueListenableBuilder<double>(
+                valueListenable: _gainNotifier,
+                builder: (context, gainVal, _) {
+                  return Row(
+                    children: [
+                      const Icon(Icons.volume_up, size: 18, color: Colors.white70),
+                      const SizedBox(width: 6),
+                      Text(
+                        'الكسب: ${gainVal.toStringAsFixed(0)} dB',
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5)),
+                          child: Slider(
+                            value: gainVal,
+                            min: -24,
+                            max: 24,
+                            divisions: 48,
+                            onChanged: (v) {
+                              _gainDb = v;
+                              _gainNotifier.value = v;
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
             ),
-          ),
           Padding(
             padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
             child: SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: _openFullscreen,
-                icon: const Icon(Icons.fullscreen, size: 14),
-                label: const Text('ملء الشاشة', style: TextStyle(fontSize: 10)),
+                icon: const Icon(Icons.fullscreen, size: 18),
+                label: const Text('ملء الشاشة', style: TextStyle(fontSize: 12)),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Colors.white70,
                   side: const BorderSide(color: Colors.white24),
-                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  padding: const EdgeInsets.symmetric(vertical: 6),
                 ),
               ),
             ),
@@ -566,6 +576,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (result != null && mounted) {
       setState(() {
         _gainDb = result.gainDb;
+        _gainNotifier.value = result.gainDb;
       });
       _canvasKey.currentState?.forceRender();
     }
@@ -609,6 +620,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         key: _canvasKey,
         histories: _histories,
         gainDb: _gainDb,
+        gainNotifier: _gainNotifier,
         requestStartTime: _requestStartTime,
         requestEndTime: _requestEndTime,
       ),

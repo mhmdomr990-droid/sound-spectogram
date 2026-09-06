@@ -101,6 +101,7 @@ class SpectrogramCanvas extends StatefulWidget {
   /// Requested time range for live mode (overrides data timestamps for axis labels).
   final String? requestStartTime;
   final String? requestEndTime;
+  final ValueNotifier<double>? gainNotifier;
 
   const SpectrogramCanvas({
     super.key,
@@ -126,9 +127,10 @@ class SpectrogramCanvas extends StatefulWidget {
     this.seedStartTime,
     this.seedEndTime,
     this.frequencyLabels,
-    this.timeLabels,
-    this.requestStartTime,
-    this.requestEndTime,
+      this.timeLabels,
+      this.requestStartTime,
+      this.requestEndTime,
+      this.gainNotifier,
   });
 
   @override
@@ -161,16 +163,27 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   double _dpr = 1.0;
   Timer? _renderDebounce;
 
+  List<List<num>>? _cachedMatrix;
+  Object? _matrixCacheKey;
+  List<CoverageInterval>? _cachedCoverageIntervals;
+  int _cachedTotalCols = 0;
+  Object? _coverageCacheKey;
+
   @override
   void initState() {
     super.initState();
     _image = widget.seedImage;
     _imageOwned = false;
+    widget.gainNotifier?.addListener(_onGainChanged);
   }
 
   @override
   void didUpdateWidget(SpectrogramCanvas oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.gainNotifier != widget.gainNotifier) {
+      oldWidget.gainNotifier?.removeListener(_onGainChanged);
+      widget.gainNotifier?.addListener(_onGainChanged);
+    }
     final renderingChanged = oldWidget.matrix != widget.matrix ||
         oldWidget.gamma != widget.gamma ||
         oldWidget.inputValueMax != widget.inputValueMax ||
@@ -178,12 +191,26 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final dataChanged = oldWidget.histories != widget.histories ||
         oldWidget.requestStartTime != widget.requestStartTime ||
         oldWidget.requestEndTime != widget.requestEndTime;
+    if (dataChanged) {
+      _cachedMatrix = null;
+      _matrixCacheKey = null;
+      _cachedCoverageIntervals = null;
+      _cachedTotalCols = 0;
+      _coverageCacheKey = null;
+    }
     if (renderingChanged || (dataChanged && widget.seedImage == null)) {
       _renderDebounce?.cancel();
       _renderDebounce = Timer(const Duration(milliseconds: 100), () {
         if (mounted) _render();
       });
     }
+  }
+
+  void _onGainChanged() {
+    _renderDebounce?.cancel();
+    _renderDebounce = Timer(const Duration(milliseconds: 100), () {
+      if (mounted) _render();
+    });
   }
 
   static int? _stateParseMs(String? iso) {
@@ -217,10 +244,18 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       return const [];
     }
 
+    final key = Object.hash(histories, widget.requestStartTime, widget.requestEndTime);
+    if (_matrixCacheKey == key && _cachedMatrix != null) {
+      return _cachedMatrix!;
+    }
+
     final fromMs = _stateParseMs(widget.requestStartTime ?? histories.first.startTime);
     final toMs = _stateParseMs(widget.requestEndTime ?? histories.last.endTime);
     if (fromMs == null || toMs == null || toMs <= fromMs) {
-      return _resolvedMatrixFallback(histories);
+      final result = _resolvedMatrixFallback(histories);
+      _cachedMatrix = result;
+      _matrixCacheKey = key;
+      return result;
     }
 
     final colsPerMs = _computeColsPerMs(histories);
@@ -261,6 +296,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       }
     }
 
+    _cachedMatrix = combined;
+    _matrixCacheKey = key;
     return combined;
   }
 
@@ -335,7 +372,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
           startTimeIso: widget.startTime ?? widget.histories?.firstOrNull?.startTime,
           endTimeIso: widget.endTime ?? widget.histories?.firstOrNull?.endTime,
           debug: false,
-          gainDb: widget.gainDb,
+          gainDb: widget.gainNotifier?.value ?? widget.gainDb,
           backgroundColor: widget.background.toARGB32(),
         ),
       );
@@ -374,6 +411,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
 
   @override
   void dispose() {
+    widget.gainNotifier?.removeListener(_onGainChanged);
     _renderDebounce?.cancel();
     _jobId++;
     if (_imageOwned) _image?.dispose();
@@ -384,14 +422,27 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final histories = widget.histories;
     if (histories == null || histories.isEmpty) return const [];
 
+    final key = Object.hash(histories, widget.requestStartTime, widget.requestEndTime);
+    if (_coverageCacheKey == key && _cachedCoverageIntervals != null) {
+      return _cachedCoverageIntervals!;
+    }
+
     final fromMs = _stateParseMs(widget.requestStartTime ?? histories.first.startTime);
     final toMs = _stateParseMs(widget.requestEndTime ?? histories.last.endTime);
     if (fromMs == null || toMs == null || toMs <= fromMs) {
-      return _buildCoverageIntervalsFallback(histories);
+      final result = _buildCoverageIntervalsFallback(histories);
+      _cachedCoverageIntervals = result;
+      _coverageCacheKey = key;
+      return result;
     }
 
     final colsPerMs = _computeColsPerMs(histories);
-    if (colsPerMs == null) return _buildCoverageIntervalsFallback(histories);
+    if (colsPerMs == null) {
+      final result = _buildCoverageIntervalsFallback(histories);
+      _cachedCoverageIntervals = result;
+      _coverageCacheKey = key;
+      return result;
+    }
 
     final intervals = <CoverageInterval>[];
     for (final h in histories) {
@@ -405,6 +456,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         intervals.add(CoverageInterval(startMs: startCol, endMs: endCol));
       }
     }
+    _cachedCoverageIntervals = intervals;
+    _coverageCacheKey = key;
     return intervals;
   }
 
@@ -424,6 +477,11 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final histories = widget.histories;
     if (histories == null || histories.isEmpty) return 0;
 
+    final key = Object.hash(histories, widget.requestStartTime, widget.requestEndTime);
+    if (_coverageCacheKey == key && _cachedTotalCols > 0) {
+      return _cachedTotalCols;
+    }
+
     final fromMs = _stateParseMs(widget.requestStartTime ?? (histories.isNotEmpty ? histories.first.startTime : null));
     final toMs = _stateParseMs(widget.requestEndTime ?? (histories.isNotEmpty ? histories.last.endTime : null));
     if (fromMs == null || toMs == null || toMs <= fromMs) {
@@ -432,12 +490,15 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         if (h.data.isEmpty) continue;
         total += h.data[0].length;
       }
+      _cachedTotalCols = total;
       return total;
     }
 
     final colsPerMs = _computeColsPerMs(histories);
     if (colsPerMs == null) return 0;
-    return ((toMs - fromMs) * colsPerMs).round();
+    final result = ((toMs - fromMs) * colsPerMs).round();
+    _cachedTotalCols = result;
+    return result;
   }
 
   @override
@@ -569,6 +630,17 @@ class _SpectroPainter extends CustomPainter {
   static const Color _gapFill = Color(0x423667C2);
   static const Color _gapStroke = Color(0xE766C4E7);
 
+  static final Paint _bgPaint = Paint()..color = const Color(0xFF140D28);
+  static final Paint _imgPaint = Paint()..isAntiAlias = false..filterQuality = FilterQuality.none;
+  static final Paint _gapFillPaint = Paint()..color = _gapFill;
+  static final Paint _gapStrokePaint = Paint()..color = _gapStroke..style = PaintingStyle.stroke..strokeWidth = 1;
+  static final Paint _gridPaint = Paint()..color = _gridColor..strokeWidth = 1;
+  static final Paint _axisPaint = Paint()..color = _axisColor..strokeWidth = 1.2..style = PaintingStyle.stroke;
+  static final TextStyle _gapTextStyle = TextStyle(color: Color(0xF2E1F4FF), fontSize: 11);
+  static final TextStyle _timeStyle = TextStyle(color: _textColor, fontSize: 10);
+  static final TextStyle _freqStyle = TextStyle(color: _textColor, fontSize: 10);
+  static final TextStyle _titleStyle = TextStyle(color: _textColor, fontSize: 10);
+
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
@@ -581,12 +653,8 @@ class _SpectroPainter extends CustomPainter {
     final plotH = h - _topInset - _bottomInset;
     if (plotW <= 0 || plotH <= 0) return;
 
-    final paint = Paint()
-      ..isAntiAlias = false
-      ..filterQuality = FilterQuality.none;
-
     // 1) Background.
-    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFF140D28));
+    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), _bgPaint);
 
     // 2) Spectrogram image with viewport.
     final span = viewportEnd - viewportStart;
@@ -599,7 +667,7 @@ class _SpectroPainter extends CustomPainter {
       final destX1 = pLeft + ((dataEnd - viewportStart) / span) * plotW;
       final src = Rect.fromLTWH(srcX0.toDouble(), 0, (srcX1 - srcX0).toDouble(), image.height.toDouble());
       final dst = Rect.fromLTWH(destX0, pTop, destX1 - destX0, plotH);
-      canvas.drawImageRect(image, src, dst, paint);
+      canvas.drawImageRect(image, src, dst, _imgPaint);
     }
 
     // Compute viewport time range for labels.
@@ -634,12 +702,9 @@ class _SpectroPainter extends CustomPainter {
             merged.add(CoverageInterval(startMs: clippedStart, endMs: clippedEnd));
           }
         }
-        final gapFillPaint = Paint()..color = _gapFill;
-        final gapStrokePaint = Paint()
-          ..color = _gapStroke
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1;
-        final gapStyle = TextStyle(color: Color(0xF2E1F4FF), fontSize: 11);
+        final gapFillPaint = _gapFillPaint;
+        final gapStrokePaint = _gapStrokePaint;
+        final gapStyle = _gapTextStyle;
         var cursor = visStartCol;
         for (final iv in merged) {
           if (iv.startMs > cursor) {
@@ -680,7 +745,7 @@ class _SpectroPainter extends CustomPainter {
     }
 
     // 3) Grid lines.
-    final gridPaint = Paint()..color = _gridColor..strokeWidth = 1;
+    final gridPaint = _gridPaint;
     for (var i = 0; i <= _xTicks; i++) {
       final x = pLeft + (plotW * i / _xTicks).roundToDouble();
       canvas.drawLine(Offset(x, pTop), Offset(x, pTop + plotH), gridPaint);
@@ -691,10 +756,7 @@ class _SpectroPainter extends CustomPainter {
     }
 
     // 4) Axes stroke (left + bottom).
-    final axisPaint = Paint()
-      ..color = _axisColor
-      ..strokeWidth = 1.2
-      ..style = PaintingStyle.stroke;
+    final axisPaint = _axisPaint;
     canvas.drawPath(
         Path()
           ..moveTo(pLeft, pTop)
@@ -703,7 +765,7 @@ class _SpectroPainter extends CustomPainter {
         axisPaint);
 
     // 5) Time (x) axis labels.
-    final timeStyle = TextStyle(color: _textColor, fontSize: 10);
+    final timeStyle = _timeStyle;
     final withDate = (toMs != null && fromMs != null) && (toMs - fromMs > 24 * 3600 * 1000);
     for (var i = 0; i <= _xTicks; i++) {
       final label = _timeLabelFor(i, _xTicks, fromMs, toMs, withDate);
@@ -716,7 +778,7 @@ class _SpectroPainter extends CustomPainter {
     }
 
     // 6) Frequency (y) axis labels — 0 to 250 Hz.
-    final freqStyle = TextStyle(color: _textColor, fontSize: 10);
+    final freqStyle = _freqStyle;
     for (var i = 0; i <= _yTicks; i++) {
       final hz = ((_yTicks - i) * _maxFrequency / _yTicks).round();
       final label = '$hz';
@@ -729,7 +791,7 @@ class _SpectroPainter extends CustomPainter {
     }
 
     // 7) Axis titles.
-    final titleStyle = TextStyle(color: _textColor, fontSize: 10);
+    final titleStyle = _titleStyle;
     canvas.save();
     canvas.translate(10, pTop + plotH / 2);
     canvas.rotate(-3.141592653589793 / 2);
