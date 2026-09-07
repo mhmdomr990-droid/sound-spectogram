@@ -71,6 +71,7 @@ class SocketService {
   }
 
   Future<Map<String, dynamic>?> emitCheckAiStatus({
+    required int deviceId,
     required String startTime,
     required String endTime,
   }) async {
@@ -79,6 +80,7 @@ class SocketService {
     final completer = Completer<Map<String, dynamic>?>();
 
     _socket!.emitWithAck('check_ai_status', {
+      'deviceId': deviceId,
       'startTime': startTime,
       'endTime': endTime,
     }, ack: (dynamic response) {

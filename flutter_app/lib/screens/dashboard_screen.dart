@@ -416,6 +416,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       context: context,
       builder: (_) => _AIReportDialog(
         socket: widget.socket,
+        devices: _devices,
+        initialDevice: _selected,
         initialFrom: now.subtract(const Duration(hours: 24)),
         initialTo: now,
       ),
@@ -718,11 +720,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
 class _AIReportDialog extends StatefulWidget {
   final SocketService socket;
+  final List<Device> devices;
+  final Device? initialDevice;
   final DateTime initialFrom;
   final DateTime initialTo;
 
   const _AIReportDialog({
     required this.socket,
+    required this.devices,
+    this.initialDevice,
     required this.initialFrom,
     required this.initialTo,
   });
@@ -734,6 +740,7 @@ class _AIReportDialog extends StatefulWidget {
 class _AIReportDialogState extends State<_AIReportDialog> {
   late DateTime _from;
   late DateTime _to;
+  late Device? _device;
   bool _loading = false;
   Map<String, dynamic>? _result;
   String? _error;
@@ -743,6 +750,7 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     super.initState();
     _from = widget.initialFrom;
     _to = widget.initialTo;
+    _device = widget.initialDevice;
   }
 
   Future<void> _pickDate({required bool isFrom}) async {
@@ -807,6 +815,7 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     });
 
     final response = await widget.socket.emitCheckAiStatus(
+      deviceId: _device!.id,
       startTime: _iso(_from),
       endTime: _iso(_to),
     );
@@ -852,6 +861,8 @@ class _AIReportDialogState extends State<_AIReportDialog> {
                 style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
+              _buildDeviceDropdown(),
+              const SizedBox(height: 12),
               _buildDateTimeRow('من:', _from, () => _pickDate(isFrom: true)),
               const SizedBox(height: 8),
               _buildDateTimeRow('إلى:', _to, () => _pickDate(isFrom: false)),
@@ -883,6 +894,37 @@ class _AIReportDialogState extends State<_AIReportDialog> {
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDeviceDropdown() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16213E),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<int>(
+          isExpanded: true,
+          value: _device?.id,
+          dropdownColor: const Color(0xFF16213E),
+          icon: const Icon(Icons.arrow_drop_down, color: Colors.white54),
+          style: const TextStyle(color: Colors.white, fontSize: 13),
+          items: widget.devices.map((d) => DropdownMenuItem(
+            value: d.id,
+            child: Text(d.name),
+          )).toList(),
+          onChanged: (id) {
+            if (id == null) return;
+            final found = widget.devices.where((d) => d.id == id);
+            if (found.isNotEmpty) {
+              setState(() => _device = found.first);
+            }
+          },
         ),
       ),
     );
