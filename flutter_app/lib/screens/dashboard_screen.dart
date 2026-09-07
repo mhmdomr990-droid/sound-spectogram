@@ -963,6 +963,11 @@ class _AIReportDialogState extends State<_AIReportDialog> {
       return const Text('لا توجد أهداف في هذه الفترة', style: TextStyle(color: Colors.white54));
     }
 
+    final filteredItems = items.where((item) => item['deviceId'] == _device?.id).toList();
+    if (filteredItems.isEmpty) {
+      return const Text('لا توجد أهداف لهذا الجهاز في هذه الفترة', style: TextStyle(color: Colors.white54));
+    }
+
     // Find last detected and last possible
     DateTime? lastDetectedTime;
     double? lastDetectedConf;
@@ -973,7 +978,7 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     int possibleCount = 0;
     int notDetectedCount = 0;
 
-    for (final item in items) {
+    for (final item in filteredItems) {
       final aiStatus = item['aiStatus'];
       final confidence = item['confidence'];
       final conf = confidence is num ? confidence.toDouble() : double.tryParse('$confidence');
@@ -1025,7 +1030,7 @@ class _AIReportDialogState extends State<_AIReportDialog> {
         const SizedBox(height: 4),
         _buildStatRow(color: const Color(0xFF21A366), label: 'غير مكتشفة', count: notDetectedCount),
         const SizedBox(height: 4),
-        _buildStatRow(color: Colors.white54, label: 'إجمالي الباكتات', count: items.length),
+        _buildStatRow(color: Colors.white54, label: 'إجمالي الباكتات', count: filteredItems.length),
       ],
     );
   }
