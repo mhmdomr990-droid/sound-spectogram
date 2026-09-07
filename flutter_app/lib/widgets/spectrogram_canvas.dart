@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data' show Uint8List;
 import 'dart:ui' as ui;
 
@@ -171,6 +172,11 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _cachedTotalCols = 0;
   Object? _coverageCacheKey;
 
+  Uint8List? _cachedIntensity;
+  int _cachedIntensityWidth = 0;
+  int _cachedIntensityHeight = 0;
+  double _cachedGamma = 1.0;
+
   @override
   void initState() {
     super.initState();
@@ -188,8 +194,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     }
     final renderingChanged = oldWidget.matrix != widget.matrix ||
         oldWidget.gamma != widget.gamma ||
-        oldWidget.inputValueMax != widget.inputValueMax ||
-        oldWidget.gainDb != widget.gainDb;
+        oldWidget.inputValueMax != widget.inputValueMax;
+    final gainChanged = oldWidget.gainDb != widget.gainDb;
     final dataChanged = oldWidget.histories != widget.histories ||
         oldWidget.requestStartTime != widget.requestStartTime ||
         oldWidget.requestEndTime != widget.requestEndTime;
@@ -205,15 +211,88 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _renderDebounce = Timer(const Duration(milliseconds: 100), () {
         if (mounted) _render();
       });
+    } else if (gainChanged && _cachedIntensity != null) {
+      _onGainChanged();
     }
   }
 
-  void _onGainChanged() {
-    _renderDebounce?.cancel();
-    _renderDebounce = Timer(const Duration(milliseconds: 100), () {
-      if (mounted) _render();
-    });
+  void _onGainChanged() async {
+    if (_cachedIntensity == null || _image == null) return;
+    final gainDb = widget.gainNotifier?.value ?? widget.gainDb;
+    final image = await _applyGainAndBuildImage(gainDb);
+    if (!mounted) return;
+    final oldImage = _image;
+    _imageOwned = true;
+    _image = image;
+    setState(() {});
+    if (oldImage != null && oldImage != image) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        try { oldImage.dispose(); } catch (_) {}
+      });
+    }
   }
+
+  Future<ui.Image> _applyGainAndBuildImage(double gainDb) async {
+    final intensity = _cachedIntensity;
+    if (intensity == null || _cachedIntensityWidth <= 0 || _cachedIntensityHeight <= 0) {
+      return _image!;
+    }
+    final w = _cachedIntensityWidth;
+    final h = _cachedIntensityHeight;
+    final gainScale = gainDb == 0.0 ? 1.0 : pow(10.0, gainDb / 20.0).toDouble();
+    final gamma = _cachedGamma;
+    final rgba = Uint8List(w * h * 4);
+    for (var i = 0; i < w * h; i++) {
+      var value = intensity[i].toDouble() / 255.0;
+      value = clampDouble(value * gainScale, 0.0, 1.0);
+      final rgb = _colorForGamma(value, gamma);
+      final offset = i * 4;
+      rgba[offset] = (rgb >> 16) & 0xFF;
+      rgba[offset + 1] = (rgb >> 8) & 0xFF;
+      rgba[offset + 2] = rgb & 0xFF;
+      rgba[offset + 3] = 0xFF;
+    }
+    return rgbaToUiImage(rgba, w, h);
+  }
+
+  static double clampDouble(double v, double min, double max) {
+    if (v < min) return min;
+    if (v > max) return max;
+    return v;
+  }
+
+  static int _colorForGamma(double v0, double gammaValue) {
+    const stops = [
+      [0.0, 0.0, 0.0, 4.0 / 255.0],
+      [0.16, 28.0 / 255.0, 16.0 / 255.0, 68.0 / 255.0],
+      [0.33, 79.0 / 255.0, 18.0 / 255.0, 123.0 / 255.0],
+      [0.5, 129.0 / 255.0, 37.0 / 255.0, 129.0 / 255.0],
+      [0.66, 181.0 / 255.0, 54.0 / 255.0, 122.0 / 255.0],
+      [0.83, 229.0 / 255.0, 80.0 / 255.0, 100.0 / 255.0],
+      [1.0, 252.0 / 255.0, 253.0 / 255.0, 191.0 / 255.0],
+    ];
+    final g = gammaValue > 0 ? gammaValue : 1.0;
+    double v = v0;
+    if (v < 0) v = 0;
+    if (v > 1) v = 1;
+    v = pow(v, g).toDouble();
+    for (var i = 0; i < stops.length - 1; i++) {
+      final a = stops[i];
+      final b = stops[i + 1];
+      if (v >= a[0] && v <= b[0]) {
+        final denom = (b[0] - a[0]).abs() < 1e-9 ? 1.0 : (b[0] - a[0]);
+        final t = (v - a[0]) / denom;
+        final r = a[1] + (b[1] - a[1]) * t;
+        final g2 = a[2] + (b[2] - a[2]) * t;
+        final bl = a[3] + (b[3] - a[3]) * t;
+        return (0xFF << 24) | (_clamp255(r * 255) << 16) | (_clamp255(g2 * 255) << 8) | _clamp255(bl * 255);
+      }
+    }
+    final last = stops[stops.length - 1];
+    return (0xFF << 24) | (_clamp255(last[1] * 255) << 16) | (_clamp255(last[2] * 255) << 8) | _clamp255(last[3] * 255);
+  }
+
+  static int _clamp255(double v) => v.round().clamp(0, 255);
 
   static int? _stateParseMs(String? iso) {
     if (iso == null || iso.isEmpty) return null;
@@ -374,12 +453,17 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
           startTimeIso: widget.startTime ?? widget.histories?.firstOrNull?.startTime,
           endTimeIso: widget.endTime ?? widget.histories?.firstOrNull?.endTime,
           debug: false,
-          gainDb: widget.gainNotifier?.value ?? widget.gainDb,
+          gainDb: 0.0,
           backgroundColor: widget.background.toARGB32(),
         ),
       );
       if (!mounted || id != _jobId) return;
-      final image = await rgbaToUiImage(result.rgba, width, height);
+      _cachedIntensity = result.intensity;
+      _cachedIntensityWidth = result.width;
+      _cachedIntensityHeight = result.height;
+      _cachedGamma = result.gamma;
+      final gainDb = widget.gainNotifier?.value ?? widget.gainDb;
+      final image = await _applyGainAndBuildImage(gainDb);
       if (!mounted || id != _jobId) return;
       seedSnapshot = CanvasSeedSnapshot(
         image: image,

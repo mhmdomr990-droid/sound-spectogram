@@ -362,8 +362,10 @@ class SpectroRgbaResult {
   final Uint8List rgba;
   final int width;
   final int height;
+  final Uint8List? intensity;
+  final double gamma;
 
-  const SpectroRgbaResult(this.rgba, this.width, this.height);
+  const SpectroRgbaResult(this.rgba, this.width, this.height, {this.intensity, this.gamma = 1.0});
 }
 
 SpectroRgbaResult buildRgba(
@@ -403,7 +405,7 @@ SpectroRgbaResult buildRgba(
   }
 
   if (rows == 0 || cols == 0) {
-    return SpectroRgbaResult(rgba, width, height);
+  return SpectroRgbaResult(rgba, width, height);
   }
 
   final colToBin = cols / width;
@@ -646,7 +648,7 @@ SpectroRgbaResult buildRgba(
     print('SPECTRO DEBUG: rgbaSample[0..${sampleLen - 1}]=${sample}');
   }
 
-  return SpectroRgbaResult(rgba, width, height);
+  return SpectroRgbaResult(rgba, width, height, intensity: Uint8List.fromList(intensity), gamma: gammaArg);
 }
 
 /// Convert an RGBA byte buffer into a ui.Image for painting.

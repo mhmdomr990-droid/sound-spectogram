@@ -91,8 +91,10 @@ class RenderResult {
   final Uint8List rgba;
   final int width;
   final int height;
+  final Uint8List? intensity;
+  final double gamma;
 
-  const RenderResult(this.rgba, this.width, this.height);
+  const RenderResult(this.rgba, this.width, this.height, {this.intensity, this.gamma = 1.0});
 }
 
 Future<RenderResult> renderSpectrogramIsolate(RenderRequest req) async {
@@ -119,7 +121,7 @@ Future<RenderResult> renderSpectrogramIsolate(RenderRequest req) async {
       backgroundColor: request.backgroundColor,
     );
   }, req);
-  return RenderResult(result.rgba, result.width, result.height);
+  return RenderResult(result.rgba, result.width, result.height, intensity: result.intensity, gamma: result.gamma);
 }
 
 Future<ui.Image> rgbaToUiImage(Uint8List rgba, int width, int height) async {
