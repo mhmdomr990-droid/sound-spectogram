@@ -103,6 +103,8 @@ class SpectrogramCanvas extends StatefulWidget {
   final String? requestStartTime;
   final String? requestEndTime;
   final ValueNotifier<double>? gainNotifier;
+  final bool showStatusBar;
+  final bool compactStatusBar;
 
   const SpectrogramCanvas({
     super.key,
@@ -132,6 +134,8 @@ class SpectrogramCanvas extends StatefulWidget {
       this.requestStartTime,
       this.requestEndTime,
       this.gainNotifier,
+      this.showStatusBar = true,
+      this.compactStatusBar = false,
   });
 
   @override
@@ -660,6 +664,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                     endTimeIso: widget.requestEndTime ?? widget.endTime ?? widget.histories?.lastOrNull?.endTime,
                     coverageIntervals: _buildCoverageIntervals(),
                     totalCols: _totalCols(),
+                    histories: widget.histories,
+                    showStatusBar: widget.showStatusBar,
+                    compactStatusBar: widget.compactStatusBar,
                   ),
                 ),
               ),
@@ -689,6 +696,9 @@ class _SpectroPainter extends CustomPainter {
   final String? endTimeIso;
   final List<CoverageInterval>? coverageIntervals;
   final int totalCols;
+  final List<DeviceHistory>? histories;
+  final bool showStatusBar;
+  final bool compactStatusBar;
 
   _SpectroPainter(this.image,
       {this.background = const Color(0xFF111026),
@@ -700,12 +710,15 @@ class _SpectroPainter extends CustomPainter {
       this.startTimeIso,
       this.endTimeIso,
       this.coverageIntervals,
-      this.totalCols = 0});
+      this.totalCols = 0,
+      this.histories,
+      this.showStatusBar = true,
+      this.compactStatusBar = false});
 
   static const double _leftInset = 40;
   static const double _rightInset = 6;
   static const double _topInset = 4;
-  static const double _bottomInset = 36;
+  double get _bottomInset => showStatusBar ? (compactStatusBar ? 50.0 : 68.0) : 36.0;
   static const int _xTicks = 5;
   static const int _yTicks = 5;
   static const double _maxFrequency = 250.0;
@@ -893,6 +906,54 @@ class _SpectroPainter extends CustomPainter {
       textDirection: TextDirection.rtl,
     )..layout();
     timeTitle.paint(canvas, Offset(pLeft + plotW / 2 - timeTitle.width / 2, pTop + plotH + 20));
+
+    // 8) AI Status bar (below time title).
+    if (showStatusBar && histories != null && histories!.isNotEmpty &&
+        fromMs != null && toMs != null && toMs! > fromMs! && totalCols > 0 && span > 0) {
+      final statusBarY = pTop + plotH + 36;
+      final sbHeight = compactStatusBar ? 14.0 : 28.0;
+      final sbFontSize = compactStatusBar ? 9.0 : 11.0;
+      final sbMinWidth = compactStatusBar ? 50.0 : 72.0;
+
+      for (final h in histories!) {
+        final blockStartMs = _parseMs(h.startTime);
+        final blockEndMs = _parseMs(h.endTime);
+        if (blockStartMs == null || blockEndMs == null) continue;
+
+        final clippedStart = blockStartMs.clamp(fromMs!, toMs!);
+        final clippedEnd = blockEndMs.clamp(fromMs!, toMs!);
+        if (clippedEnd <= clippedStart) continue;
+
+        final sx0 = (clippedStart - fromMs!).toDouble() / (toMs! - fromMs!) * plotW;
+        final sx1 = (clippedEnd - fromMs!).toDouble() / (toMs! - fromMs!) * plotW;
+        final sw = max(1.0, sx1 - sx0);
+
+        final color = _resolveStatusColor(h.aiStatus);
+        final label = _resolveStatusLabel(h.aiStatus);
+        final conf = h.confidence;
+        final text = conf != null ? '$label (%${conf.toStringAsFixed(1)})' : label;
+
+        canvas.drawRect(Rect.fromLTWH(pLeft + sx0, statusBarY, sw, sbHeight), Paint()..color = color);
+
+        if (sw >= sbMinWidth) {
+          final tp = TextPainter(
+            text: TextSpan(
+              text: text,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: sbFontSize,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            textDirection: TextDirection.rtl,
+          )..layout();
+          tp.paint(canvas, Offset(
+            pLeft + sx0 + sw / 2 - tp.width / 2,
+            statusBarY + sbHeight / 2 - tp.height / 2,
+          ));
+        }
+      }
+    }
   }
 
   static int? _parseMs(String? iso) {
@@ -919,6 +980,28 @@ class _SpectroPainter extends CustomPainter {
     return _fmtTime(labelMs, withDate);
   }
 
+  static Color _resolveStatusColor(AiStatus status) {
+    switch (status) {
+      case AiStatus.detected:
+        return const Color(0xFFD13438);
+      case AiStatus.notDetected:
+        return const Color(0xFF21A366);
+      case AiStatus.possible:
+        return const Color(0xFFF59E0B);
+    }
+  }
+
+  static String _resolveStatusLabel(AiStatus status) {
+    switch (status) {
+      case AiStatus.detected:
+        return 'هدف مكتشف';
+      case AiStatus.notDetected:
+        return 'لا يوجد هدف';
+      case AiStatus.possible:
+        return 'هدف محتمل';
+    }
+  }
+
   @override
   bool shouldRepaint(covariant _SpectroPainter oldDelegate) {
     return oldDelegate.image != image ||
@@ -928,6 +1011,9 @@ class _SpectroPainter extends CustomPainter {
         oldDelegate.totalCols != totalCols ||
         oldDelegate.startTimeIso != startTimeIso ||
         oldDelegate.endTimeIso != endTimeIso ||
-        !identical(oldDelegate.coverageIntervals, coverageIntervals);
+        oldDelegate.showStatusBar != showStatusBar ||
+        oldDelegate.compactStatusBar != compactStatusBar ||
+        !identical(oldDelegate.coverageIntervals, coverageIntervals) ||
+        !identical(oldDelegate.histories, histories);
   }
 }

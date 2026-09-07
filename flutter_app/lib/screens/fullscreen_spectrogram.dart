@@ -109,6 +109,8 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                     seedEndTime: widget.seedEndTime,
                     requestStartTime: startTime,
                     requestEndTime: endTime,
+                    showStatusBar: true,
+                    compactStatusBar: true,
                   );
                 },
               ),

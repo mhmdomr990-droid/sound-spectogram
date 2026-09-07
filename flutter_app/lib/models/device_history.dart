@@ -38,6 +38,7 @@ class DeviceHistory {
 
   final String? intensityType;
   final AiStatus aiStatus;
+  final double? confidence;
 
   const DeviceHistory({
     required this.id,
@@ -49,6 +50,7 @@ class DeviceHistory {
     this.frequencyBins,
     this.intensityType,
     this.aiStatus = AiStatus.possible,
+    this.confidence,
   });
 
   /// Number of time columns in the matrix.
@@ -154,6 +156,13 @@ class DeviceHistory {
     }, growable: true);
   }
 
+  static double? _parseConfidence(dynamic value) {
+    if (value == null) return null;
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value);
+    return null;
+  }
+
   factory DeviceHistory.fromJson(Map<String, dynamic> json) {
     final data = decodeMatrixPayload(json['data']);
     final binsRaw = json['frequencyBins'];
@@ -172,6 +181,7 @@ class DeviceHistory {
       frequencyBins: bins,
       intensityType: json['intensityType'] as String? ?? json['intensity_type'] as String?,
       aiStatus: AiStatus.fromCode(json['aiStatus'] as num? ?? json['ai_status'] as num?),
+      confidence: _parseConfidence(json['confidence']),
     );
   }
 }
