@@ -1011,11 +1011,9 @@ class _AIReportDialogState extends State<_AIReportDialog> {
       return const Text('لا توجد أهداف لهذا الجهاز في هذه الفترة', style: TextStyle(color: Colors.white54));
     }
 
-    // Find last detected and last possible
-    DateTime? lastDetectedTime;
-    double? lastDetectedConf;
-    DateTime? lastPossibleTime;
-    double? lastPossibleConf;
+    // Collect detected and possible items with time
+    final List<MapEntry<DateTime, double?>> detectedList = [];
+    final List<MapEntry<DateTime, double?>> possibleList = [];
 
     int detectedCount = 0;
     int possibleCount = 0;
@@ -1031,37 +1029,54 @@ class _AIReportDialogState extends State<_AIReportDialog> {
 
       if (aiStatus == 1) {
         detectedCount++;
-        if (endTime != null && (lastDetectedTime == null || endTime.isAfter(lastDetectedTime))) {
-          lastDetectedTime = endTime;
-          lastDetectedConf = conf;
+        if (endTime != null) {
+          detectedList.add(MapEntry(endTime, conf));
         }
       } else if (aiStatus == 0) {
         possibleCount++;
-        if (endTime != null && (lastPossibleTime == null || endTime.isAfter(lastPossibleTime))) {
-          lastPossibleTime = endTime;
-          lastPossibleConf = conf;
+        if (endTime != null) {
+          possibleList.add(MapEntry(endTime, conf));
         }
       } else if (aiStatus == 2) {
         notDetectedCount++;
       }
     }
 
+    detectedList.sort((a, b) => b.key.compareTo(a.key));
+    possibleList.sort((a, b) => b.key.compareTo(a.key));
+    final lastDetected = detectedList.take(3).toList();
+    final lastPossible = possibleList.take(3).toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildStatusRow(
-          color: const Color(0xFFD13438),
-          label: 'آخر هدف مكتشف',
-          time: _timeAgo(lastDetectedTime),
-          confidence: lastDetectedConf,
-        ),
+        if (lastDetected.isNotEmpty) ...[
+          const Text('آخر أهداف مكتشفة:', style: TextStyle(color: Color(0xFFD13438), fontSize: 13, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          for (final e in lastDetected)
+            _buildStatusRow(
+              color: const Color(0xFFD13438),
+              time: _fmt(e.key),
+              timeAgo: _timeAgo(e.key),
+              confidence: e.value,
+            ),
+        ],
+        if (lastDetected.isEmpty)
+          _buildStatusRow(color: const Color(0xFFD13438), time: 'لا توجد', label: 'آخر هدف مكتشف'),
         const SizedBox(height: 10),
-        _buildStatusRow(
-          color: const Color(0xFFF59E0B),
-          label: 'آخر هدف محتمل',
-          time: _timeAgo(lastPossibleTime),
-          confidence: lastPossibleConf,
-        ),
+        if (lastPossible.isNotEmpty) ...[
+          const Text('آخر أهداف محتملة:', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 13, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          for (final e in lastPossible)
+            _buildStatusRow(
+              color: const Color(0xFFF59E0B),
+              time: _fmt(e.key),
+              timeAgo: _timeAgo(e.key),
+              confidence: e.value,
+            ),
+        ],
+        if (lastPossible.isEmpty)
+          _buildStatusRow(color: const Color(0xFFF59E0B), time: 'لا توجد', label: 'آخر هدف محتمل'),
         const SizedBox(height: 14),
         const Divider(color: Colors.white24),
         const SizedBox(height: 8),
@@ -1080,22 +1095,25 @@ class _AIReportDialogState extends State<_AIReportDialog> {
 
   Widget _buildStatusRow({
     required Color color,
-    required String label,
     required String time,
+    String? timeAgo,
     double? confidence,
+    String? label,
   }) {
     final confText = confidence != null ? ' (%${confidence.toStringAsFixed(1)})' : '';
+    final agoText = timeAgo != null ? ' $timeAgo' : '';
     return Row(
       children: [
-        Icon(Icons.circle, size: 10, color: color),
+        Icon(Icons.circle, size: 8, color: color),
         const SizedBox(width: 8),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+              if (label != null)
+                Text(label, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
               Text(
-                '$time$confText',
+                label != null ? '$time$confText' : '$time$confText$agoText',
                 style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
               ),
             ],
