@@ -771,6 +771,7 @@ class _AIReportDialogState extends State<_AIReportDialog> {
 
     final picked = DateTime(date.year, date.month, date.day, time.hour, time.minute);
     setState(() {
+      _selectedRange = -1;
       if (isFrom) {
         _from = picked;
       } else {
