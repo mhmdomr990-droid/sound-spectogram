@@ -901,6 +901,8 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     );
   }
 
+  int _selectedRange = 3;
+
   Widget _buildQuickRanges() {
     final now = DateTime.now();
     final ranges = [
@@ -911,14 +913,22 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     ];
 
     return Row(
-      children: ranges.map((r) {
+      children: List.generate(ranges.length, (i) {
+        final r = ranges[i];
+        final selected = _selectedRange == i;
         return Expanded(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 3),
             child: ElevatedButton(
-              onPressed: () => setState(() => _from = r.$2),
+              onPressed: () {
+                setState(() {
+                  _selectedRange = i;
+                  _from = r.$2;
+                });
+                _fetch();
+              },
               style: ElevatedButton.styleFrom(
-                backgroundColor: _from == r.$2 ? const Color(0xFF3B82F6) : const Color(0xFF16213E),
+                backgroundColor: selected ? const Color(0xFF21A366) : const Color(0xFF16213E),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
@@ -927,7 +937,7 @@ class _AIReportDialogState extends State<_AIReportDialog> {
             ),
           ),
         );
-      }).toList(),
+      }),
     );
   }
 
