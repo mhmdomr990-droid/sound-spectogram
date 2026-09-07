@@ -866,6 +866,8 @@ class _AIReportDialogState extends State<_AIReportDialog> {
               _buildDateTimeRow('من:', _from, () => _pickDate(isFrom: true)),
               const SizedBox(height: 8),
               _buildDateTimeRow('إلى:', _to, () => _pickDate(isFrom: false)),
+              const SizedBox(height: 12),
+              _buildQuickRanges(),
               const SizedBox(height: 16),
               SizedBox(
                 width: double.infinity,
@@ -896,6 +898,36 @@ class _AIReportDialogState extends State<_AIReportDialog> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildQuickRanges() {
+    final now = DateTime.now();
+    final ranges = [
+      ('ساعة', now.subtract(const Duration(hours: 1))),
+      ('6 ساعات', now.subtract(const Duration(hours: 6))),
+      ('12 ساعة', now.subtract(const Duration(hours: 12))),
+      ('24 ساعة', now.subtract(const Duration(hours: 24))),
+    ];
+
+    return Row(
+      children: ranges.map((r) {
+        return Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 3),
+            child: ElevatedButton(
+              onPressed: () => setState(() => _from = r.$2),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _from == r.$2 ? const Color(0xFF3B82F6) : const Color(0xFF16213E),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+              ),
+              child: Text(r.$1, style: const TextStyle(fontSize: 11)),
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 
