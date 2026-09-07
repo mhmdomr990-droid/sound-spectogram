@@ -70,6 +70,43 @@ class SocketService {
     }
   }
 
+  /// Emits 'check_ai_status' and listens for 'check_ai_status_result'.
+  Future<Map<String, dynamic>?> emitCheckAiStatus({
+    required String startTime,
+    required String endTime,
+  }) async {
+    if (_socket == null || _socket?.connected != true) return null;
+
+    final completer = Completer<Map<String, dynamic>?>();
+
+    void onResponse(dynamic response) {
+      if (!completer.isCompleted) {
+        if (response is Map) {
+          completer.complete(Map<String, dynamic>.from(response.cast()));
+        } else {
+          completer.complete(null);
+        }
+      }
+    }
+
+    _socket!.on('check_ai_status_result', onResponse);
+    _socket!.emit('check_ai_status', {
+      'startTime': startTime,
+      'endTime': endTime,
+    });
+
+    final result = await completer.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        _socket!.off('check_ai_status_result', onResponse);
+        return null;
+      },
+    );
+
+    _socket!.off('check_ai_status_result', onResponse);
+    return result;
+  }
+
   void disconnect() {
     _socket?.dispose();
     _socket = null;

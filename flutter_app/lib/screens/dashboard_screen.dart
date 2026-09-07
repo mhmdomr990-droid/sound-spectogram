@@ -410,6 +410,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  void _showAIReport() {
+    final now = DateTime.now();
+    showDialog(
+      context: context,
+      builder: (_) => _AIReportDialog(
+        socket: widget.socket,
+        initialFrom: now.subtract(const Duration(hours: 24)),
+        initialTo: now,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -424,6 +436,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'تقرير الأهداف',
+            icon: const Icon(Icons.assessment, color: Colors.white70),
+            onPressed: _showAIReport,
+          ),
           IconButton(
             tooltip: 'تسجيل الخروج',
             icon: const Icon(Icons.logout),
@@ -695,6 +712,322 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _AIReportDialog extends StatefulWidget {
+  final SocketService socket;
+  final DateTime initialFrom;
+  final DateTime initialTo;
+
+  const _AIReportDialog({
+    required this.socket,
+    required this.initialFrom,
+    required this.initialTo,
+  });
+
+  @override
+  State<_AIReportDialog> createState() => _AIReportDialogState();
+}
+
+class _AIReportDialogState extends State<_AIReportDialog> {
+  late DateTime _from;
+  late DateTime _to;
+  bool _loading = false;
+  Map<String, dynamic>? _result;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _from = widget.initialFrom;
+    _to = widget.initialTo;
+  }
+
+  Future<void> _pickDate({required bool isFrom}) async {
+    final initial = isFrom ? _from : _to;
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2024),
+      lastDate: DateTime.now(),
+    );
+    if (date == null || !mounted) return;
+
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial),
+    );
+    if (time == null) return;
+
+    final picked = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    setState(() {
+      if (isFrom) {
+        _from = picked;
+      } else {
+        _to = picked;
+      }
+    });
+  }
+
+  String _fmt(DateTime dt) {
+    final y = dt.year;
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    return '$y-$m-$d $h:$min';
+  }
+
+  String _timeAgo(DateTime? dt) {
+    if (dt == null) return 'غير محدد';
+    final diff = DateTime.now().difference(dt);
+    if (diff.inSeconds < 60) return 'الآن';
+    if (diff.inMinutes < 60) return 'منذ ${diff.inMinutes} دقيقة';
+    if (diff.inHours < 24) return 'منذ ${diff.inHours} ساعة';
+    return 'منذ ${diff.inDays} يوم';
+  }
+
+  String _iso(DateTime dt) {
+    final y = dt.year;
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    final s = dt.second.toString().padLeft(2, '0');
+    return '$y-$m-${d}T$h:$min:$s';
+  }
+
+  Future<void> _fetch() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+      _result = null;
+    });
+
+    final response = await widget.socket.emitCheckAiStatus(
+      startTime: _iso(_from),
+      endTime: _iso(_to),
+    );
+
+    if (!mounted) return;
+
+    if (response == null) {
+      setState(() {
+        _loading = false;
+        _error = 'فشل الاتصال بالخادم';
+      });
+      return;
+    }
+
+    if (response['ok'] == false) {
+      setState(() {
+        _loading = false;
+        _error = response['message'] ?? 'خطأ غير معروف';
+      });
+      return;
+    }
+
+    setState(() {
+      _loading = false;
+      _result = response;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 380),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'تقرير الأهداف',
+                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              _buildDateTimeRow('من:', _from, () => _pickDate(isFrom: true)),
+              const SizedBox(height: 8),
+              _buildDateTimeRow('إلى:', _to, () => _pickDate(isFrom: false)),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _loading ? null : _fetch,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF3B82F6),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: _loading
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      : const Text('جلب التقرير', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(_error!, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 13)),
+              ],
+              if (_result != null) ...[
+                const SizedBox(height: 16),
+                const Divider(color: Colors.white24),
+                const SizedBox(height: 8),
+                _buildResults(),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDateTimeRow(String label, DateTime value, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF16213E),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Row(
+          children: [
+            Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+            const SizedBox(width: 8),
+            const Icon(Icons.calendar_today, size: 14, color: Colors.white54),
+            const SizedBox(width: 4),
+            Text(_fmt(value), style: const TextStyle(color: Colors.white, fontSize: 13)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildResults() {
+    final data = _result!['data'];
+    if (data == null) return const Text('لا توجد بيانات', style: TextStyle(color: Colors.white54));
+
+    final items = data['items'];
+    if (items is! List || items.isEmpty) {
+      return const Text('لا توجد أهداف في هذه الفترة', style: TextStyle(color: Colors.white54));
+    }
+
+    // Find last detected and last possible
+    DateTime? lastDetectedTime;
+    double? lastDetectedConf;
+    DateTime? lastPossibleTime;
+    double? lastPossibleConf;
+
+    int detectedCount = 0;
+    int possibleCount = 0;
+    int notDetectedCount = 0;
+
+    for (final item in items) {
+      final aiStatus = item['aiStatus'];
+      final confidence = item['confidence'];
+      final conf = confidence is num ? confidence.toDouble() : double.tryParse('$confidence');
+
+      final endTimeStr = item['endTime'] as String?;
+      final endTime = endTimeStr != null ? DateTime.tryParse(endTimeStr) : null;
+
+      if (aiStatus == 1) {
+        detectedCount++;
+        if (endTime != null && (lastDetectedTime == null || endTime.isAfter(lastDetectedTime))) {
+          lastDetectedTime = endTime;
+          lastDetectedConf = conf;
+        }
+      } else if (aiStatus == 0) {
+        possibleCount++;
+        if (endTime != null && (lastPossibleTime == null || endTime.isAfter(lastPossibleTime))) {
+          lastPossibleTime = endTime;
+          lastPossibleConf = conf;
+        }
+      } else if (aiStatus == 2) {
+        notDetectedCount++;
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildStatusRow(
+          color: const Color(0xFFD13438),
+          label: 'آخر هدف مكتشف',
+          time: _timeAgo(lastDetectedTime),
+          confidence: lastDetectedConf,
+        ),
+        const SizedBox(height: 10),
+        _buildStatusRow(
+          color: const Color(0xFFF59E0B),
+          label: 'آخر هدف محتمل',
+          time: _timeAgo(lastPossibleTime),
+          confidence: lastPossibleConf,
+        ),
+        const SizedBox(height: 14),
+        const Divider(color: Colors.white24),
+        const SizedBox(height: 8),
+        const Text('إحصائيات الفترة:', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        _buildStatRow(color: const Color(0xFFD13438), label: 'مكتشفة', count: detectedCount),
+        const SizedBox(height: 4),
+        _buildStatRow(color: const Color(0xFFF59E0B), label: 'محتملة', count: possibleCount),
+        const SizedBox(height: 4),
+        _buildStatRow(color: const Color(0xFF21A366), label: 'غير مكتشفة', count: notDetectedCount),
+        const SizedBox(height: 4),
+        _buildStatRow(color: Colors.white54, label: 'إجمالي الباكتات', count: items.length),
+      ],
+    );
+  }
+
+  Widget _buildStatusRow({
+    required Color color,
+    required String label,
+    required String time,
+    double? confidence,
+  }) {
+    final confText = confidence != null ? ' (%${confidence.toStringAsFixed(1)})' : '';
+    return Row(
+      children: [
+        Icon(Icons.circle, size: 10, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+              Text(
+                '$time$confText',
+                style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStatRow({
+    required Color color,
+    required String label,
+    required int count,
+  }) {
+    return Row(
+      children: [
+        Icon(Icons.circle, size: 8, color: color),
+        const SizedBox(width: 8),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        const Spacer(),
+        Text('$count', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+      ],
     );
   }
 }
