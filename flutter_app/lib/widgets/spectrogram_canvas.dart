@@ -924,6 +924,10 @@ class _SpectroPainter extends CustomPainter {
     return oldDelegate.image != image ||
         oldDelegate.background != background ||
         oldDelegate.viewportStart != viewportStart ||
-        oldDelegate.viewportEnd != viewportEnd;
+        oldDelegate.viewportEnd != viewportEnd ||
+        oldDelegate.totalCols != totalCols ||
+        oldDelegate.startTimeIso != startTimeIso ||
+        oldDelegate.endTimeIso != endTimeIso ||
+        !identical(oldDelegate.coverageIntervals, coverageIntervals);
   }
 }

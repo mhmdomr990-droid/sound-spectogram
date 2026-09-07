@@ -200,6 +200,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _histories = result;
         _loadingHistory = false;
       });
+      if (result.isNotEmpty) {
+        _requestStartTime = result.first.startTime;
+        _requestEndTime = result.last.endTime;
+      } else {
+        _requestStartTime = null;
+        _requestEndTime = null;
+      }
+      _liveDataNotifier.value = (List.unmodifiable(_histories), _requestStartTime, _requestEndTime);
     } on Exception catch (e) {
       if (!mounted) return;
       setState(() {
@@ -392,6 +400,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _loadingDevices = false;
       _loadingHistory = false;
     });
+    _liveDataNotifier.value = (List.unmodifiable(_histories), _requestStartTime, _requestEndTime);
   }
 
   Future<void> _logout() async {
