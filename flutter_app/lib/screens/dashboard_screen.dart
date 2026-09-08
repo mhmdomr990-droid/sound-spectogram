@@ -457,10 +457,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       backgroundColor: const Color(0xFF0A0A0A),
       appBar: AppBar(
         title: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.graphic_eq, color: scheme.primary),
-            const SizedBox(width: 8),
-            const Text('Sound Spectogram', style: TextStyle(fontSize: 14, letterSpacing: 3, fontWeight: FontWeight.bold)),
+            Icon(Icons.graphic_eq, color: scheme.primary, size: 18),
+            const SizedBox(width: 4),
+            const Flexible(
+              child: Text('Sound Spectogram', style: TextStyle(fontSize: 12, letterSpacing: 1, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+            ),
           ],
         ),
         actions: [
