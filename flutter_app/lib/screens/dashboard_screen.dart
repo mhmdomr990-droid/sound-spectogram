@@ -7,9 +7,11 @@ import '../models/device_history.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/socket_service.dart';
+import '../services/telegram_service.dart';
 import '../utils/test_data.dart';
 import '../widgets/spectrogram_canvas.dart';
 import 'fullscreen_spectrogram.dart';
+import 'notification_settings_screen.dart';
 
 enum _RangeMode { latestPacket, lastHour, last5h, last24h, followLive, custom, test }
 
@@ -97,6 +99,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _insertPacketLive(DeviceHistory h) {
+    if (h.aiStatus == AiStatus.detected) {
+      final enabled = TelegramService.isEnabled();
+      enabled.then((on) {
+        if (on) {
+          TelegramService.sendAlert(
+            device: _selected?.name ?? 'Unknown',
+            status: 'detected',
+            confidence: h.confidence?.toStringAsFixed(1) ?? 'N/A',
+            time: h.endTime ?? h.startTime ?? '',
+          );
+        }
+      });
+    }
     final newHistories = [..._histories, h]..sort((a, b) {
         final aStart = DateTime.tryParse(a.startTime ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
         final bStart = DateTime.tryParse(b.startTime ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -438,6 +453,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Notifications',
+            icon: const Icon(Icons.notifications_outlined, color: Colors.white70),
+            onPressed: () {
+              Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const NotificationSettingsScreen(),
+              ));
+            },
+          ),
           IconButton(
             tooltip: 'تقرير الأهداف',
             icon: const Icon(Icons.assessment, color: Colors.white70),
