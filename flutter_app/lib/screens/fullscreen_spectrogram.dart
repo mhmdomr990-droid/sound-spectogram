@@ -1,3 +1,4 @@
+import 'dart:typed_data' show Uint8List;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -25,6 +26,10 @@ class FullscreenSpectrogram extends StatefulWidget {
   final int seedColCount;
   final DateTime? seedStartTime;
   final DateTime? seedEndTime;
+  final Uint8List? seedIntensity;
+  final int seedIntensityWidth;
+  final int seedIntensityHeight;
+  final double seedGamma;
 
   const FullscreenSpectrogram({
     super.key,
@@ -38,6 +43,10 @@ class FullscreenSpectrogram extends StatefulWidget {
     this.seedColCount = 0,
     this.seedStartTime,
     this.seedEndTime,
+    this.seedIntensity,
+    this.seedIntensityWidth = 0,
+    this.seedIntensityHeight = 0,
+    this.seedGamma = 1.0,
   });
 
   @override
@@ -111,6 +120,10 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                     seedColCount: widget.seedColCount,
                     seedStartTime: widget.seedStartTime,
                     seedEndTime: widget.seedEndTime,
+                    seedIntensity: widget.seedIntensity,
+                    seedIntensityWidth: widget.seedIntensityWidth,
+                    seedIntensityHeight: widget.seedIntensityHeight,
+                    seedGamma: widget.seedGamma,
                     requestStartTime: startTime,
                     requestEndTime: endTime,
                     showStatusBar: true,

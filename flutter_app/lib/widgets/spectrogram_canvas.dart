@@ -52,6 +52,10 @@ class CanvasSeedSnapshot {
   final int colCount;
   final DateTime? startTime;
   final DateTime? endTime;
+  final Uint8List? cachedIntensity;
+  final int intensityWidth;
+  final int intensityHeight;
+  final double cachedGamma;
 
   const CanvasSeedSnapshot({
     this.image,
@@ -62,6 +66,10 @@ class CanvasSeedSnapshot {
     this.colCount = 0,
     this.startTime,
     this.endTime,
+    this.cachedIntensity,
+    this.intensityWidth = 0,
+    this.intensityHeight = 0,
+    this.cachedGamma = 1.0,
   });
 }
 
@@ -93,6 +101,10 @@ class SpectrogramCanvas extends StatefulWidget {
   final int seedColCount;
   final DateTime? seedStartTime;
   final DateTime? seedEndTime;
+  final Uint8List? seedIntensity;
+  final int seedIntensityWidth;
+  final int seedIntensityHeight;
+  final double seedGamma;
 
   /// Optional labels shown on the left (frequency) and bottom (time) axes.
   /// When null, generic tick labels are used.
@@ -129,6 +141,10 @@ class SpectrogramCanvas extends StatefulWidget {
     this.seedColCount = 0,
     this.seedStartTime,
     this.seedEndTime,
+    this.seedIntensity,
+    this.seedIntensityWidth = 0,
+    this.seedIntensityHeight = 0,
+    this.seedGamma = 1.0,
     this.frequencyLabels,
       this.timeLabels,
       this.requestStartTime,
@@ -186,6 +202,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     super.initState();
     _image = widget.seedImage;
     _imageOwned = false;
+    _cachedIntensity = widget.seedIntensity;
+    _cachedIntensityWidth = widget.seedIntensityWidth;
+    _cachedIntensityHeight = widget.seedIntensityHeight;
+    _cachedGamma = widget.seedGamma;
     widget.gainNotifier?.addListener(_onGainChanged);
   }
 
@@ -488,6 +508,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         endTime: histories.isNotEmpty && histories.last.endTime != null
             ? DateTime.tryParse(histories.last.endTime!)
             : null,
+        cachedIntensity: result.intensity,
+        intensityWidth: result.width,
+        intensityHeight: result.height,
+        cachedGamma: result.gamma,
       );
       final oldImage = _image;
       _imageOwned = true;

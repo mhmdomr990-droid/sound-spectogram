@@ -669,6 +669,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           seedColCount: snap?.colCount ?? 0,
           seedStartTime: snap?.startTime,
           seedEndTime: snap?.endTime,
+          seedIntensity: snap?.cachedIntensity,
+          seedIntensityWidth: snap?.intensityWidth ?? 0,
+          seedIntensityHeight: snap?.intensityHeight ?? 0,
+          seedGamma: snap?.cachedGamma ?? 1.0,
         ),
       ),
     );
