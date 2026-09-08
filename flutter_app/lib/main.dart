@@ -48,7 +48,7 @@ class _SpectroAppState extends State<SpectroApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Spectro Phone',
+      title: 'Sound Spectogram',
       debugShowCheckedModeBanner: false,
       theme: _theme(),
       initialRoute: widget.auth.isLoggedIn ? '/dashboard' : '/login',

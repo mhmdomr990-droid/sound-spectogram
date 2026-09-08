@@ -89,7 +89,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 Icon(Icons.graphic_eq, size: 72, color: scheme.primary),
                 const SizedBox(height: 12),
                 Text(
-                  'SPECTRO PHONE',
+                  'Sound Spectogram',
                   style: TextStyle(
                     color: scheme.primary,
                     fontSize: 24,
@@ -99,7 +99,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Sound spectrogram client',
+                  'Sound Spectogram',
                   style: TextStyle(color: Colors.white38, fontSize: 13),
                 ),
                 const SizedBox(height: 32),

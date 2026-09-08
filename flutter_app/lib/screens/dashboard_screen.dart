@@ -434,7 +434,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           children: [
             Icon(Icons.graphic_eq, color: scheme.primary),
             const SizedBox(width: 8),
-            const Text('SPECTRO', style: TextStyle(letterSpacing: 3, fontWeight: FontWeight.bold)),
+            const Text('Sound Spectogram', style: TextStyle(fontSize: 14, letterSpacing: 3, fontWeight: FontWeight.bold)),
           ],
         ),
         actions: [
