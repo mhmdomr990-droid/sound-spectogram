@@ -454,24 +454,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final width = dataWidth.clamp(1, 4096);
     final height = dataHeight.clamp(1, 4096);
 
-    List<List<num>> matrixToSend = renderMatrix;
-    if (dataWidth > 2048) {
-      final ratio = dataWidth / 2048;
-      final downsampledRows = <List<num>>[];
-      for (final row in renderMatrix) {
-        final newRow = List<num>.generate(2048, (c) {
-          final srcCol = (c * ratio).floor().clamp(0, row.length - 1);
-          return row[srcCol];
-        });
-        downsampledRows.add(newRow);
-      }
-      matrixToSend = downsampledRows;
-    }
-
     try {
       final result = await renderSpectrogramIsolate(
         RenderRequest(
-          matrix: matrixToSend,
+          matrix: renderMatrix,
           width: width,
           height: height,
           gamma: widget.gamma,
