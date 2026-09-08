@@ -46,6 +46,7 @@ class FullscreenSpectrogram extends StatefulWidget {
 
 class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
   late double _gainDb;
+  late final ValueNotifier<double> _gainNotifier;
   bool _controlsVisible = true;
   final _canvasKey = GlobalKey<SpectrogramCanvasState>();
 
@@ -53,6 +54,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
   void initState() {
     super.initState();
     _gainDb = widget.gainDb;
+    _gainNotifier = ValueNotifier<double>(_gainDb);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
@@ -62,6 +64,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
 
   @override
   void dispose() {
+    _gainNotifier.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
@@ -99,6 +102,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                     key: _canvasKey,
                     histories: histories,
                     gainDb: _gainDb,
+                    gainNotifier: _gainNotifier,
                     seedImage: widget.seedImage,
                     seedCachedCombined: widget.seedCachedCombined,
                     seedCachedWidth: widget.seedCachedWidth,
@@ -186,7 +190,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                               min: -24,
                                               max: 24,
                                               divisions: 48,
-                                              onChanged: (v) => setState(() => _gainDb = v),
+                                              onChanged: (v) => setState(() { _gainDb = v; _gainNotifier.value = v; }),
                                             ),
                                           ),
                                         ),

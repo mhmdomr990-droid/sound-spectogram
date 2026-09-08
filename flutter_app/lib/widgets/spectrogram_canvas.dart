@@ -431,9 +431,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   }
 
   Future<void> _render() async {
-    final renderMatrix = _resolvedMatrix();
+    final histories = widget.histories;
     final id = ++_jobId;
-    if (renderMatrix.isEmpty || _layoutSize == Size.zero) {
+    if (histories == null || histories.isEmpty || _layoutSize == Size.zero) {
       final stale = _image;
       _image = null;
       if (mounted) setState(() {});
@@ -445,32 +445,26 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       return;
     }
 
-    // Render the full matrix at its natural dimensions so the app does not
-    // crop or compress half of the spectrogram before drawing it to the screen.
-    // The painter will then scale the resulting image to the visible canvas,
-    // matching the web behavior while keeping the mobile fullscreen layout full.
-    final dataWidth = renderMatrix.isNotEmpty && renderMatrix.first.isNotEmpty ? renderMatrix.first.length : 1;
-    final dataHeight = renderMatrix.length;
-    final width = dataWidth.clamp(1, 4096);
-    final height = dataHeight.clamp(1, 4096);
-
     try {
       final result = await renderSpectrogramIsolate(
         RenderRequest(
-          matrix: renderMatrix,
-          width: width,
-          height: height,
+          matrix: const [],
+          width: 1,
+          height: 1,
           gamma: widget.gamma,
           inputValueMax: widget.inputValueMax,
-          // Match the web dashboard: when the server does not report an
-          // intensity type, infer it from the data (uint8 here) exactly like
-          // the web's resolveIntensityType -> inferImageIntensityType.
-          intensityType: widget.intensityType ?? widget.histories?.firstOrNull?.intensityType,
-          startTimeIso: widget.startTime ?? widget.histories?.firstOrNull?.startTime,
-          endTimeIso: widget.endTime ?? widget.histories?.firstOrNull?.endTime,
+          intensityType: widget.intensityType ?? histories.firstOrNull?.intensityType,
+          startTimeIso: widget.startTime ?? histories.firstOrNull?.startTime,
+          endTimeIso: widget.endTime ?? histories.lastOrNull?.endTime,
           debug: false,
           gainDb: 0.0,
           backgroundColor: widget.background.toARGB32(),
+          histories: histories.map((h) => HistoryBlock(
+            h.data, h.startTime, h.endTime, h.intensityType,
+            h.intensityRange[0], h.intensityRange[1],
+          )).toList(),
+          requestStartTime: widget.requestStartTime,
+          requestEndTime: widget.requestEndTime,
         ),
       );
       if (!mounted || id != _jobId) return;
@@ -484,15 +478,15 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       seedSnapshot = CanvasSeedSnapshot(
         image: image,
         cachedCombined: null,
-        cachedWidth: width,
-        cachedHeight: height,
+        cachedWidth: result.width,
+        cachedHeight: result.height,
         frequencyBins: null,
-        colCount: renderMatrix.isNotEmpty ? renderMatrix.first.length : 0,
-        startTime: widget.histories?.firstOrNull?.startTime != null
-            ? DateTime.tryParse(widget.histories!.first.startTime!)
+        colCount: result.width,
+        startTime: histories.firstOrNull?.startTime != null
+            ? DateTime.tryParse(histories.first.startTime!)
             : null,
-        endTime: widget.histories?.isNotEmpty == true && widget.histories!.last.endTime != null
-            ? DateTime.tryParse(widget.histories!.last.endTime!)
+        endTime: histories.isNotEmpty && histories.last.endTime != null
+            ? DateTime.tryParse(histories.last.endTime!)
             : null,
       );
       final oldImage = _image;
