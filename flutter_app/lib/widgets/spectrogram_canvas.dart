@@ -768,13 +768,23 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         }
         final img = _image;
         if (img == null) {
+          final hasData = widget.histories != null && widget.histories!.isNotEmpty;
           return Container(
             color: widget.background,
             alignment: Alignment.center,
-            child: const Text(
-              'لا توجد بيانات طيف',
-              style: TextStyle(color: Colors.white54),
-            ),
+            child: hasData
+                ? const SizedBox(
+                    width: 32,
+                    height: 32,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 3,
+                      color: Colors.white54,
+                    ),
+                  )
+                : const Text(
+                    'لا توجد بيانات طيف',
+                    style: TextStyle(color: Colors.white54),
+                  ),
           );
         }
         return SizedBox.expand(
