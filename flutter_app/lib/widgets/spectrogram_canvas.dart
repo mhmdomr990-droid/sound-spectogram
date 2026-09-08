@@ -451,7 +451,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     // matching the web behavior while keeping the mobile fullscreen layout full.
     final dataWidth = renderMatrix.isNotEmpty && renderMatrix.first.isNotEmpty ? renderMatrix.first.length : 1;
     final dataHeight = renderMatrix.length;
-    final width = dataWidth.clamp(1, 4096);
+    final width = dataWidth.clamp(1, 2048);
     final height = dataHeight.clamp(1, 4096);
 
     try {
