@@ -248,7 +248,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final labelTop = pTop + 34.0;
     const boxH = 27.0;
     const laneGap = 8.0;
-    final laneBottoms = <double>[];
+    final laneBoxes = <_LaneBox>[];
     const markerLabelStyle = TextStyle(
       color: Color(0xFFEEE88E),
       fontSize: 11,
@@ -256,7 +256,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       fontFamily: 'monospace',
     );
 
-    for (var i = markers.length - 1; i >= 0; i--) {
+    for (var i = 0; i < markers.length; i++) {
       final m = markers[i];
       final dataFrac = (m.timeMs - fromMs) / rangeMs;
       if (dataFrac < _viewportStart || dataFrac > _viewportEnd) continue;
@@ -269,19 +269,20 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         text: TextSpan(text: label, style: markerLabelStyle),
         textDirection: TextDirection.ltr,
       )..layout();
+      final boxW = max(40.0, tp.width + 20);
+      var boxLeft = (mx - boxW / 2).clamp(pLeft, pLeft + plotW - boxW);
       var laneY = labelTop;
-      for (final lb in laneBottoms) {
-        if (laneY < lb + laneGap && laneY + boxH > lb) {
-          laneY = lb + laneGap;
+      for (final lb in laneBoxes) {
+        final horizontallyOverlap = boxLeft < lb.left + lb.width && boxLeft + boxW > lb.left;
+        if (horizontallyOverlap && laneY < lb.bottom + laneGap) {
+          laneY = lb.bottom + laneGap;
         }
       }
-      final boxW = max(40.0, tp.width + 20);
-      final boxLeft = (mx - boxW / 2).clamp(pLeft, pLeft + plotW - boxW);
 
       if (position.dx >= boxLeft && position.dx <= boxLeft + boxW &&
           position.dy >= laneY && position.dy <= laneY + boxH) return i;
 
-      laneBottoms.add(laneY + boxH);
+      laneBoxes.add(_LaneBox(left: boxLeft, bottom: laneY + boxH, width: boxW));
     }
     return null;
   }
@@ -894,6 +895,13 @@ class CoverageInterval {
   const CoverageInterval({required this.startMs, required this.endMs});
 }
 
+class _LaneBox {
+  final double left;
+  final double bottom;
+  final double width;
+  const _LaneBox({required this.left, required this.bottom, required this.width});
+}
+
 class _SpectroPainter extends CustomPainter {
   final ui.Image image;
   final Color background;
@@ -1084,7 +1092,7 @@ class _SpectroPainter extends CustomPainter {
         final labelTop = pTop + 34.0;
         const boxH = 27.0;
         const laneGap = 8.0;
-        final laneBottoms = <double>[];
+        final laneBoxes = <_LaneBox>[];
         for (final m in markers) {
           final dataFrac = (m.timeMs - dataFromMs) / rangeMs;
           if (dataFrac < viewportStart - 0.01 || dataFrac > viewportEnd + 0.01) continue;
@@ -1098,18 +1106,19 @@ class _SpectroPainter extends CustomPainter {
             text: TextSpan(text: label, style: markerLabelStyle),
             textDirection: TextDirection.ltr,
           )..layout();
+          final boxW = max(40.0, tp.width + 20);
+          var boxLeft = (mx - boxW / 2).clamp(pLeft, pLeft + plotW - boxW);
           var laneY = labelTop;
-          for (final lb in laneBottoms) {
-            if (laneY < lb + laneGap && laneY + boxH > lb) {
-              laneY = lb + laneGap;
+          for (final lb in laneBoxes) {
+            final horizontallyOverlap = boxLeft < lb.left + lb.width && boxLeft + boxW > lb.left;
+            if (horizontallyOverlap && laneY < lb.bottom + laneGap) {
+              laneY = lb.bottom + laneGap;
             }
           }
-          final boxW = max(40.0, tp.width + 20);
-          final boxLeft = (mx - boxW / 2).clamp(pLeft, pLeft + plotW - boxW);
           canvas.drawRect(Rect.fromLTWH(boxLeft, laneY, boxW, boxH), markerLabelBgPaint);
           canvas.drawRect(Rect.fromLTWH(boxLeft, laneY, boxW, boxH), markerLabelBorderPaint);
           tp.paint(canvas, Offset(boxLeft + (boxW - tp.width) / 2, laneY + (boxH - tp.height) / 2));
-          laneBottoms.add(laneY + boxH);
+          laneBoxes.add(_LaneBox(left: boxLeft, bottom: laneY + boxH, width: boxW));
         }
       }
     }
