@@ -810,18 +810,24 @@ class _SpectroPainter extends CustomPainter {
         : dataToMs;
 
     // 2b) Gap overlays using column-based positioning (matches image layout).
+    // Scale factor: the image may be clamped to 4096px but totalCols can be
+    // larger. Coverage intervals are in data-column units so we must scale
+    // them to image-pixel units for correct alignment.
     if (coverageIntervals != null && coverageIntervals!.isNotEmpty && span > 0 && totalCols > 0) {
-      final tc = totalCols;
-      final visStartCol = (viewportStart * tc).round();
-      final visEndCol = (viewportEnd * tc).round();
+      final double gapScale = image.width.toDouble() / totalCols;
+      final int imgCols = image.width;
+      final visStartCol = (viewportStart * imgCols).round();
+      final visEndCol = (viewportEnd * imgCols).round();
       final visCols = visEndCol - visStartCol;
       if (visCols > 0) {
         final sorted = List<CoverageInterval>.from(coverageIntervals!)
           ..sort((a, b) => a.startMs.compareTo(b.startMs));
         final merged = <CoverageInterval>[];
         for (final iv in sorted) {
-          final clippedStart = iv.startMs.clamp(visStartCol, visEndCol);
-          final clippedEnd = iv.endMs.clamp(visStartCol, visEndCol);
+          final scaledStart = (iv.startMs * gapScale).round();
+          final scaledEnd = (iv.endMs * gapScale).round();
+          final clippedStart = scaledStart.clamp(visStartCol, visEndCol);
+          final clippedEnd = scaledEnd.clamp(visStartCol, visEndCol);
           if (clippedEnd <= clippedStart) continue;
           if (merged.isNotEmpty && clippedStart <= merged.last.endMs) {
             merged[merged.length - 1] = CoverageInterval(
