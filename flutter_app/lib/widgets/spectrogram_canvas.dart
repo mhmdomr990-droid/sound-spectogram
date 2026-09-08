@@ -451,13 +451,27 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     // matching the web behavior while keeping the mobile fullscreen layout full.
     final dataWidth = renderMatrix.isNotEmpty && renderMatrix.first.isNotEmpty ? renderMatrix.first.length : 1;
     final dataHeight = renderMatrix.length;
-    final width = dataWidth.clamp(1, 2048);
+    final width = dataWidth.clamp(1, 4096);
     final height = dataHeight.clamp(1, 4096);
+
+    List<List<num>> matrixToSend = renderMatrix;
+    if (dataWidth > 2048) {
+      final ratio = dataWidth / 2048;
+      final downsampledRows = <List<num>>[];
+      for (final row in renderMatrix) {
+        final newRow = List<num>.generate(2048, (c) {
+          final srcCol = (c * ratio).floor().clamp(0, row.length - 1);
+          return row[srcCol];
+        });
+        downsampledRows.add(newRow);
+      }
+      matrixToSend = downsampledRows;
+    }
 
     try {
       final result = await renderSpectrogramIsolate(
         RenderRequest(
-          matrix: renderMatrix,
+          matrix: matrixToSend,
           width: width,
           height: height,
           gamma: widget.gamma,
