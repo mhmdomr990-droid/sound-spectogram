@@ -228,6 +228,18 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final oldImage = _image;
     _imageOwned = true;
     _image = image;
+    if (seedSnapshot != null) {
+      seedSnapshot = CanvasSeedSnapshot(
+        image: image,
+        cachedCombined: seedSnapshot!.cachedCombined,
+        cachedWidth: seedSnapshot!.cachedWidth,
+        cachedHeight: seedSnapshot!.cachedHeight,
+        frequencyBins: seedSnapshot!.frequencyBins,
+        colCount: seedSnapshot!.colCount,
+        startTime: seedSnapshot!.startTime,
+        endTime: seedSnapshot!.endTime,
+      );
+    }
     setState(() {});
     if (oldImage != null && oldImage != image) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
