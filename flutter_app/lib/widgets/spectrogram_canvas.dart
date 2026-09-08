@@ -193,12 +193,11 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     });
   }
 
-  int? _markerHitTest(Offset position) {
+  int? _markerLineHitTest(Offset position) {
     final w = _layoutSize.width;
     if (w <= 0 || _image == null) return null;
     final pLeft = 40.0;
     final pRight = 6.0;
-    final pTop = 4.0;
     final plotW = w - pLeft - pRight;
     if (plotW <= 0) return null;
 
@@ -223,7 +222,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     return null;
   }
 
-  int? _hitTestMarkerLabel(Offset position) {
+  int? _markerHitTest(Offset position) {
+    final lineIdx = _markerLineHitTest(position);
+    if (lineIdx != null) return lineIdx;
+
     final w = _layoutSize.width;
     if (w <= 0 || _image == null) return null;
     final pLeft = 40.0;
@@ -243,16 +245,43 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     if (span <= 0) return null;
 
     final markers = widget.markers;
+    final labelTop = pTop + 34.0;
+    const boxH = 27.0;
+    const laneGap = 8.0;
+    final laneBottoms = <double>[];
+    const markerLabelStyle = TextStyle(
+      color: Color(0xFFEEE88E),
+      fontSize: 11,
+      fontWeight: FontWeight.bold,
+      fontFamily: 'monospace',
+    );
+
     for (var i = markers.length - 1; i >= 0; i--) {
       final m = markers[i];
       final dataFrac = (m.timeMs - fromMs) / rangeMs;
       if (dataFrac < _viewportStart || dataFrac > _viewportEnd) continue;
       final mx = pLeft + ((dataFrac - _viewportStart) / span) * plotW;
-      final labelTop = pTop + 34.0;
-      const labelH = 27.0;
-      if ((position.dx - mx).abs() < 30 && position.dy >= labelTop && position.dy <= labelTop + labelH) {
-        return i;
+
+      final dt = DateTime.fromMillisecondsSinceEpoch(m.timeMs, isUtc: true);
+      final localDt = dt.toLocal();
+      final label = '${localDt.year.toString().padLeft(4, '0')}-${localDt.month.toString().padLeft(2, '0')}-${localDt.day.toString().padLeft(2, '0')} ${localDt.hour.toString().padLeft(2, '0')}:${localDt.minute.toString().padLeft(2, '0')}:${localDt.second.toString().padLeft(2, '0')}';
+      final tp = TextPainter(
+        text: TextSpan(text: label, style: markerLabelStyle),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      var laneY = labelTop;
+      for (final lb in laneBottoms) {
+        if (laneY < lb + laneGap && laneY + boxH > lb) {
+          laneY = lb + laneGap;
+        }
       }
+      final boxW = max(40.0, tp.width + 20);
+      final boxLeft = (mx - boxW / 2).clamp(pLeft, pLeft + plotW - boxW);
+
+      if (position.dx >= boxLeft && position.dx <= boxLeft + boxW &&
+          position.dy >= laneY && position.dy <= laneY + boxH) return i;
+
+      laneBottoms.add(laneY + boxH);
     }
     return null;
   }
@@ -753,13 +782,13 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
             color: widget.background,
             child: GestureDetector(
               onDoubleTapDown: (details) {
-                final idx = _markerHitTest(details.localPosition);
+                final idx = _markerLineHitTest(details.localPosition);
                 if (idx != null) return;
                 final timeMs = _timeMsFromPosition(details.localPosition);
                 if (timeMs != null) widget.onMarkerAdd?.call(timeMs);
               },
               onTapDown: (details) {
-                final idx = _markerHitTest(details.localPosition);
+                final idx = _markerLineHitTest(details.localPosition);
                 if (idx != null) {
                   widget.onMarkerRemove?.call(idx);
                   return;
