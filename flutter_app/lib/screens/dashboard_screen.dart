@@ -203,7 +203,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           break;
         case _RangeMode.last5h:
           final to = DateTime.now();
-          final from = to.subtract(const Duration(hours: 5));
+          final from = to.subtract(const Duration(hours: 3));
           result = await widget.api.fetchHistory(device.id, from: from, to: to);
           break;
         case _RangeMode.last24h:
@@ -593,7 +593,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ),
                 btn('آخر ساعة', Icons.timer, () => _setRange(_RangeMode.lastHour), active: mode(_RangeMode.lastHour)),
-                btn('آخر 5 ساعات', Icons.history, () => _setRange(_RangeMode.last5h), active: mode(_RangeMode.last5h)),
+                btn('آخر 3 ساعات', Icons.history, () => _setRange(_RangeMode.last5h), active: mode(_RangeMode.last5h)),
                 btn('تحميل النطاق', Icons.date_range, _pickCustomRange, active: mode(_RangeMode.custom)),
                 btn('اختبار', Icons.science, _setTestMode, active: mode(_RangeMode.test)),
               ],
