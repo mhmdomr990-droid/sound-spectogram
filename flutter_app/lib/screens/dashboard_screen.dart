@@ -81,6 +81,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _bindSocket() {
     _statusSub = widget.socket.onStatus.listen((s) {
       if (mounted) setState(() => _socketStatus = s);
+      _onSocketStatusChanged(s);
     });
     _dataSub = widget.socket.onData.listen((h) {
       if (!mounted || !_followLiveActive || _selected == null) return;
@@ -96,6 +97,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _insertPacketLive(h);
     });
     widget.socket.connect(_hostFromApi(), token: widget.auth.token);
+  }
+
+  void _onSocketStatusChanged(SocketStatus s) async {
+    final enabled = await TelegramService.isEnabled();
+    if (!enabled) return;
+    if (s == SocketStatus.connected) {
+      TelegramService.sendConnectionAlert('connected');
+    } else if (s == SocketStatus.disconnected) {
+      TelegramService.sendConnectionAlert('disconnected');
+    }
   }
 
   void _insertPacketLive(DeviceHistory h) {
