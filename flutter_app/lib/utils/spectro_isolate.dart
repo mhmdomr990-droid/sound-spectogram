@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -97,31 +98,105 @@ class RenderResult {
   const RenderResult(this.rgba, this.width, this.height, {this.intensity, this.gamma = 1.0});
 }
 
-Future<RenderResult> renderSpectrogramIsolate(RenderRequest req) async {
-  final result = await compute((RenderRequest request) {
-    return buildRgba(
-      request.matrix,
-      width: request.width,
-      height: request.height,
-      gamma: request.gamma,
-      inputValueMax: request.inputValueMax,
-      noiseThreshold: request.noiseThreshold,
-      noiseFloorPercentile: request.noiseFloorPercentile,
-      isolatedPixelRemovalEnabled: request.isolatedPixelRemovalEnabled,
-      morphologyEnabled: request.morphologyEnabled,
-      neighborhoodSize: request.neighborhoodSize,
-      minActiveNeighbors: request.minActiveNeighbors,
-      intensityType: request.intensityType,
-      dbMin: request.dbMin,
-      dbMax: request.dbMax,
-      debug: request.debug,
-      gainDb: request.gainDb,
-      startTimeIso: request.startTimeIso,
-      endTimeIso: request.endTimeIso,
-      backgroundColor: request.backgroundColor,
+// ---------------------------------------------------------------------------
+// Persistent Isolate — avoids spawning a new isolate per render
+// ---------------------------------------------------------------------------
+
+class _SpectroIsolateWorker {
+  Isolate? _isolate;
+  SendPort? _sendPort;
+  ReceivePort? _receivePort;
+  ReceivePort? _commandPort;
+  bool _initialized = false;
+
+  Future<void> _ensureInitialized() async {
+    if (_initialized && _isolate != null) return;
+
+    _receivePort = ReceivePort();
+    _commandPort = ReceivePort();
+
+    _isolate = await Isolate.spawn(
+      _isolateEntry,
+      _receivePort!.sendPort,
+      debugName: 'spectro-render',
     );
-  }, req);
-  return RenderResult(result.rgba, result.width, result.height, intensity: result.intensity, gamma: result.gamma);
+
+    _sendPort = await _receivePort!.first as SendPort;
+    _initialized = true;
+  }
+
+  Future<RenderResult> render(RenderRequest req) async {
+    await _ensureInitialized();
+
+    final resultPort = ReceivePort();
+    _sendPort!.send([req, resultPort.sendPort]);
+
+    final result = await resultPort.first;
+    resultPort.close();
+
+    if (result is String) {
+      throw StateError('Isolate render failed: $result');
+    }
+    return result as RenderResult;
+  }
+
+  void dispose() {
+    _isolate?.kill(priority: Isolate.immediate);
+    _isolate = null;
+    _receivePort?.close();
+    _commandPort?.close();
+    _sendPort = null;
+    _initialized = false;
+  }
+}
+
+void _isolateEntry(SendPort mainSendPort) {
+  final port = ReceivePort();
+  mainSendPort.send(port.sendPort);
+
+  port.listen((message) {
+    final req = message[0] as RenderRequest;
+    final replyTo = message[1] as SendPort;
+
+    try {
+      final result = buildRgba(
+        req.matrix,
+        width: req.width,
+        height: req.height,
+        gamma: req.gamma,
+        inputValueMax: req.inputValueMax,
+        noiseThreshold: req.noiseThreshold,
+        noiseFloorPercentile: req.noiseFloorPercentile,
+        isolatedPixelRemovalEnabled: req.isolatedPixelRemovalEnabled,
+        morphologyEnabled: req.morphologyEnabled,
+        neighborhoodSize: req.neighborhoodSize,
+        minActiveNeighbors: req.minActiveNeighbors,
+        intensityType: req.intensityType,
+        dbMin: req.dbMin,
+        dbMax: req.dbMax,
+        debug: req.debug,
+        gainDb: req.gainDb,
+        startTimeIso: req.startTimeIso,
+        endTimeIso: req.endTimeIso,
+        backgroundColor: req.backgroundColor,
+      );
+      replyTo.send(RenderResult(result.rgba, result.width, result.height, intensity: result.intensity, gamma: result.gamma));
+    } catch (e) {
+      replyTo.send(e.toString());
+    }
+  });
+}
+
+/// Singleton persistent isolate worker — reused across all renders.
+final _SpectroIsolateWorker _worker = _SpectroIsolateWorker();
+
+/// Dispose the persistent isolate. Call when the app is shutting down.
+void disposeSpectroIsolate() {
+  _worker.dispose();
+}
+
+Future<RenderResult> renderSpectrogramIsolate(RenderRequest req) async {
+  return _worker.render(req);
 }
 
 Future<ui.Image> rgbaToUiImage(Uint8List rgba, int width, int height) async {
