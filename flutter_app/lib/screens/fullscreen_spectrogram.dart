@@ -5,13 +5,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/device_history.dart';
+import '../models/marker.dart';
 import '../widgets/spectrogram_canvas.dart';
 
 class FullscreenResult {
   final double gainDb;
+  final List<MarkerData> markers;
 
   const FullscreenResult({
     required this.gainDb,
+    required this.markers,
   });
 }
 
@@ -30,6 +33,7 @@ class FullscreenSpectrogram extends StatefulWidget {
   final int seedIntensityWidth;
   final int seedIntensityHeight;
   final double seedGamma;
+  final List<MarkerData> markers;
 
   const FullscreenSpectrogram({
     super.key,
@@ -47,6 +51,7 @@ class FullscreenSpectrogram extends StatefulWidget {
     this.seedIntensityWidth = 0,
     this.seedIntensityHeight = 0,
     this.seedGamma = 1.0,
+    this.markers = const [],
   });
 
   @override
@@ -56,6 +61,7 @@ class FullscreenSpectrogram extends StatefulWidget {
 class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
   late double _gainDb;
   late final ValueNotifier<double> _gainNotifier;
+  late List<MarkerData> _markers;
   bool _controlsVisible = true;
   final _canvasKey = GlobalKey<SpectrogramCanvasState>();
 
@@ -64,6 +70,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
     super.initState();
     _gainDb = widget.gainDb;
     _gainNotifier = ValueNotifier<double>(_gainDb);
+    _markers = List<MarkerData>.from(widget.markers);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
@@ -85,6 +92,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
   void _exit() {
     Navigator.of(context).pop(FullscreenResult(
       gainDb: _gainDb,
+      markers: _markers,
     ));
   }
 
@@ -128,6 +136,15 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                     requestEndTime: endTime,
                     showStatusBar: true,
                     compactStatusBar: true,
+                    markers: _markers,
+                    onMarkerAdd: (timeMs) => setState(() => _markers = [..._markers, MarkerData(timeMs: timeMs)]),
+                    onMarkerRemove: (index) => setState(() {
+                      _markers = List<MarkerData>.from(_markers)..removeAt(index);
+                    }),
+                    onMarkerMove: (index, newTimeMs) => setState(() {
+                      _markers = List<MarkerData>.from(_markers);
+                      _markers[index] = MarkerData(timeMs: newTimeMs);
+                    }),
                   );
                 },
               ),

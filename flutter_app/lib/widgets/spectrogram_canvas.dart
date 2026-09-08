@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import '../models/device_history.dart';
+import '../models/marker.dart';
 import '../utils/spectro_isolate.dart';
 
 const List<List<double>> kColorMapMagma = [
@@ -117,6 +118,10 @@ class SpectrogramCanvas extends StatefulWidget {
   final ValueNotifier<double>? gainNotifier;
   final bool showStatusBar;
   final bool compactStatusBar;
+  final List<MarkerData> markers;
+  final ValueChanged<int>? onMarkerAdd;
+  final void Function(int index)? onMarkerRemove;
+  final void Function(int index, int newTimeMs)? onMarkerMove;
 
   const SpectrogramCanvas({
     super.key,
@@ -152,6 +157,10 @@ class SpectrogramCanvas extends StatefulWidget {
       this.gainNotifier,
       this.showStatusBar = true,
       this.compactStatusBar = false,
+      this.markers = const [],
+      this.onMarkerAdd,
+      this.onMarkerRemove,
+      this.onMarkerMove,
   });
 
   @override
@@ -167,6 +176,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   double _scaleStart = 1.0;
   Offset _lastFocalPoint = Offset.zero;
 
+  // Marker drag state
+  int _draggingMarkerIndex = -1;
+  double _markerDragStartX = 0;
+
   void forceRender() {
     if (!mounted) return;
     _renderDebounce?.cancel();
@@ -179,6 +192,94 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _viewportEnd = 1.0;
     });
   }
+
+  int? _markerHitTest(Offset position) {
+    final w = _layoutSize.width;
+    if (w <= 0 || _image == null) return null;
+    final pLeft = 40.0;
+    final pRight = 6.0;
+    final pTop = 4.0;
+    final plotW = w - pLeft - pRight;
+    if (plotW <= 0) return null;
+
+    final histories = widget.histories;
+    if (histories == null || histories.isEmpty) return null;
+    final fromMs = _stateParseMs(widget.requestStartTime ?? histories.first.startTime);
+    final toMs = _stateParseMs(widget.requestEndTime ?? histories.last.endTime);
+    if (fromMs == null || toMs == null || toMs <= fromMs) return null;
+    final rangeMs = toMs - fromMs;
+
+    final span = _viewportEnd - _viewportStart;
+    if (span <= 0) return null;
+
+    final markers = widget.markers;
+    for (var i = markers.length - 1; i >= 0; i--) {
+      final m = markers[i];
+      final dataFrac = (m.timeMs - fromMs) / rangeMs;
+      if (dataFrac < _viewportStart || dataFrac > _viewportEnd) continue;
+      final mx = pLeft + ((dataFrac - _viewportStart) / span) * plotW;
+      if ((position.dx - mx).abs() < 8) return i;
+    }
+    return null;
+  }
+
+  int? _hitTestMarkerLabel(Offset position) {
+    final w = _layoutSize.width;
+    if (w <= 0 || _image == null) return null;
+    final pLeft = 40.0;
+    final pRight = 6.0;
+    final pTop = 4.0;
+    final plotW = w - pLeft - pRight;
+    if (plotW <= 0) return null;
+
+    final histories = widget.histories;
+    if (histories == null || histories.isEmpty) return null;
+    final fromMs = _stateParseMs(widget.requestStartTime ?? histories.first.startTime);
+    final toMs = _stateParseMs(widget.requestEndTime ?? histories.last.endTime);
+    if (fromMs == null || toMs == null || toMs <= fromMs) return null;
+    final rangeMs = toMs - fromMs;
+
+    final span = _viewportEnd - _viewportStart;
+    if (span <= 0) return null;
+
+    final markers = widget.markers;
+    for (var i = markers.length - 1; i >= 0; i--) {
+      final m = markers[i];
+      final dataFrac = (m.timeMs - fromMs) / rangeMs;
+      if (dataFrac < _viewportStart || dataFrac > _viewportEnd) continue;
+      final mx = pLeft + ((dataFrac - _viewportStart) / span) * plotW;
+      final labelTop = pTop + 34.0;
+      const labelH = 27.0;
+      if ((position.dx - mx).abs() < 30 && position.dy >= labelTop && position.dy <= labelTop + labelH) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  int? _timeMsFromPosition(Offset position) {
+    final w = _layoutSize.width;
+    if (w <= 0 || _image == null) return null;
+    final pLeft = 40.0;
+    final pRight = 6.0;
+    final plotW = w - pLeft - pRight;
+    if (plotW <= 0) return null;
+
+    final histories = widget.histories;
+    if (histories == null || histories.isEmpty) return null;
+    final fromMs = _stateParseMs(widget.requestStartTime ?? histories.first.startTime);
+    final toMs = _stateParseMs(widget.requestEndTime ?? histories.last.endTime);
+    if (fromMs == null || toMs == null || toMs <= fromMs) return null;
+    final rangeMs = toMs - fromMs;
+
+    final span = _viewportEnd - _viewportStart;
+    if (span <= 0) return null;
+
+    final dataFrac = _viewportStart + ((position.dx - pLeft) / plotW) * span;
+    final timeMs = (fromMs + dataFrac * rangeMs).round();
+    return timeMs;
+  }
+
   ui.Image? _image;
   bool _imageOwned = false;
   int _jobId = 0;
@@ -651,14 +752,38 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
           child: Container(
             color: widget.background,
             child: GestureDetector(
+              onDoubleTapDown: (details) {
+                final idx = _markerHitTest(details.localPosition);
+                if (idx != null) return;
+                final timeMs = _timeMsFromPosition(details.localPosition);
+                if (timeMs != null) widget.onMarkerAdd?.call(timeMs);
+              },
+              onTapDown: (details) {
+                final idx = _markerHitTest(details.localPosition);
+                if (idx != null) {
+                  widget.onMarkerRemove?.call(idx);
+                  return;
+                }
+              },
               onScaleStart: (details) {
                 _scaleStart = _viewportEnd - _viewportStart;
                 _lastFocalPoint = details.focalPoint;
+                if (details.pointerCount == 1) {
+                  final local = details.localFocalPoint ?? details.focalPoint;
+                  final markerIdx = _markerHitTest(local);
+                  if (markerIdx != null) {
+                    _draggingMarkerIndex = markerIdx;
+                    _markerDragStartX = local.dx;
+                  } else {
+                    _draggingMarkerIndex = -1;
+                  }
+                }
               },
               onScaleUpdate: (details) {
                 final w = _layoutSize.width;
                 if (w <= 0) return;
                 if (details.pointerCount == 2) {
+                  _draggingMarkerIndex = -1;
                   final newSpan = (_scaleStart / details.scale).clamp(0.005, 5.0);
                   final anchor = (_lastFocalPoint.dx / w).clamp(0.0, 1.0);
                   final center = _viewportStart + (_viewportEnd - _viewportStart) * anchor;
@@ -668,16 +793,31 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                   if (newEnd > 1.0 + newSpan * 0.8) newEnd = 1.0 + newSpan * 0.8;
                   setState(() { _viewportStart = newStart; _viewportEnd = newEnd; });
                 } else if (details.pointerCount == 1) {
-                  final dx = details.focalPoint.dx - _lastFocalPoint.dx;
-                  _lastFocalPoint = details.focalPoint;
-                  final span = _viewportEnd - _viewportStart;
-                  final shift = dx / w * span;
-                  var newStart = _viewportStart - shift;
-                  var newEnd = _viewportEnd - shift;
-                  if (newStart < -(span * 0.8)) newStart = -(span * 0.8);
-                  if (newEnd > 1.0 + span * 0.8) newEnd = 1.0 + span * 0.8;
-                  setState(() { _viewportStart = newStart; _viewportEnd = newEnd; });
+                  final local = details.localFocalPoint ?? details.focalPoint;
+                  if (_draggingMarkerIndex >= 0) {
+                    final dx = (local.dx - _markerDragStartX).abs();
+                    if (dx > 4) {
+                      final newTimeMs = _timeMsFromPosition(local);
+                      if (newTimeMs != null) {
+                        widget.onMarkerMove?.call(_draggingMarkerIndex, newTimeMs);
+                      }
+                      _markerDragStartX = local.dx;
+                    }
+                  } else {
+                    final dx = details.focalPoint.dx - _lastFocalPoint.dx;
+                    _lastFocalPoint = details.focalPoint;
+                    final span = _viewportEnd - _viewportStart;
+                    final shift = dx / w * span;
+                    var newStart = _viewportStart - shift;
+                    var newEnd = _viewportEnd - shift;
+                    if (newStart < -(span * 0.8)) newStart = -(span * 0.8);
+                    if (newEnd > 1.0 + span * 0.8) newEnd = 1.0 + span * 0.8;
+                    setState(() { _viewportStart = newStart; _viewportEnd = newEnd; });
+                  }
                 }
+              },
+              onScaleEnd: (details) {
+                _draggingMarkerIndex = -1;
               },
               child: RepaintBoundary(
                 child: CustomPaint(
@@ -697,6 +837,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                     histories: widget.histories,
                     showStatusBar: widget.showStatusBar,
                     compactStatusBar: widget.compactStatusBar,
+                    markers: widget.markers,
                   ),
                 ),
               ),
@@ -729,6 +870,7 @@ class _SpectroPainter extends CustomPainter {
   final List<DeviceHistory>? histories;
   final bool showStatusBar;
   final bool compactStatusBar;
+  final List<MarkerData> markers;
 
   _SpectroPainter(this.image,
       {this.background = const Color(0xFF111026),
@@ -743,7 +885,8 @@ class _SpectroPainter extends CustomPainter {
       this.totalCols = 0,
       this.histories,
       this.showStatusBar = true,
-      this.compactStatusBar = false});
+      this.compactStatusBar = false,
+      this.markers = const []});
 
   static const double _leftInset = 40;
   static const double _rightInset = 6;
@@ -875,6 +1018,59 @@ class _SpectroPainter extends CustomPainter {
             )..layout();
             gt.paint(canvas, Offset(gx0 + gw / 2 - gt.width / 2, pTop + 4));
           }
+        }
+      }
+    }
+
+    // 2c) Time markers (gold vertical lines with labels).
+    if (markers.isNotEmpty && span > 0) {
+      final dataFromMs = _parseMs(startTimeIso);
+      final dataToMs = _parseMs(endTimeIso);
+      if (dataFromMs != null && dataToMs != null && dataToMs > dataFromMs) {
+        final rangeMs = dataToMs - dataFromMs;
+        final markerLinePaint = Paint()
+          ..color = const Color(0xF2FFD60A)
+          ..strokeWidth = 1.2;
+        final markerLabelBgPaint = Paint()..color = const Color(0xDC12161E);
+        final markerLabelBorderPaint = Paint()
+          ..color = const Color(0xF2FFD60A)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1;
+        const markerLabelStyle = TextStyle(
+          color: Color(0xFFEEE88E),
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          fontFamily: 'monospace',
+        );
+        final labelTop = pTop + 34.0;
+        const boxH = 27.0;
+        const laneGap = 8.0;
+        final laneBottoms = <double>[];
+        for (final m in markers) {
+          final dataFrac = (m.timeMs - dataFromMs) / rangeMs;
+          if (dataFrac < viewportStart - 0.01 || dataFrac > viewportEnd + 0.01) continue;
+          final mx = pLeft + ((dataFrac - viewportStart) / span) * plotW;
+          if (mx < pLeft || mx > pLeft + plotW) continue;
+          canvas.drawLine(Offset(mx, pTop), Offset(mx, pTop + plotH), markerLinePaint);
+          final dt = DateTime.fromMillisecondsSinceEpoch(m.timeMs, isUtc: true);
+          final local = dt.toLocal();
+          final label = '${local.year.toString().padLeft(4, '0')}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}:${local.second.toString().padLeft(2, '0')}';
+          final tp = TextPainter(
+            text: TextSpan(text: label, style: markerLabelStyle),
+            textDirection: TextDirection.ltr,
+          )..layout();
+          var laneY = labelTop;
+          for (final lb in laneBottoms) {
+            if (laneY < lb + laneGap && laneY + boxH > lb) {
+              laneY = lb + laneGap;
+            }
+          }
+          final boxW = max(40.0, tp.width + 20);
+          final boxLeft = (mx - boxW / 2).clamp(pLeft, pLeft + plotW - boxW);
+          canvas.drawRect(Rect.fromLTWH(boxLeft, laneY, boxW, boxH), markerLabelBgPaint);
+          canvas.drawRect(Rect.fromLTWH(boxLeft, laneY, boxW, boxH), markerLabelBorderPaint);
+          tp.paint(canvas, Offset(boxLeft + (boxW - tp.width) / 2, laneY + (boxH - tp.height) / 2));
+          laneBottoms.add(laneY + boxH);
         }
       }
     }
@@ -1050,6 +1246,7 @@ class _SpectroPainter extends CustomPainter {
         oldDelegate.showStatusBar != showStatusBar ||
         oldDelegate.compactStatusBar != compactStatusBar ||
         !identical(oldDelegate.coverageIntervals, coverageIntervals) ||
-        !identical(oldDelegate.histories, histories);
+        !identical(oldDelegate.histories, histories) ||
+        !identical(oldDelegate.markers, markers);
   }
 }

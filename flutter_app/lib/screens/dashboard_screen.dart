@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../models/device.dart';
 import '../models/device_history.dart';
+import '../models/marker.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/socket_service.dart';
@@ -37,6 +38,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Device> _devices = [];
   Device? _selected;
   List<DeviceHistory> _histories = [];
+  List<MarkerData> _markers = [];
   final ValueNotifier<(List<DeviceHistory>, String?, String?)> _liveDataNotifier = ValueNotifier((const [], null, null));
   bool _loadingDevices = true;
   bool _loadingHistory = false;
@@ -596,6 +598,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 btn('آخر ساعتين', Icons.history, () => _setRange(_RangeMode.last5h), active: mode(_RangeMode.last5h)),
                 btn('تحميل النطاق', Icons.date_range, _pickCustomRange, active: mode(_RangeMode.custom)),
                 btn('اختبار', Icons.science, _setTestMode, active: mode(_RangeMode.test)),
+                if (_markers.isNotEmpty)
+                  btn('إزالة العلامات', Icons.clear, () => setState(() => _markers = [])),
               ],
             ),
           ),
@@ -673,6 +677,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           seedIntensityWidth: snap?.intensityWidth ?? 0,
           seedIntensityHeight: snap?.intensityHeight ?? 0,
           seedGamma: snap?.cachedGamma ?? 1.0,
+          markers: _markers,
         ),
       ),
     );
@@ -680,6 +685,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _gainDb = result.gainDb;
         _gainNotifier.value = result.gainDb;
+        _markers = result.markers;
       });
       _canvasKey.currentState?.forceRender();
     }
@@ -726,6 +732,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         gainNotifier: _gainNotifier,
         requestStartTime: _requestStartTime,
         requestEndTime: _requestEndTime,
+        markers: _markers,
+        onMarkerAdd: (timeMs) => setState(() => _markers = [..._markers, MarkerData(timeMs: timeMs)]),
+        onMarkerRemove: (index) => setState(() {
+          _markers = List<MarkerData>.from(_markers)..removeAt(index);
+        }),
+        onMarkerMove: (index, newTimeMs) => setState(() {
+          _markers = List<MarkerData>.from(_markers);
+          _markers[index] = MarkerData(timeMs: newTimeMs);
+        }),
       ),
     );
   }
