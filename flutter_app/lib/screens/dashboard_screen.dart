@@ -284,7 +284,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
       return;
     }
+    if (to.difference(from) > const Duration(hours: 2)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('النطاق الأقصى ساعتان')),
+      );
+      return;
+    }
 
+    _stopPolling();
     setState(() => _rangeMode = _RangeMode.custom);
     final device = _selected;
     if (device == null) return;
@@ -298,7 +306,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _histories = result;
         _loadingHistory = false;
+        _requestStartTime = from.toIso8601String();
+        _requestEndTime = to.toIso8601String();
       });
+      _liveDataNotifier.value = (List.unmodifiable(_histories), _requestStartTime, _requestEndTime);
     } on Exception catch (e) {
       if (!mounted) return;
       setState(() {

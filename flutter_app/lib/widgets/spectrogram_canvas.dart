@@ -1000,9 +1000,6 @@ class _SpectroPainter extends CustomPainter {
         : dataToMs;
 
     // 2b) Gap overlays using column-based positioning (matches image layout).
-    // Scale factor: the image may be clamped to 4096px but totalCols can be
-    // larger. Coverage intervals are in data-column units so we must scale
-    // them to image-pixel units for correct alignment.
     if (coverageIntervals != null && coverageIntervals!.isNotEmpty && span > 0 && totalCols > 0) {
       final double gapScale = image.width.toDouble() / totalCols;
       final int imgCols = image.width;

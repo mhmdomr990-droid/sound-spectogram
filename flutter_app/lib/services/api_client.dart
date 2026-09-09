@@ -95,7 +95,7 @@ class ApiClient {
   }
 
   Future<List<DeviceHistory>> fetchHistory(int deviceId, {DateTime? from, DateTime? to}) async {
-    final query = <String, String>{'decode': '1'};
+    final query = <String, String>{};
     if (from != null && to != null) {
       query['from'] = _formatNaive(from);
       query['to'] = _formatNaive(to);
