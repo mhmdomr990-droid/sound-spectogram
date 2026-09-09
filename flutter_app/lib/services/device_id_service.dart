@@ -15,4 +15,8 @@ class DeviceIdService {
     await _storage.write(key: _key, value: newId);
     return newId;
   }
+
+  Future<void> reset() async {
+    await _storage.delete(key: _key);
+  }
 }

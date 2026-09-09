@@ -33,7 +33,7 @@ Future<void> main() async {
         Get.find<ApiClient>(),
         Get.find<AuthService>(),
         Get.find<SocketService>(),
-      ));
+      ), fenix: true);
 
   runApp(const SpectroApp());
 }

@@ -94,6 +94,15 @@ class AuthController extends GetxController {
     isLoggedIn.value = false;
   }
 
+  Future<void> resetApp() async {
+    await logout();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    await DeviceIdService().reset();
+    savedUsername.value = '';
+    savedPassword.value = '';
+  }
+
   String? get token => _auth.token;
   AuthUser? get user => _auth.user;
 }

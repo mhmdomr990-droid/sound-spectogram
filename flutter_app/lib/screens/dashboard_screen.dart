@@ -51,6 +51,11 @@ class DashboardScreen extends StatelessWidget {
             onPressed: () => _showAIReport(context, controller),
           ),
           IconButton(
+            tooltip: 'إزالة الربط',
+            icon: const Icon(Icons.link_off, color: Colors.white70),
+            onPressed: () => _confirmUnlink(context),
+          ),
+          IconButton(
             tooltip: 'تسجيل الخروج',
             icon: const Icon(Icons.logout),
             onPressed: () async {
@@ -337,6 +342,36 @@ class DashboardScreen extends StatelessWidget {
         ),
       );
     });
+  }
+
+  void _confirmUnlink(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('إزالة الربط', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'سيتم تسجيل الخروج ومسح جميع بيانات التطبيق وتوليد معرّف جديد.\n\nهل أنت متأكد؟',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('إلغاء', style: TextStyle(color: Colors.white54)),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await Get.find<AuthController>().resetApp();
+              Get.offAllNamed('/login');
+            },
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('نعم، أزل الربط'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showAIReport(BuildContext context, DashboardController c) {
