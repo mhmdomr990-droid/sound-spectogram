@@ -44,6 +44,7 @@ flutter_app/lib/
 ├── services/
 │   ├── api_client.dart                # HTTP client + JWT auth
 │   ├── auth_service.dart              # إدارة JWT + SharedPreferences
+│   ├── device_id_service.dart         # معرّف الجهاز الفريد (UUID + FlutterSecureStorage)
 │   ├── socket_service.dart            # Socket.IO + device:data
 │   └── telegram_service.dart          # تنبيهات تيليجرام
 ├── utils/
@@ -643,6 +644,15 @@ const String kServerBaseUrl = 'http://172.20.20.92:3111';
 - **التحميل:** `load()` عند بدء التطبيق
 - **ال_guard:** `isLoggedIn = token != null && token.isNotEmpty`
 
+### DeviceIdService
+
+- **التخزين:** FlutterSecureStorage (`device_id`)
+- **الUUID:** يُولَّد مرة واحدة بأول تشغيل (UUID v4) ويُخزَّن بشكل آمن
+- **الاستمرارية:** يبقى نفسه طول ما التطبيق مثبّت (حتى لو أُغلق وأُعيد فتحه)
+- **التغيير:** فقط عند حذف التطبيق وتثبيته من جديد أو نقله لجهاز آخر
+- **الإرسال:** يُرسل مع كل طلب `POST /api/auth/login` كحقل `deviceId`
+- **الرد المتوقع:** 403 "بانتظار الموافقة" إذا كان الجهاز غير معتمد من المسؤول
+
 ### ApiClient
 
 | الدالة | Endpoint | الملاحظات |
@@ -730,3 +740,4 @@ const String kServerBaseUrl = 'http://172.20.20.92:3111';
 | 2026-09-09 | الإنشاء الأولي — تغطية كاملة للخوارزمية والفيتشرات | AI |
 | 2026-09-09 | إزالة وضع الاختبار بالكامل (test_data.dart + أزرار + route) | AI |
 | 2026-09-09 | إصلاح اختفاء الماركر فوراً في الوضع العادي (lastMarkerAddedAt guard) | AI |
+| 2026-09-09 | إضافة معرّف الجهاز الفريد (UUID + FlutterSecureStorage) + إرساله مع تسجيل الدخول + التعامل مع 403 "بانتظار الموافقة" | AI |

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
+import '../services/device_id_service.dart';
 
 class LoginScreen extends StatefulWidget {
   final String baseUrl;
@@ -44,11 +45,13 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = null;
     });
     try {
+      final deviceId = await const DeviceIdService().getOrCreate();
       final json = await widget.api.post(
         '/api/auth/login',
         body: {
           'username': _username.text.trim(),
           'password': _password.text,
+          'deviceId': deviceId,
         },
         authRequired: false,
       ) as Map<String, dynamic>;
@@ -60,6 +63,16 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         Navigator.of(context).pushReplacementNamed('/dashboard');
       }
+    } on ApiException catch (e) {
+      setState(() {
+        if (e.statusCode == 403 && e.message.contains('بانتظار الموافقة')) {
+          _error = 'حسابك بانتظار موافقة المسؤول. تواصل مع الإدارة.';
+        } else if (e.statusCode == 403 && e.message.contains('pending')) {
+          _error = 'Your account is pending approval. Contact administration.';
+        } else {
+          _error = e.message;
+        }
+      });
     } catch (e) {
       setState(() {
         _error = (e as Exception?)?.toString() ?? 'Login failed';
