@@ -13,19 +13,46 @@
 DeviceHistory.fromJson()          فك ترميز المصفوفة (عادي أو gzip)
     │
     ▼
-normalizeValue()                  تطبيع حسب intensityType
+buildMatrixFromHistories()        تجميع الكتل في مصفوفة واحدة (في العزل)
     │
     ▼
-SpectrogramCanvas._render()       تجهيز الكتل وتجميع الأبعاد
-    │
-    ▼
-SpectroIsolate.render()           قمع الضوضاء + تطبيق الكسب + رسم البكسلات
+buildRgba()                       قمع الضوضاء + خريطة الألوان + رسم البكسلات
     │                              (يعمل في isolate منفصل)
     ▼
-decodeImageFromPixels(RGBA8888)   تحويل البايتات إلى ui.Image
+rgbaToUiImage()                   تحويل البايتات إلى ui.Image
     │
     ▼
-build()                           عرض RawImage + CustomPaint للمحاور
+_SpectroPainter                   رسم الصورة + المحاور + الفجوات + المؤشرات
+```
+
+---
+
+## هيكل المشروع
+
+```
+flutter_app/lib/
+├── main.dart                          # نقطة الدخول + kServerBaseUrl
+├── models/
+│   ├── device.dart                    # نموذج الجهاز
+│   ├── device_history.dart            # نموذج بيانات التاريخ + فك ترميز المصفوفة
+│   └── marker.dart                    # نموذج العلامة (MarkerData)
+├── screens/
+│   ├── login_screen.dart              # شاشة تسجيل الدخول
+│   ├── dashboard_screen.dart          # الشاشة الرئيسية مع كل الأوضاع
+│   ├── fullscreen_spectrogram.dart    # العرض الكامل أفقي
+│   └── notification_settings_screen.dart
+├── services/
+│   ├── api_client.dart                # HTTP client + JWT auth
+│   ├── auth_service.dart              # إدارة JWT + SharedPreferences
+│   ├── socket_service.dart            # Socket.IO + device:data
+│   └── telegram_service.dart          # تنبيهات تيليجرام
+├── utils/
+│   ├── spectro.dart                   # خريطة الألوان + تحويل القيم (DO NOT MODIFY)
+│   ├── spectro_isolate.dart           # بناء المصفوفة + رسم البكسلات في العزل
+│   └── test_data.dart                 # بيانات اختبار محلية
+└── widgets/
+    ├── spectrogram_canvas.dart        # الويجت الرئيسي + painter
+    └── spectrogram_axes_painter.dart  # محاور (legacy، الدوال الآن في spectrogram_canvas.dart)
 ```
 
 ---
@@ -36,7 +63,7 @@ build()                           عرض RawImage + CustomPaint للمحاور
 
 المصفوفة يمكن أن تكون:
 - **قائمة مباشرة** `List<List<double>>` — تُحوَّل مباشرة
-- **خريطة gzip** `{ format: "gzip-base64-json-v1", data: "..." }` — تُفك بـ base64 → gzip → JSON
+- **خريطة gzip** `{ format: "gzip-base64-json-v1", payload: "..." }` — تُفك بـ base64 → gzip → JSON
 
 ### تطبيع القيم (`normalizeValue`)
 
@@ -60,44 +87,41 @@ static double normalizeValue(double raw, String? intensityType, double min, doub
 
 يمسح كل خلايا المصفوفة ويوجد الحد الأدنى والأقصى (يتخطى NaN/Inf). يُرجع `[min, max]` أو `[0, 1]` إذا كانت فارغة.
 
----
-
-## 2. تجهيز الكتل (`spectrogram_canvas.dart`)
-
-### دالة `_render()`
+### AI Status
 
 ```dart
-Future<void> _render() async
+enum AiStatus { possible(0), detected(1), notDetected(2) }
 ```
 
-**الخوارزمية:**
-1. زيادة `_generation` للكشف عن التقادم
-2. تصفية الكتل الفارغة
-3. لكل DeviceHistory:
-   - حساب `intensityRange` (min/max عالمي لكلية)
-   - تطبيع كل قيمة: `normalizeValue(raw, type, min, max)`
-   - تتبع: `maxRows` (أكبر عدد صفوف)، `totalCols` (مجموع الأعمدة)، أول `frequencyBins`非null، أقدم/أحدث طابع زمني
-4. استدعاء `SpectroIsolate.render(blocks: ..., width: totalCols, height: maxRows)`
-5. إذا الويجت لا يزال mounted والـ generation مطابق: `setState(() => _image = image)`
+- **الخادم يُرسل:** `aiStatus` كرقم (0, 1, 2) و `confidence` كـ **String** (مثلاً `"78.20"`)
+- **التفسير:** `detected=1` (مكتشف)، `possible=0` (محتمل)، `notDetected=2` (غير مكتشف)
 
-**ملاحظة مهمة:** أبعاد الصورة الناتجة = `totalCols x maxRows` — أي **بكسل واحد لكل عينة بيانات** عند الدقة الأصلية. الزووم يُطبَّق عبر التكبير في العرض فقط، لا إعادة رسم.
+---
+
+## 2. بناء المصفوفة في العزل (`spectro_isolate.dart`)
+
+### `buildMatrixFromHistories(blocks, requestStart, requestEnd)`
+
+**المدخلات:**
+- `blocks`: قائمة `HistoryBlock` — كل كتلة تحتوي على `data`, `startTime`, `endTime`, `intensityType`, `minVal`, `maxVal`
+- `requestStart`, `requestEnd`: نطاق الوقت المطلوب (ISO 8601)
+
+**الخوارزمية:**
+1. تحويل `requestStart`/`requestEnd` إلى ميلي ثانية
+2. حساب `colsPerMs = totalDataCols / totalDataMs` (متوسط عام لجميع الكتل)
+3. حساب `totalCols = rangeMs * colsPerMs`
+4. إنشاء مصفوفة `targetRows x totalCols` مملوءة بـ 0
+5. لكل كتلة:
+   - حساب `startCol = (blockStart - fromMs) * colsPerMs`
+   - حساب `endCol = (blockEnd - fromMs) * colsPerMs`
+   - نسخ بيانات الكتلة إلى المصفوفة المشتركة
+6. المناطق غير المغطاة تبقى = 0 (هذه هي الفجوات)
+
+**ملاحظة:** `totalCols` قد يكون أكبر من العرض الفعلي للصورة. الصورة تُقص إلى `clamp(totalCols, 1, 4096)`.
 
 ---
 
 ## 3. قمع الضوضاء (`spectro_isolate.dart`)
-
-### الدخول
-
-```dart
-static Future<ui.Image> render({
-  required List<List<List<double>>> blocks,  // كتل مطبّعة مسبقاً
-  required List<List<double>> colorMap,
-  double gainDb = 0.0,
-  double noiseThreshold = 0.06,
-  required int width,       // عرض صورة الناتج بالبكسل
-  required int height,      // ارتفاع صورة الناتج بالبكسل
-})
-```
 
 ### المعالجة لكل كتلة (`_processBlockMatrix`)
 
@@ -187,6 +211,12 @@ double _applyGain(double value, double gainDb) {
 
 **المعادلة:** `scale = 10^(gainDb / 20)` — تحويل dB إلى مقياس خطّي للسعة.
 
+**كيفية التطبيق:**
+- الصورة مُ.bnّية عند `gainDb = 0` (البيانات الأصلية)
+- `ValueNotifier<double>` مشترك بين Dashboard و Fullscreen
+- عند تغيير الكسب: `_onGainChanged()` يعيد بناء الصورة فقط (لا إعادة render كاملة)
+- `SpectroRgbaResult` يُرجع `intensity` buffer + `gamma` للسماح بإعادة تطبيق الكسب لاحقاً
+
 ---
 
 ## 5. خريطة الألوان (`spectro.dart`)
@@ -270,10 +300,8 @@ Container (خلفية: 0xFF140D28)
     [0] SingleChildScrollView (أفقي)
           SizedBox (عرض = max(العرض_المتاح, displayWidth + 34))
             Stack:
-              [0] Positioned(left: 32, top: 0)
-                    RawImage(image, fit: BoxFit.fill, filterQuality: medium)
-              [1] Positioned.fill
-                    CustomPaint(painter: SpectrogramAxesPainter)
+              [0] Positioned(left: 40, top: 4)
+                    CustomPaint (SpectrogramAxesPainter)
     [1] Positioned(top: 8, right: 8)
           Column(أزرار الزووم)
 ```
@@ -299,21 +327,100 @@ displayHeight = nativeHeight * zoomLevel
 
 **المدى:** [0.05, 4.0]، خطوة x1.5
 
+### الزووم اللمسي (Pinch)
+
+```dart
+// onScaleUpdate مع pointerCount == 2:
+newSpan = _scaleStart / details.scale
+newStart = center - newSpan * anchor
+newEnd = newStart + newSpan
+// الحدود: newStart >= -(newSpan * 0.8)، newEnd <= 1.0 + newSpan * 0.8
+```
+
+### السحب (Pan)
+
+```dart
+// onScaleUpdate مع pointerCount == 1:
+shift = dx / w * span
+newStart = _viewportStart - shift
+newEnd = _viewportEnd - shift
+```
+
+### Seed Snapshot (للعرض الكامل)
+
+```dart
+class CanvasSeedSnapshot {
+  final ui.Image? image;
+  final Uint8List? cachedIntensity;
+  final int intensityWidth;
+  final int intensityHeight;
+  final double cachedGamma;
+  // ... أخرى
+}
+```
+
+- يُنشأ عند كل render جديد
+- يُمرَّر إلى FullscreenSpectrogram لتجنب إعادة الرسم من الصفر
+- يحتوي على صورة + بيانات الشدة الخام + gamma
+
 ---
 
-## 8. المحاور والشبكة (`spectrogram_axes_painter.dart`)
+## 8. الفجوات الزمنية
+
+### خوارزمية حساب الفجوات (`_buildCoverageIntervals`)
+
+```dart
+List<CoverageInterval> _buildCoverageIntervals() {
+  // 1. fromMs = requestStartTime أو أول startTime في البيانات
+  // 2. toMs = requestEndTime أو آخر endTime في البيانات
+  // 3. colsPerMs = مجموع أعمدة الكتل / مجموع مدة الكتل
+  // 4. لكل كتلة:
+  //    startCol = ((blockStart - fromMs) * colsPerMs).round()
+  //    endCol = ((blockEnd - fromMs) * colsPerMs).round()
+  //    → CoverageInterval(startMs: startCol, endMs: endCol)
+}
+```
+
+**Fallback** (إذا لم تتوفر الأوقات): تstack الكتل بجانب بعضها دون فجوات.
+
+### رسم الفجوات في `_SpectroPainter.paint()`
+
+```
+// 2b) Gap overlays (بعد رسم الصورة، قبل المحاور)
+1. حساب gapScale = image.width / totalCols
+2. تحويل coverageIntervals إلى م positions في الصورة
+3. دمج التداخل (merge)
+4. الم.delta = gaps = الفراغات بين الـ intervals المدمجة
+5. لكل gap:
+   - رسم مستطيل أزرق شفاف: Color(0x423667C2) — alpha = 26%
+   - رسم خطوط جانبية: Color(0xE766C4E7)
+   - كتابة النص: "لا توجد بيانات X د" (إذا عرض >= 52px)
+```
 
 ### الثوابت
 
 | القيمة | المعنى |
 |---|---|
-| `left = 32.0` | هامش يسار لأرقام التردد |
-| `topPad = 0.0` | لا هامش علوي |
-| `bottomPad = 20.0` | هامش سفلي لتسميات الزمن |
-| `yTicks = 5` | 5 خطوط أفقية (6 تسميات) |
-| `axisColor = 0xFFCFD7E6` | لون المحاور والحدود |
-| `textColor = 0xFFD8E2FF` | لون النصوص |
-| `gridColor = 0x29CFD7E6` | لون الشبكة (~16% شفافية) |
+| `_gapFill = Color(0x423667C2)` | لون ملء الفجوة (أزرق، 26% شفافية) |
+| `_gapStroke = Color(0xE766C4E7)` | لون حدود الفجوة |
+| `_gapTextStyle.fontSize = 11` | حجم خط النص |
+
+---
+
+## 9. المحاور والشبكة
+
+### الثوابت
+
+| القيمة | المعنى |
+|---|---|
+| `left = 40` | هامش يسار لأرقام التردد |
+| `right = 6` | هامش يمين |
+| `top = 4` | هامش علوي |
+| `bottom = 36` | هامش سفلي (عادي) |
+| `bottom = 50` | هامش سفلي (مع شريط حالة مدمج) |
+| `bottom = 68` | هامش سفلي (مع شريط حالة كامل) |
+| `_yTicks = 5` | 5 خطوط أفقية (6 تسميات) |
+| `_maxFrequency = 250` | أعلى تردد (Hz) |
 
 ### رسم الشبكة
 
@@ -322,20 +429,20 @@ displayHeight = nativeHeight * zoomLevel
 xTicks = clamp(floor(plotW / 120), 4, 8)
 for tx in 0..xTicks:
   x = left + round(tx / xTicks * plotW)
-  drawLine(x, topPad, x, topPad + plotH)
+  drawLine(x, top, x, top + plotH)
 
 // خطوط أفقية (دائماً 5):
 for ty in 0..5:
-  y = topPad + round(ty / 5 * plotH)
+  y = top + round(ty / 5 * plotH)
   drawLine(left, y, left + plotW, y)
 ```
 
 ### حدود L-shape
 
 ```dart
-path.moveTo(left, topPad)          // أعلى يسار
-path.lineTo(left, topPad + plotH)  // أسفل يسار
-path.lineTo(left + plotW, topPad + plotH)  // أسفل يمين
+path.moveTo(left, top)          // أعلى يسار
+path.lineTo(left, top + plotH)  // أسفل يسار
+path.lineTo(left + plotW, top + plotH)  // أسفل يمين
 ```
 
 ### تسميات التردد (Y-axis)
@@ -344,12 +451,9 @@ path.lineTo(left + plotW, topPad + plotH)  // أسفل يمين
 6 تسميات (0..5):
   yFrac = ly / 5
   yPos = topPad + round(yFrac * plotH)
-  إذا frequencyBins موجودة:
-    Hz = bins[round(yFrac * (bins.length - 1))]
-  وإلا:
-    Hz = 24000 - yFrac * 24000
+  Hz = 250 - yFrac * 250
   النص: "${Hz.round()}" بدون "Hz"
-  الموضع: x = left - 2 - عرض_النص (محاذاة يمين)
+  الموضع: x = left - 6 - عرض_النص (محاذاة يمين)
 ```
 
 ### تسميات الزمن (X-axis)
@@ -368,7 +472,227 @@ xTicks خطوط عمودية (4-8):
 
 ---
 
-## 9. جدول جميع الثوابت
+## 10. شريط حالة AI
+
+### الألوان
+
+| الحالة | اللون | الكود |
+|---|---|---|
+| `detected` (مكتشف) | أحمر | `Color(0xFFD13438)` |
+| `notDetected` (غير مكتشف) | أخضر | `Color(0xFF21A366)` |
+| `possible` (محتمل) | أصفر | `Color(0xFFF59E0B)` |
+| `unknown` | رمادي | `Color(0xFF8A94A6)` |
+
+### الرسم
+
+```
+// 8) AI Status bar (تحو عناوين الزمن)
+- barY = pTop + plotH + 36
+- barHeight = compactStatusBar ? 14 : 28
+- لكل كتلة تاريخ:
+  - تحديد الموضع الأفقي بناءً على startTime/endTime
+  - رسم مستطيل باللون المناسب
+  - كتابة النص + الثقة (مثلاً "مكتشف (78.2%)")
+  - إذا عرض >= 50px (compact) أو >= 72px (عادي): يظهر النص
+```
+
+---
+
+## 11. المؤشرات (Markers)
+
+### النموذج
+
+```dart
+class MarkerData {
+  final int timeMs;   // الوقت بالميلي ثانية
+}
+```
+
+### الإجراءات
+
+| الإجراء | الطريقة |
+|---|---|
+| **إضافة** | نقر مزدوج على الخط |
+| **حذف** | نقر على الخط |
+| **تحريك** | سحب من الخط أو صندوق التسمية |
+
+### التقاطع (`_markerHitTest`)
+
+```dart
+// يتحقق: هل النقر على خط مؤشر؟
+// يحسب: mx = pLeft + ((dataFrac - viewportStart) / span) * plotW
+// يقارن: |position.dx - mx| < 5.0
+```
+
+### التقاطع مع صندوق التسمية (`_markerLabelHitTest`)
+
+```dart
+// يتحقق: هل النقر على صندوق التسمية؟
+// يستخدم laneY و boxLeft و boxW و boxH منLogica الرسم
+```
+
+### رسم الخطوط والتصنيفات
+
+```dart
+// لكل marker مرئي:
+1. رسم خط عمودي ذهبي: Color(0xF2FFD60A)
+2. حساب وقت UTC → تحويل إلى محلي
+3. تنسيق: "YYYY-MM-DD HH:MM:SS"
+4. حساب موضع صندوق التسمية مع تجنب التداخل (lane system)
+5. رسم صندوق: خلفية Color(0xDC12161E) + حدود ذهبية
+```
+
+### نظام Lane (تجنب التداخل)
+
+```dart
+const boxH = 27.0;
+const laneGap = 8.0;
+final laneBoxes = <_LaneBox>[];
+
+// لكل marker:
+laneY = labelTop
+for (lb in laneBoxes):
+  if horizontallyOverlap && laneY < lb.bottom + laneGap:
+    laneY = lb.bottom + laneGap
+laneBoxes.add(_LaneBox(left: boxLeft, bottom: laneY + boxH, width: boxW))
+```
+
+---
+
+## 12. البث المباشر (Follow-live)
+
+### أوضاع العرض
+
+```dart
+enum _RangeMode { latestPacket, lastHour, last5h, last24h, followLive, custom, test }
+```
+
+### تدفق البث المباشر
+
+```
+1. المستخدم يضغط "متابعة البث"
+   → _setFollowLive() يستدعي fetchHistory() مع النطاق الحالي
+   → يبدأ التصويت (polling) كل 5 ثوانٍ
+
+2. Socket يُرسل device:data
+   → _dataSub يستقبل الحزمة
+   → يتحقق: deviceId مطابق + followLiveActive + ليس قيد التحميل
+   → يتحقق من التكرار باستخدام _historyKeys ("$deviceId|$startTime|$endTime")
+   → إذا كان قيد التحميل → يُخزّن في _pendingLivePackets
+   → وإلا → _insertPacketLive(h)
+
+3. _insertPacketLive(h):
+   → يتحقق من aiStatus == detected → يُرسل تنبيه تيليجرام
+   → يُضيف الحزمة إلى _histories
+   → يُرتب حسب startTime
+   → يُصفّي حسب _liveWindowMinutes (الحد الأقصى)
+   → يحدث _requestStartTime و _requestEndTime
+   → يحدث _liveDataNotifier
+   → يستدعي forceRender()
+
+4. Polling (كل 5 ثوانٍ):
+   → fetchLatest() → إذا حزمة جديدة → _insertPacketLive()
+```
+
+### النافذة الزمنية
+
+- القيم المتاحة: 5, 10, 15, 20, 30 دقيقة
+- القيمة الافتراضية: 15 دقيقة
+- `_requestStartTime = anchor - liveWindowMinutes`
+- `_requestEndTime = anchor` (آخر endTime)
+
+---
+
+## 13. وضع الاختبار
+
+```dart
+void _setTestMode() {
+  final testHistories = generateTestData();
+  // كتلتان كلتاهما 5 دقائق مع فجوة 10 دقائق بينهما
+  // packet1: now-60d → now-55d (5 دقائق)
+  // packet2: now-45d → now-40d (5 دقائق)
+  // → فجوة 10 دقائق ستظهر كـ gap overlay
+}
+```
+
+- يعمل بدون اتصال بالسيرفر
+- يستخدم بيانات SQL حقيقية من `test_data.dart`
+- `intensityType: 'uint8'`
+
+---
+
+## 14. العرض الكامل (Fullscreen)
+
+### الخصائص
+
+- **اتجاه أفقي** (landscapeLeft/landscapeRight)
+- **_immersiveSticky** (إخفاء شريط الحالة)
+- **illo Shared gainNotifier** — نفس الكسب من Dashboard
+- **illo Shared markers** — يُعاد عند الخروج
+
+### التحكم
+
+- **زر ملء الشاشة** (fitToScreen)
+- **زر الخروج** (fullscreen_exit) → يُرجع FullscreenResult
+- **شريط كسب مدمج** (Slider -24 إلى 24 dB)
+
+### Seed Snapshot
+
+```dart
+// عند فتح Fullscreen:
+// 1. يأخذ seedSnapshot من Dashboard
+// 2. يمرر: seedImage, seedIntensity, seedGamma, etc.
+// 3. SpectrogramCanvas يستخدم هذه البيانات كنقطة بداية
+// 4. لا إعادة render من الصفر
+```
+
+---
+
+## 15. الاتصال بالسيرفر
+
+### `kServerBaseUrl`
+
+```dart
+const String kServerBaseUrl = 'http://172.20.20.92:3111';
+```
+
+### AuthService
+
+- **التخزين:** SharedPreferences (`auth_token`, `auth_user`)
+- **التحميل:** `load()` عند بدء التطبيق
+- **ال_guard:** `isLoggedIn = token != null && token.isNotEmpty`
+
+### ApiClient
+
+| الدالة | Endpoint | الملاحظات |
+|---|---|---|
+| `fetchDevices()` | `GET /api/devices` | قائمة الأجهزة |
+| `fetchLatest(path, id)` | `GET /api/devices/{id}/history/latest?decode=1` | آخر باكت |
+| `fetchHistory(id, from, to)` | `GET /api/devices/{id}/history?from=...&to=...` | بدون decode=1 (العميل يفك الترميز) |
+
+**ملاحظة مهمة:** `fetchHistory` لا يرسل `decode=1` لتجنب خطأ `decodeMatrix` على السيرفر. الترميز يتم client-side عبر `decodeMatrixPayload` في `DeviceHistory.fromJson`.
+
+### SocketService
+
+| الحدث | الاتجاه | البيانات |
+|---|---|---|
+| `connect` | → السيرفر | `{ token: "..." }` |
+| `device:subscribe` | → السيرفر | `{}` |
+| `device:data` | ← السيرفر | `DeviceHistory` payload |
+| `check_ai_status` | → السيرفر | `{ startTime, endTime }` |
+| `check_ai_status` (ack) | ← السيرفر | `{ ok: true, data: { items: [...] } }` |
+
+**التوصل:** WebSocket (`ws://`)
+**المصادقة:** JWT token في `opts.auth`
+
+### TelegramService
+
+- يُرسل تنبيهات عند `aiStatus == detected`
+- يُرسل تنبيهات تغيير حالة التوصيل
+
+---
+
+## 16. جدول جميع الثوابت
 
 | الثابت | القيمة | الموقع |
 |---|---|---|
@@ -387,11 +711,39 @@ xTicks خطوط عمودية (4-8):
 | الزووم الأدنى | `0.05` | `spectrogram_canvas.dart` |
 | الزووم الأعلى | `4.0` | `spectrogram_canvas.dart` |
 | خطوة الزووم | `x1.5` | `spectrogram_canvas.dart` |
-| هامش يسار المحاور | `32px` | `spectrogram_axes_painter.dart` |
-| هامش أسفل المحاور | `20px` | `spectrogram_axes_painter.dart` |
-| تقسيمات Y | `5` | `spectrogram_axes_painter.dart` |
-| استهداف مسافة X | `120px` | `spectrogram_axes_painter.dart` |
-| نطاق التردد الافتراضي | `0-24000 Hz` | `spectrogram_axes_painter.dart` |
-| عتبة التاريخ | `24 ساعة (86400000 ms)` | `spectrogram_axes_painter.dart` |
+| هامش يسار المحاور | `40px` | `spectrogram_canvas.dart` |
+| هامش يمين المحاور | `6px` | `spectrogram_canvas.dart` |
+| هامش علوي المحاور | `4px` | `spectrogram_canvas.dart` |
+| هامش سفلي (عادي) | `36px` | `spectrogram_canvas.dart` |
+| هامش سفلي (مدمج) | `50px` | `spectrogram_canvas.dart` |
+| هامش سفلي (كامل) | `68px` | `spectrogram_canvas.dart` |
+| تقسيمات Y | `5` | `spectrogram_canvas.dart` |
+| أعلى تردد | `250 Hz` | `spectrogram_canvas.dart` |
+| استهداف مسافة X | `120px` | `spectrogram_canvas.dart` |
+| عتبة التاريخ | `24 ساعة (86400000 ms)` | `spectrogram_canvas.dart` |
 | لون الخلفية | `0xFF140D28` | `spectrogram_canvas.dart` |
-| لون الشبكة | `0x29CFD7E6` (~16%) | `spectrogram_axes_painter.dart` |
+| لون الفجوة | `0x423667C2` (26% شفافية) | `spectrogram_canvas.dart` |
+| لون حدود الفجوة | `0xE766C4E7` | `spectrogram_canvas.dart` |
+| لون خط المؤشر | `0xF2FFD60A` (ذهبي) | `spectrogram_canvas.dart` |
+| لون صندوق المؤشر | `0xDC12161E` (خلفية) | `spectrogram_canvas.dart` |
+| عرض الصورة الأقصى | `4096` بكسل | `spectro_isolate.dart` |
+| Polling interval | `5` ثوانٍ | `dashboard_screen.dart` |
+|/max custom range | `2` ساعة | `dashboard_screen.dart` |
+| live window choices | `5, 10, 15, 20, 30` دقيقة | `dashboard_screen.dart` |
+| Gain range | `-24` إلى `24` dB | `dashboard_screen.dart` |
+| Gain divisions | `48` | `dashboard_screen.dart` |
+
+---
+
+## اتفاقية تحديث هذا الملف
+
+> **عند أي تعديل على التطبيق** (خوارزمية رسم، فيتشر جديد، تغيير ثوابت، إضافة شاشة):
+> 1. حدّث هذا الملف ليعكس التغيير
+> 2. أضف سطر في "سجل التغييرات" أدناه
+> 3. لا تحذف أي معلومات موجودة — أضف فقط
+
+### سجل التغييرات
+
+| التاريخ | التغيير | المسؤول |
+|---|---|---|
+| 2026-09-09 | الإنشاء الأولي — تغطية كاملة للخوارزمية والفيتشرات | AI |
