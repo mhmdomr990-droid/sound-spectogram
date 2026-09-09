@@ -59,7 +59,7 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  Future<void> _login() async {
+  Future<void> _login({String? deviceId}) async {
     final serverUrl = _server.text.trim();
     if (serverUrl.isNotEmpty) {
       widget.api.baseUrl = serverUrl;
@@ -69,14 +69,16 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = null;
     });
     try {
-      final deviceId = await const DeviceIdService().getOrCreate();
+      final body = <String, dynamic>{
+        'username': _username.text.trim(),
+        'password': _password.text,
+      };
+      if (deviceId != null) {
+        body['deviceId'] = deviceId;
+      }
       final json = await widget.api.post(
         '/api/auth/login',
-        body: {
-          'username': _username.text.trim(),
-          'password': _password.text,
-          'deviceId': deviceId,
-        },
+        body: body,
         authRequired: false,
       ) as Map<String, dynamic>;
 
@@ -152,7 +154,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   obscureText: true,
                   style: const TextStyle(color: Colors.white),
                   decoration: _inputDeco('Password', Icons.lock),
-                  onSubmitted: (_) => _login(),
+                  onSubmitted: (_) async {
+                    final deviceId = await const DeviceIdService().getOrCreate();
+                    _login(deviceId: deviceId);
+                  },
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -175,7 +180,12 @@ class _LoginScreenState extends State<LoginScreen> {
                   width: double.infinity,
                   height: 48,
                   child: FilledButton(
-                    onPressed: _loading ? null : _login,
+                    onPressed: _loading
+                        ? null
+                        : () async {
+                            final deviceId = await const DeviceIdService().getOrCreate();
+                            _login(deviceId: deviceId);
+                          },
                     child: _loading
                         ? const SizedBox(
                             width: 20,
@@ -183,6 +193,19 @@ class _LoginScreenState extends State<LoginScreen> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Text('LOGIN', style: TextStyle(letterSpacing: 3)),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: OutlinedButton(
+                    onPressed: _loading ? null : () => _login(),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.orange,
+                      side: const BorderSide(color: Colors.orange),
+                    ),
+                    child: const Text('DEV LOGIN', style: TextStyle(letterSpacing: 2)),
                   ),
                 ),
                 const SizedBox(height: 12),
