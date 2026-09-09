@@ -180,6 +180,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _draggingMarkerIndex = -1;
   double _markerDragStartX = 0;
 
+  // Prevent onTapDown from removing a marker that was just added by onDoubleTapDown.
+  int _lastMarkerAddedAt = 0;
+
   void forceRender() {
     if (!mounted) return;
     _renderDebounce?.cancel();
@@ -796,9 +799,13 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                 final idx = _markerLineHitTest(details.localPosition);
                 if (idx != null) return;
                 final timeMs = _timeMsFromPosition(details.localPosition);
-                if (timeMs != null) widget.onMarkerAdd?.call(timeMs);
+                if (timeMs != null) {
+                  _lastMarkerAddedAt = DateTime.now().millisecondsSinceEpoch;
+                  widget.onMarkerAdd?.call(timeMs);
+                }
               },
               onTapDown: (details) {
+                if (DateTime.now().millisecondsSinceEpoch - _lastMarkerAddedAt < 500) return;
                 final idx = _markerLineHitTest(details.localPosition);
                 if (idx != null) {
                   widget.onMarkerRemove?.call(idx);
