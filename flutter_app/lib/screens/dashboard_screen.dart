@@ -9,25 +9,22 @@ import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/socket_service.dart';
 import '../services/telegram_service.dart';
-import '../utils/test_data.dart';
 import '../widgets/spectrogram_canvas.dart';
 import 'fullscreen_spectrogram.dart';
 import 'notification_settings_screen.dart';
 
-enum _RangeMode { latestPacket, lastHour, last5h, last24h, followLive, custom, test }
+enum _RangeMode { latestPacket, lastHour, last5h, last24h, followLive, custom }
 
 class DashboardScreen extends StatefulWidget {
   final ApiClient api;
   final AuthService auth;
   final SocketService socket;
-  final bool startInTestMode;
 
   const DashboardScreen({
     super.key,
     required this.api,
     required this.auth,
     required this.socket,
-    this.startInTestMode = false,
   });
 
   @override
@@ -62,12 +59,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.startInTestMode) {
-      _setTestMode();
-    } else {
-      _bindSocket();
-      _loadDevices();
-    }
+    _bindSocket();
+    _loadDevices();
   }
 
   @override
@@ -217,9 +210,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           result = await widget.api.fetchHistory(device.id);
           break;
         case _RangeMode.followLive:
-          result = [];
-          break;
-        case _RangeMode.test:
           result = [];
           break;
       }
@@ -416,32 +406,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _loadRange();
   }
 
-  void _setTestMode() {
-    if (_rangeMode == _RangeMode.test) {
-      return;
-    }
-    _stopPolling();
-    final testHistories = generateTestData();
-    final firstStart = testHistories.first.startTime;
-    final lastEnd = testHistories.last.endTime;
-    setState(() {
-      _rangeMode = _RangeMode.test;
-      _followLiveActive = false;
-      _histories = testHistories;
-      _historyKeys
-        ..clear()
-        ..addAll(testHistories.map((e) => '${e.deviceId}|${e.startTime}|${e.endTime}'));
-      _requestStartTime = firstStart;
-      _requestEndTime = lastEnd;
-      if (_selected == null) {
-        _selected = const Device(id: 1, name: 'pi1', description: 'Test Device');
-      }
-      _loadingDevices = false;
-      _loadingHistory = false;
-    });
-    _liveDataNotifier.value = (List.unmodifiable(_histories), _requestStartTime, _requestEndTime);
-  }
-
   Future<void> _logout() async {
     await widget.auth.logout();
     if (mounted) {
@@ -608,7 +572,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 btn('آخر ساعة', Icons.timer, () => _setRange(_RangeMode.lastHour), active: mode(_RangeMode.lastHour)),
                 btn('آخر ساعتين', Icons.history, () => _setRange(_RangeMode.last5h), active: mode(_RangeMode.last5h)),
                 btn('تحميل النطاق', Icons.date_range, _pickCustomRange, active: mode(_RangeMode.custom)),
-                btn('اختبار', Icons.science, _setTestMode, active: mode(_RangeMode.test)),
                 if (_markers.isNotEmpty)
                   btn('إزالة العلامات', Icons.clear, () => setState(() => _markers = [])),
               ],

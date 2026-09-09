@@ -63,12 +63,6 @@ class _SpectroAppState extends State<SpectroApp> {
               auth: widget.auth,
               socket: widget.socket,
             ),
-        '/test': (_) => DashboardScreen(
-              api: widget.api,
-              auth: widget.auth,
-              socket: widget.socket,
-              startInTestMode: true,
-            ),
       },
     );
   }

@@ -48,8 +48,7 @@ flutter_app/lib/
 │   └── telegram_service.dart          # تنبيهات تيليجرام
 ├── utils/
 │   ├── spectro.dart                   # خريطة الألوان + تحويل القيم (DO NOT MODIFY)
-│   ├── spectro_isolate.dart           # بناء المصفوفة + رسم البكسلات في العزل
-│   └── test_data.dart                 # بيانات اختبار محلية
+│   └── spectro_isolate.dart           # بناء المصفوفة + رسم البكسلات في العزل
 └── widgets/
     ├── spectrogram_canvas.dart        # الويجت الرئيسي + painter
     └── spectrogram_axes_painter.dart  # محاور (legacy، الدوال الآن في spectrogram_canvas.dart)
@@ -564,7 +563,7 @@ laneBoxes.add(_LaneBox(left: boxLeft, bottom: laneY + boxH, width: boxW))
 ### أوضاع العرض
 
 ```dart
-enum _RangeMode { latestPacket, lastHour, last5h, last24h, followLive, custom, test }
+enum _RangeMode { latestPacket, lastHour, last5h, last24h, followLive, custom }
 ```
 
 ### تدفق البث المباشر
@@ -603,25 +602,7 @@ enum _RangeMode { latestPacket, lastHour, last5h, last24h, followLive, custom, t
 
 ---
 
-## 13. وضع الاختبار
-
-```dart
-void _setTestMode() {
-  final testHistories = generateTestData();
-  // كتلتان كلتاهما 5 دقائق مع فجوة 10 دقائق بينهما
-  // packet1: now-60d → now-55d (5 دقائق)
-  // packet2: now-45d → now-40d (5 دقائق)
-  // → فجوة 10 دقائق ستظهر كـ gap overlay
-}
-```
-
-- يعمل بدون اتصال بالسيرفر
-- يستخدم بيانات SQL حقيقية من `test_data.dart`
-- `intensityType: 'uint8'`
-
----
-
-## 14. العرض الكامل (Fullscreen)
+## 13. العرض الكامل (Fullscreen)
 
 ### الخصائص
 
@@ -648,7 +629,7 @@ void _setTestMode() {
 
 ---
 
-## 15. الاتصال بالسيرفر
+## 14. الاتصال بالسيرفر
 
 ### `kServerBaseUrl`
 
@@ -692,7 +673,7 @@ const String kServerBaseUrl = 'http://172.20.20.92:3111';
 
 ---
 
-## 16. جدول جميع الثوابت
+## 15. جدول جميع الثوابت
 
 | الثابت | القيمة | الموقع |
 |---|---|---|
@@ -747,3 +728,4 @@ const String kServerBaseUrl = 'http://172.20.20.92:3111';
 | التاريخ | التغيير | المسؤول |
 |---|---|---|
 | 2026-09-09 | الإنشاء الأولي — تغطية كاملة للخوارزمية والفيتشرات | AI |
+| 2026-09-09 | إزالة وضع الاختبار بالكامل (test_data.dart + أزرار + route) | AI |
