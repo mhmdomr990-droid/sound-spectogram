@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:get/get.dart';
 
+import 'controllers/auth_controller.dart';
+import 'controllers/dashboard_controller.dart';
+import 'controllers/socket_controller.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
 import 'services/socket_service.dart';
 
-/// Server base URL. The emulator reaches the host machine via 10.0.2.2.
 const String kServerBaseUrl = 'http://172.20.20.92:3111';
 
 Future<void> main() async {
@@ -15,55 +18,40 @@ Future<void> main() async {
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
   ]);
+
   final auth = AuthService();
   await auth.load();
   final api = ApiClient(kServerBaseUrl, auth);
   final socket = SocketService();
-  runApp(SpectroApp(auth: auth, api: api, socket: socket));
+
+  Get.put<AuthService>(auth);
+  Get.put<ApiClient>(api);
+  Get.put<SocketService>(socket);
+  Get.put(AuthController(auth, api));
+  Get.put(SocketController(socket));
+  Get.lazyPut(() => DashboardController(
+        Get.find<ApiClient>(),
+        Get.find<AuthService>(),
+        Get.find<SocketService>(),
+      ));
+
+  runApp(const SpectroApp());
 }
 
-class SpectroApp extends StatefulWidget {
-  final AuthService auth;
-  final ApiClient api;
-  final SocketService socket;
-
-  const SpectroApp({
-    super.key,
-    required this.auth,
-    required this.api,
-    required this.socket,
-  });
-
-  @override
-  State<SpectroApp> createState() => _SpectroAppState();
-}
-
-class _SpectroAppState extends State<SpectroApp> {
-  @override
-  void dispose() {
-    widget.socket.dispose();
-    super.dispose();
-  }
+class SpectroApp extends StatelessWidget {
+  const SpectroApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return GetMaterialApp(
       title: 'Sound Spectogram',
       debugShowCheckedModeBanner: false,
       theme: _theme(),
-      initialRoute: widget.auth.isLoggedIn ? '/dashboard' : '/login',
-      routes: {
-        '/login': (_) => LoginScreen(
-              baseUrl: kServerBaseUrl,
-              api: widget.api,
-              auth: widget.auth,
-            ),
-        '/dashboard': (_) => DashboardScreen(
-              api: widget.api,
-              auth: widget.auth,
-              socket: widget.socket,
-            ),
-      },
+      initialRoute: Get.find<AuthController>().isLoggedIn.value ? '/dashboard' : '/login',
+      getPages: [
+        GetPage(name: '/login', page: () => const LoginScreen()),
+        GetPage(name: '/dashboard', page: () => const DashboardScreen()),
+      ],
     );
   }
 

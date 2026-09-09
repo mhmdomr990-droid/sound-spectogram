@@ -31,14 +31,19 @@ _SpectroPainter                   رسم الصورة + المحاور + الف�
 
 ```
 flutter_app/lib/
-├── main.dart                          # نقطة الدخول + kServerBaseUrl
+├── main.dart                          # نقطة الدخول + kServerBaseUrl + GetMaterialApp
+├── controllers/
+│   ├── auth_controller.dart           # إدارة JWT + login/logout (GetX)
+│   ├── dashboard_controller.dart      # devices + histories + markers + gain + range (GetX)
+│   └── socket_controller.dart         # Socket.IO connection + events (GetX)
 ├── models/
 │   ├── device.dart                    # نموذج الجهاز
 │   ├── device_history.dart            # نموذج بيانات التاريخ + فك ترميز المصفوفة
-│   └── marker.dart                    # نموذج العلامة (MarkerData)
+│   ├── marker.dart                    # نموذج العلامة (MarkerData)
+│   └── range_mode.dart                # enum RangeMode (lastHour, followLive, etc.)
 ├── screens/
-│   ├── login_screen.dart              # شاشة تسجيل الدخول
-│   ├── dashboard_screen.dart          # الشاشة الرئيسية مع كل الأوضاع
+│   ├── login_screen.dart              # شاشة تسجيل الدخول (StatelessWidget + Obx)
+│   ├── dashboard_screen.dart          # الشاشة الرئيسية مع كل الأوضاع (StatelessWidget + Obx)
 │   ├── fullscreen_spectrogram.dart    # العرض الكامل أفقي
 │   └── notification_settings_screen.dart
 ├── services/
@@ -741,3 +746,4 @@ const String kServerBaseUrl = 'http://172.20.20.92:3111';
 | 2026-09-09 | إزالة وضع الاختبار بالكامل (test_data.dart + أزرار + route) | AI |
 | 2026-09-09 | إصلاح اختفاء الماركر فوراً في الوضع العادي (lastMarkerAddedAt guard) | AI |
 | 2026-09-09 | إضافة معرّف الجهاز الفريد (UUID + FlutterSecureStorage) + إرساله مع تسجيل الدخول + التعامل مع 403 "بانتظار الموافقة" | AI |
+| 2026-09-09 | تحويل إلى GetX state management — AuthController + DashboardController + SocketController + StatelessWidget + Obx | AI |

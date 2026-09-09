@@ -1,435 +1,27 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 
+import '../controllers/auth_controller.dart';
+import '../controllers/dashboard_controller.dart';
 import '../models/device.dart';
 import '../models/device_history.dart';
-import '../models/marker.dart';
+import '../models/range_mode.dart';
+import '../screens/fullscreen_spectrogram.dart';
+import '../screens/notification_settings_screen.dart';
 import '../services/api_client.dart';
-import '../services/auth_service.dart';
 import '../services/socket_service.dart';
-import '../services/telegram_service.dart';
 import '../widgets/spectrogram_canvas.dart';
-import 'fullscreen_spectrogram.dart';
-import 'notification_settings_screen.dart';
 
-enum _RangeMode { latestPacket, lastHour, last5h, last24h, followLive, custom }
-
-class DashboardScreen extends StatefulWidget {
-  final ApiClient api;
-  final AuthService auth;
-  final SocketService socket;
-
-  const DashboardScreen({
-    super.key,
-    required this.api,
-    required this.auth,
-    required this.socket,
-  });
-
-  @override
-  State<DashboardScreen> createState() => _DashboardScreenState();
-}
-
-class _DashboardScreenState extends State<DashboardScreen> {
-  List<Device> _devices = [];
-  Device? _selected;
-  List<DeviceHistory> _histories = [];
-  List<MarkerData> _markers = [];
-  final ValueNotifier<(List<DeviceHistory>, String?, String?)> _liveDataNotifier = ValueNotifier((const [], null, null));
-  bool _loadingDevices = true;
-  bool _loadingHistory = false;
-  String? _error;
-  SocketStatus _socketStatus = SocketStatus.disconnected;
-  double _gainDb = 0.0;
-  final ValueNotifier<double> _gainNotifier = ValueNotifier<double>(0.0);
-  _RangeMode _rangeMode = _RangeMode.followLive;
-  bool _followLiveActive = true;
-  int _liveWindowMinutes = 15;
-  String? _requestStartTime;
-  String? _requestEndTime;
-  final _canvasKey = GlobalKey<SpectrogramCanvasState>();
-
-  StreamSubscription<DeviceHistory>? _dataSub;
-  StreamSubscription<SocketStatus>? _statusSub;
-  final List<DeviceHistory> _pendingLivePackets = [];
-  final Set<String> _historyKeys = {};
-  Timer? _pollTimer;
-
-  @override
-  void initState() {
-    super.initState();
-    _bindSocket();
-    _loadDevices();
-  }
-
-  @override
-  void dispose() {
-    _gainNotifier.dispose();
-    _liveDataNotifier.dispose();
-    _pollTimer?.cancel();
-    _dataSub?.cancel();
-    _statusSub?.cancel();
-    super.dispose();
-  }
-
-  void _bindSocket() {
-    _statusSub = widget.socket.onStatus.listen((s) {
-      if (mounted) setState(() => _socketStatus = s);
-      _onSocketStatusChanged(s);
-    });
-    _dataSub = widget.socket.onData.listen((h) {
-      if (!mounted || !_followLiveActive || _selected == null) return;
-      if (h.deviceId != _selected!.id) return;
-      final key = '${h.deviceId}|${h.startTime}|${h.endTime}';
-      if (_historyKeys.contains(key)) return;
-      if (_loadingHistory) {
-        _historyKeys.add(key);
-        _pendingLivePackets.add(h);
-        return;
-      }
-      _historyKeys.add(key);
-      _insertPacketLive(h);
-    });
-    widget.socket.connect(_hostFromApi(), token: widget.auth.token);
-  }
-
-  void _onSocketStatusChanged(SocketStatus s) async {
-    final enabled = await TelegramService.isEnabled();
-    if (!enabled) return;
-    if (s == SocketStatus.connected) {
-      TelegramService.sendConnectionAlert('connected');
-    } else if (s == SocketStatus.disconnected) {
-      TelegramService.sendConnectionAlert('disconnected');
-    }
-  }
-
-  void _insertPacketLive(DeviceHistory h) {
-    if (h.aiStatus == AiStatus.detected) {
-      final enabled = TelegramService.isEnabled();
-      enabled.then((on) {
-        if (on) {
-          TelegramService.sendAlert(
-            device: _selected?.name ?? 'Unknown',
-            status: 'detected',
-            confidence: h.confidence?.toStringAsFixed(1) ?? 'N/A',
-            time: h.endTime ?? h.startTime ?? '',
-          );
-        }
-      });
-    }
-    final newHistories = [..._histories, h]..sort((a, b) {
-        final aStart = DateTime.tryParse(a.startTime ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final bStart = DateTime.tryParse(b.startTime ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return aStart.compareTo(bStart);
-      });
-    final cutoff = DateTime.now().subtract(Duration(minutes: _liveWindowMinutes));
-    final filtered = newHistories.where((e) {
-      final end = DateTime.tryParse(e.endTime ?? '');
-      return end != null ? end.isAfter(cutoff) : true;
-    }).toList();
-    final lastEnd = filtered.isNotEmpty ? filtered.last.endTime : null;
-    final anchor = lastEnd != null ? DateTime.tryParse(lastEnd) ?? DateTime.now() : DateTime.now();
-    setState(() {
-      _histories = filtered;
-      _requestStartTime = anchor.subtract(Duration(minutes: _liveWindowMinutes)).toIso8601String();
-      _requestEndTime = anchor.toIso8601String();
-    });
-    _liveDataNotifier.value = (List.unmodifiable(filtered), _requestStartTime, _requestEndTime);
-    _canvasKey.currentState?.forceRender();
-  }
-
-  String _apiHost() => widget.api.baseUrl.replaceFirst(RegExp(r'^https?://'), '');
-  String _hostFromApi() {
-    final base = _apiHost().replaceAll(RegExp(r'/$'), '');
-    return 'ws://$base';
-  }
-
-  Future<void> _loadDevices() async {
-    setState(() {
-      _loadingDevices = true;
-      _error = null;
-    });
-    try {
-      final devices = await widget.api.fetchDevices();
-      if (!mounted) return;
-      setState(() {
-        _devices = devices;
-        _loadingDevices = false;
-        if (devices.isNotEmpty && _selected == null) {
-          _selected = devices.first;
-        }
-      });
-      if (_selected != null) {
-        await _loadRange();
-      }
-    } on Exception catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loadingDevices = false;
-        _error = e.toString();
-      });
-    }
-  }
-
-  Future<void> _loadRange() async {
-    final device = _selected;
-    if (device == null) {
-      return;
-    }
-    if (_rangeMode == _RangeMode.followLive) {
-      _setFollowLive();
-      return;
-    }
-    setState(() {
-      _loadingHistory = true;
-      _error = null;
-    });
-    try {
-      List<DeviceHistory> result;
-      switch (_rangeMode) {
-        case _RangeMode.latestPacket:
-          result = [await widget.api.fetchLatest('/devices/', device.id)];
-          break;
-        case _RangeMode.lastHour:
-          final to = DateTime.now();
-          final from = to.subtract(const Duration(hours: 1));
-          result = await widget.api.fetchHistory(device.id, from: from, to: to);
-          break;
-        case _RangeMode.last5h:
-          final to = DateTime.now();
-          final from = to.subtract(const Duration(hours: 2));
-          result = await widget.api.fetchHistory(device.id, from: from, to: to);
-          break;
-        case _RangeMode.last24h:
-          final to = DateTime.now();
-          final from = to.subtract(const Duration(hours: 24));
-          result = await widget.api.fetchHistory(device.id, from: from, to: to);
-          break;
-        case _RangeMode.custom:
-          result = await widget.api.fetchHistory(device.id);
-          break;
-        case _RangeMode.followLive:
-          result = [];
-          break;
-      }
-      if (!mounted) return;
-      setState(() {
-        _histories = result;
-        _loadingHistory = false;
-      });
-      if (result.isNotEmpty) {
-        _requestStartTime = result.first.startTime;
-        _requestEndTime = result.last.endTime;
-      } else {
-        _requestStartTime = null;
-        _requestEndTime = null;
-      }
-      _liveDataNotifier.value = (List.unmodifiable(_histories), _requestStartTime, _requestEndTime);
-    } on Exception catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _loadingHistory = false;
-      });
-    }
-  }
-
-  void _selectDevice(Device d) {
-    if (_selected?.id == d.id) return;
-    setState(() {
-      _selected = d;
-      _histories = const [];
-    });
-    _loadRange();
-  }
-
-  Future<void> _pickCustomRange() async {
-    final now = DateTime.now();
-    final date = await showDatePicker(
-      context: context,
-      initialDate: now,
-      firstDate: now.subtract(const Duration(days: 365)),
-      lastDate: now,
-    );
-    if (date == null || !mounted) return;
-
-    final timeFrom = await showTimePicker(context: context, initialTime: TimeOfDay(hour: 0, minute: 0));
-    if (timeFrom == null || !mounted) return;
-    final timeTo = await showTimePicker(context: context, initialTime: TimeOfDay(hour: 23, minute: 59));
-    if (timeTo == null || !mounted) return;
-
-    final from = DateTime(
-      date.year, date.month, date.day,
-      timeFrom.hour, timeFrom.minute, 0,
-    );
-    final to = DateTime(
-      date.year, date.month, date.day,
-      timeTo.hour, timeTo.minute, 59,
-    );
-    if (to.isBefore(from)) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('وقت النهاية يجب أن يكون بعد وقت البداية')),
-      );
-      return;
-    }
-    if (to.difference(from) > const Duration(hours: 2)) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('النطاق الأقصى ساعتان')),
-      );
-      return;
-    }
-
-    _stopPolling();
-    setState(() => _rangeMode = _RangeMode.custom);
-    final device = _selected;
-    if (device == null) return;
-    setState(() {
-      _loadingHistory = true;
-      _error = null;
-    });
-    try {
-      final result = await widget.api.fetchHistory(device.id, from: from, to: to);
-      if (!mounted) return;
-      setState(() {
-        _histories = result;
-        _loadingHistory = false;
-        _requestStartTime = from.toIso8601String();
-        _requestEndTime = to.toIso8601String();
-      });
-      _liveDataNotifier.value = (List.unmodifiable(_histories), _requestStartTime, _requestEndTime);
-    } on Exception catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _loadingHistory = false;
-      });
-    }
-  }
-
-  Future<void> _setFollowLive() async {
-    final device = _selected;
-    if (device == null) return;
-    final to = DateTime.now();
-    final from = to.subtract(Duration(minutes: _liveWindowMinutes));
-    setState(() {
-      _loadingHistory = true;
-      _rangeMode = _RangeMode.followLive;
-      _followLiveActive = true;
-      _error = null;
-      _requestStartTime = from.toIso8601String();
-      _requestEndTime = to.toIso8601String();
-    });
-    try {
-      final result = await widget.api.fetchHistory(device.id, from: from, to: to);
-      if (!mounted) return;
-      setState(() {
-        _histories = result;
-        _historyKeys
-          ..clear()
-          ..addAll(result.map((e) => '${e.deviceId}|${e.startTime}|${e.endTime}'));
-        if (_pendingLivePackets.isNotEmpty) {
-          for (final p in _pendingLivePackets) {
-            final pk = '${p.deviceId}|${p.startTime}|${p.endTime}';
-            if (!_historyKeys.contains(pk)) {
-              _histories = [..._histories, p];
-              _historyKeys.add(pk);
-            }
-          }
-          _pendingLivePackets.clear();
-        }
-        if (_histories.isNotEmpty) {
-          final lastEnd = _histories.last.endTime;
-          final anchor = lastEnd != null ? DateTime.tryParse(lastEnd) ?? DateTime.now() : DateTime.now();
-          _requestStartTime = anchor.subtract(Duration(minutes: _liveWindowMinutes)).toIso8601String();
-          _requestEndTime = anchor.toIso8601String();
-        }
-        _loadingHistory = false;
-      });
-      _liveDataNotifier.value = (List.unmodifiable(_histories), _requestStartTime, _requestEndTime);
-      _startPolling();
-    } on Exception catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _loadingHistory = false;
-        _followLiveActive = false;
-      });
-      _stopPolling();
-    }
-  }
-
-  void _startPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) => _pollLatest());
-  }
-
-  void _stopPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
-  }
-
-  Future<void> _pollLatest() async {
-    final device = _selected;
-    if (!mounted || !_followLiveActive || device == null || _loadingHistory) return;
-    try {
-      final h = await widget.api.fetchLatest('/devices/', device.id);
-      if (!mounted || !_followLiveActive) return;
-      final key = '${h.deviceId}|${h.startTime}|${h.endTime}';
-      if (_historyKeys.contains(key)) return;
-      _historyKeys.add(key);
-      _insertPacketLive(h);
-    } on Exception {
-      // Ignore polling errors silently
-    }
-  }
-
-  void _setRange(_RangeMode mode) {
-    if (_rangeMode == mode && mode != _RangeMode.followLive) {
-      return;
-    }
-    if (mode == _RangeMode.followLive) {
-      _setFollowLive();
-      return;
-    }
-    _stopPolling();
-    setState(() {
-      _rangeMode = mode;
-      _followLiveActive = false;
-      _histories = const [];
-      _historyKeys.clear();
-      _requestStartTime = null;
-      _requestEndTime = null;
-    });
-    _loadRange();
-  }
-
-  Future<void> _logout() async {
-    await widget.auth.logout();
-    if (mounted) {
-      Navigator.of(context).pushReplacementNamed('/login');
-    }
-  }
-
-  void _showAIReport() {
-    final now = DateTime.now();
-    showDialog(
-      context: context,
-      builder: (_) => _AIReportDialog(
-        socket: widget.socket,
-        devices: _devices,
-        initialDevice: _selected,
-        initialFrom: now.subtract(const Duration(hours: 24)),
-        initialTo: now,
-      ),
-    );
-  }
+class DashboardScreen extends StatelessWidget {
+  const DashboardScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final controller = Get.find<DashboardController>();
     final scheme = Theme.of(context).colorScheme;
+
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A0A),
       appBar: AppBar(
@@ -456,66 +48,69 @@ class _DashboardScreenState extends State<DashboardScreen> {
           IconButton(
             tooltip: 'تقرير الأهداف',
             icon: const Icon(Icons.assessment, color: Colors.white70),
-            onPressed: _showAIReport,
+            onPressed: () => _showAIReport(context, controller),
           ),
           IconButton(
             tooltip: 'تسجيل الخروج',
             icon: const Icon(Icons.logout),
-            onPressed: _logout,
+            onPressed: () async {
+              await Get.find<AuthController>().logout();
+              Get.offAllNamed('/login');
+            },
           ),
         ],
       ),
-      body: _buildBody(scheme),
+      body: _buildBody(context, controller, scheme),
     );
   }
 
-  Widget _buildBody(ColorScheme scheme) {
+  Widget _buildBody(BuildContext context, DashboardController c, ColorScheme scheme) {
     return Column(
       children: [
-        _buildDeviceBar(scheme),
-        _buildRangeControls(scheme),
-        Expanded(child: _buildSpectrogramArea()),
-        _buildStatusBar(),
+        _buildDeviceBar(c, scheme),
+        _buildRangeControls(context, c, scheme),
+        Expanded(child: _buildSpectrogramArea(context, c)),
+        _buildStatusBar(c),
       ],
     );
   }
 
-  Widget _buildDeviceBar(ColorScheme scheme) {
+  Widget _buildDeviceBar(DashboardController c, ColorScheme scheme) {
     return Container(
       color: const Color(0xFF111111),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      child: _loadingDevices
+      child: Obx(() => c.loadingDevices.value
           ? const LinearProgressIndicator()
           : SizedBox(
               height: 40,
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 children: [
-                  for (final d in _devices)
+                  for (final d in c.devices)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 4),
                       child: ChoiceChip(
                         label: Text(d.name),
-                        selected: _selected?.id == d.id,
-                        onSelected: (_) => _selectDevice(d),
+                        selected: c.selected.value?.id == d.id,
+                        onSelected: (_) => c.selectDevice(d),
                         selectedColor: scheme.primary,
                         backgroundColor: const Color(0xFF1A1A1A),
                         labelStyle: TextStyle(
-                          color: _selected?.id == d.id ? Colors.black : Colors.white70,
+                          color: c.selected.value?.id == d.id ? Colors.black : Colors.white70,
                         ),
                       ),
                     ),
                 ],
               ),
-            ),
+            )),
     );
   }
 
-  Widget _buildRangeControls(ColorScheme scheme) {
+  Widget _buildRangeControls(BuildContext context, DashboardController c, ColorScheme scheme) {
     Widget btn(String label, IconData? icon, VoidCallback onTap, {bool active = false}) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: OutlinedButton(
+        child: OutlinedButton(
           onPressed: onTap,
           style: OutlinedButton.styleFrom(
             foregroundColor: active ? scheme.primary : Colors.white70,
@@ -537,7 +132,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
 
-    bool mode(_RangeMode m) => _rangeMode == m;
+    bool mode(RangeMode m) => c.rangeMode.value == m;
 
     return Container(
       color: const Color(0xFF0E0E0E),
@@ -549,13 +144,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
               children: [
-                btn('آخر باكت', Icons.flash_on, () => _setRange(_RangeMode.latestPacket), active: mode(_RangeMode.latestPacket)),
-                btn('متابعة البث', Icons.play_circle, () => _setRange(_RangeMode.followLive), active: mode(_RangeMode.followLive)),
+                btn('آخر باكت', Icons.flash_on, () => c.setRange(RangeMode.latestPacket), active: mode(RangeMode.latestPacket)),
+                btn('متابعة البث', Icons.play_circle, () => c.setRange(RangeMode.followLive), active: mode(RangeMode.followLive)),
                 Container(
                   height: 28,
                   padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: DropdownButton<int>(
-                    value: _liveWindowMinutes,
+                  child: Obx(() => DropdownButton<int>(
+                    value: c.liveWindowMinutes.value,
                     isDense: true,
                     underline: const SizedBox.shrink(),
                     style: const TextStyle(color: Colors.white70, fontSize: 13),
@@ -564,58 +159,58 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       DropdownMenuItem(value: m, child: Text('$m د', style: const TextStyle(fontSize: 13)))
                     ).toList(),
                     onChanged: (v) {
-                      if (v != null) setState(() => _liveWindowMinutes = v);
-                      if (_rangeMode == _RangeMode.followLive) _setFollowLive();
+                      if (v != null) {
+                        c.liveWindowMinutes.value = v;
+                        if (c.rangeMode.value == RangeMode.followLive) c.setFollowLive();
+                      }
                     },
-                  ),
+                  )),
                 ),
-                btn('آخر ساعة', Icons.timer, () => _setRange(_RangeMode.lastHour), active: mode(_RangeMode.lastHour)),
-                btn('آخر ساعتين', Icons.history, () => _setRange(_RangeMode.last5h), active: mode(_RangeMode.last5h)),
-                btn('تحميل النطاق', Icons.date_range, _pickCustomRange, active: mode(_RangeMode.custom)),
-                if (_markers.isNotEmpty)
-                  btn('إزالة العلامات', Icons.clear, () => setState(() => _markers = [])),
+                btn('آخر ساعة', Icons.timer, () => c.setRange(RangeMode.lastHour), active: mode(RangeMode.lastHour)),
+                btn('آخر ساعتين', Icons.history, () => c.setRange(RangeMode.last5h), active: mode(RangeMode.last5h)),
+                btn('تحميل النطاق', Icons.date_range, () => c.pickCustomRange(context), active: mode(RangeMode.custom)),
+                Obx(() => c.markers.isNotEmpty
+                    ? btn('إزالة العلامات', Icons.clear, () => c.clearMarkers())
+                    : const SizedBox.shrink()),
               ],
             ),
           ),
-            Padding(
-              padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
-              child: ValueListenableBuilder<double>(
-                valueListenable: _gainNotifier,
-                builder: (context, gainVal, _) {
-                  return Row(
-                    children: [
-                      const Icon(Icons.volume_up, size: 18, color: Colors.white70),
-                      const SizedBox(width: 6),
-                      Text(
-                        'الكسب: ${gainVal.toStringAsFixed(0)} dB',
-                        style: const TextStyle(color: Colors.white70, fontSize: 12),
-                      ),
-                      Expanded(
-                        child: SliderTheme(
-                          data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5)),
-                          child: Slider(
-                            value: gainVal,
-                            min: -24,
-                            max: 24,
-                            divisions: 48,
-                            onChanged: (v) {
-                              _gainDb = v;
-                              _gainNotifier.value = v;
-                            },
-                          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
+            child: ValueListenableBuilder<double>(
+              valueListenable: c.gainNotifier,
+              builder: (context, gainVal, _) {
+                return Row(
+                  children: [
+                    const Icon(Icons.volume_up, size: 18, color: Colors.white70),
+                    const SizedBox(width: 6),
+                    Text(
+                      'الكسب: ${gainVal.toStringAsFixed(0)} dB',
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                    Expanded(
+                      child: SliderTheme(
+                        data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5)),
+                        child: Slider(
+                          value: gainVal,
+                          min: -24,
+                          max: 24,
+                          divisions: 48,
+                          onChanged: (v) => c.updateGain(v),
                         ),
                       ),
-                    ],
-                  );
-                },
-              ),
+                    ),
+                  ],
+                );
+              },
             ),
+          ),
           Padding(
             padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
             child: SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: _openFullscreen,
+                onPressed: () => _openFullscreen(context, c),
                 icon: const Icon(Icons.fullscreen, size: 18),
                 label: const Text('ملء الشاشة', style: TextStyle(fontSize: 12)),
                 style: OutlinedButton.styleFrom(
@@ -631,14 +226,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  void _openFullscreen() async {
-    if (_histories.isEmpty) return;
-    final snap = _canvasKey.currentState?.seedSnapshot;
+  void _openFullscreen(BuildContext context, DashboardController c) async {
+    if (c.histories.isEmpty) return;
+    final snap = c.canvasKey.currentState?.seedSnapshot;
     final result = await Navigator.of(context).push<FullscreenResult>(
       MaterialPageRoute(
         builder: (_) => FullscreenSpectrogram(
-          liveDataNotifier: _liveDataNotifier,
-          gainDb: _gainDb,
+          liveDataNotifier: c.liveDataNotifier,
+          gainDb: c.gainDb.value,
           seedImage: snap?.image,
           seedCachedCombined: snap?.cachedCombined,
           seedCachedWidth: snap?.cachedWidth ?? 0,
@@ -651,113 +246,120 @@ class _DashboardScreenState extends State<DashboardScreen> {
           seedIntensityWidth: snap?.intensityWidth ?? 0,
           seedIntensityHeight: snap?.intensityHeight ?? 0,
           seedGamma: snap?.cachedGamma ?? 1.0,
-          markers: _markers,
+          markers: c.markers.toList(),
         ),
       ),
     );
-    if (result != null && mounted) {
-      setState(() {
-        _gainDb = result.gainDb;
-        _gainNotifier.value = result.gainDb;
-        _markers = result.markers;
-      });
-      _canvasKey.currentState?.forceRender();
+    if (result != null) {
+      c.updateGain(result.gainDb);
+      c.markers.value = result.markers;
+      c.canvasKey.currentState?.forceRender();
     }
   }
 
-  Widget _buildSpectrogramArea() {
-    if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.cloud_off, color: Colors.white38, size: 48),
-              const SizedBox(height: 12),
-              Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.redAccent)),
-              const SizedBox(height: 16),
-              FilledButton(onPressed: _loadRange, child: const Text('إعادة المحاولة')),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (_loadingHistory) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (_selected == null) {
-      return const Center(child: Text('اختر جهازاً', style: TextStyle(color: Colors.white38)));
-    }
-
-    return Container(
-      margin: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.white12),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      clipBehavior: Clip.hardEdge,
-      child: SpectrogramCanvas(
-        key: _canvasKey,
-        histories: _histories,
-        gainDb: _gainDb,
-        gainNotifier: _gainNotifier,
-        requestStartTime: _requestStartTime,
-        requestEndTime: _requestEndTime,
-        markers: _markers,
-        onMarkerAdd: (timeMs) => setState(() => _markers = [..._markers, MarkerData(timeMs: timeMs)]),
-        onMarkerRemove: (index) => setState(() {
-          _markers = List<MarkerData>.from(_markers)..removeAt(index);
-        }),
-        onMarkerMove: (index, newTimeMs) => setState(() {
-          _markers = List<MarkerData>.from(_markers);
-          _markers[index] = MarkerData(timeMs: newTimeMs);
-        }),
-      ),
-    );
-  }
-
-  Widget _buildStatusBar() {
-    final connected = _socketStatus == SocketStatus.connected;
-    final packetCount = _histories.length;
-    return Container(
-      height: 24,
-      color: const Color(0xFF111111),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        children: [
-          Icon(Icons.circle, size: 8, color: connected ? Colors.greenAccent : Colors.orangeAccent),
-          const SizedBox(width: 6),
-          Text(
-            connected ? 'متصل' : 'غير متصل',
-            style: TextStyle(
-              color: connected ? Colors.greenAccent : Colors.orangeAccent,
-              fontSize: 11,
-              letterSpacing: 1,
+  Widget _buildSpectrogramArea(BuildContext context, DashboardController c) {
+    return Obx(() {
+      if (c.error.value != null) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.cloud_off, color: Colors.white38, size: 48),
+                const SizedBox(height: 12),
+                Text(c.error.value!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.redAccent)),
+                const SizedBox(height: 16),
+                FilledButton(onPressed: () => c.loadRange(), child: const Text('إعادة المحاولة')),
+              ],
             ),
           ),
-          const Spacer(),
-          Text(
-            '${_selected?.name ?? ''} • $packetCount باكت',
-            style: const TextStyle(color: Colors.white38, fontSize: 12),
-          ),
-        ],
+        );
+      }
+
+      if (c.loadingHistory.value) {
+        return const Center(child: CircularProgressIndicator());
+      }
+
+      if (c.selected.value == null) {
+        return const Center(child: Text('اختر جهازاً', style: TextStyle(color: Colors.white38)));
+      }
+
+      return Container(
+        margin: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.white12),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        clipBehavior: Clip.hardEdge,
+        child: SpectrogramCanvas(
+          key: c.canvasKey,
+          histories: c.histories.toList(),
+          gainDb: c.gainDb.value,
+          gainNotifier: c.gainNotifier,
+          requestStartTime: c.requestStartTime.value,
+          requestEndTime: c.requestEndTime.value,
+          markers: c.markers.toList(),
+          onMarkerAdd: (timeMs) => c.addMarker(timeMs),
+          onMarkerRemove: (index) => c.removeMarker(index),
+          onMarkerMove: (index, newTimeMs) => c.moveMarker(index, newTimeMs),
+        ),
+      );
+    });
+  }
+
+  Widget _buildStatusBar(DashboardController c) {
+    return Obx(() {
+      final connected = c.socketStatus.value == SocketStatus.connected;
+      final packetCount = c.histories.length;
+      return Container(
+        height: 24,
+        color: const Color(0xFF111111),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Row(
+          children: [
+            Icon(Icons.circle, size: 8, color: connected ? Colors.greenAccent : Colors.orangeAccent),
+            const SizedBox(width: 6),
+            Text(
+              connected ? 'متصل' : 'غير متصل',
+              style: TextStyle(
+                color: connected ? Colors.greenAccent : Colors.orangeAccent,
+                fontSize: 11,
+                letterSpacing: 1,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              '${c.selected.value?.name ?? ''} • $packetCount باكت',
+              style: const TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+
+  void _showAIReport(BuildContext context, DashboardController c) {
+    final now = DateTime.now();
+    showDialog(
+      context: context,
+      builder: (_) => _AIReportDialog(
+        devices: c.devices.toList(),
+        initialDevice: c.selected.value,
+        initialFrom: now.subtract(const Duration(hours: 24)),
+        initialTo: now,
       ),
     );
   }
 }
 
 class _AIReportDialog extends StatefulWidget {
-  final SocketService socket;
   final List<Device> devices;
   final Device? initialDevice;
   final DateTime initialFrom;
   final DateTime initialTo;
 
   const _AIReportDialog({
-    required this.socket,
     required this.devices,
     this.initialDevice,
     required this.initialFrom,
@@ -775,6 +377,7 @@ class _AIReportDialogState extends State<_AIReportDialog> {
   bool _loading = false;
   Map<String, dynamic>? _result;
   String? _error;
+  int _selectedRange = 3;
 
   @override
   void initState() {
@@ -846,7 +449,8 @@ class _AIReportDialogState extends State<_AIReportDialog> {
       _result = null;
     });
 
-    final response = await widget.socket.emitCheckAiStatus(
+    final socket = Get.find<SocketService>();
+    final response = await socket.emitCheckAiStatus(
       deviceId: _device!.id,
       startTime: _iso(_from),
       endTime: _iso(_to),
@@ -932,8 +536,6 @@ class _AIReportDialogState extends State<_AIReportDialog> {
       ),
     );
   }
-
-  int _selectedRange = 3;
 
   Widget _buildQuickRanges() {
     final now = DateTime.now();
@@ -1042,7 +644,6 @@ class _AIReportDialogState extends State<_AIReportDialog> {
       return const Text('لا توجد أهداف لهذا الجهاز في هذه الفترة', style: TextStyle(color: Colors.white54));
     }
 
-    // Collect detected and possible items with time
     final List<MapEntry<DateTime, double?>> detectedList = [];
     final List<MapEntry<DateTime, double?>> possibleList = [];
 
