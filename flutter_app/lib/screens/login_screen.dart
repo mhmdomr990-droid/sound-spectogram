@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
@@ -21,11 +22,34 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _username = TextEditingController(text: 'admin');
-  final _password = TextEditingController(text: 'r7ZZqT79l57EOBv');
+  final _username = TextEditingController();
+  final _password = TextEditingController();
   final _server = TextEditingController();
   bool _loading = false;
   String? _error;
+
+  static const _savedUsernameKey = 'saved_username';
+  static const _savedPasswordKey = 'saved_password';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedCredentials();
+  }
+
+  Future<void> _loadSavedCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedUsername = prefs.getString(_savedUsernameKey);
+    final savedPassword = prefs.getString(_savedPasswordKey);
+    if (savedUsername != null) _username.text = savedUsername;
+    if (savedPassword != null) _password.text = savedPassword;
+  }
+
+  Future<void> _saveCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_savedUsernameKey, _username.text.trim());
+    await prefs.setString(_savedPasswordKey, _password.text);
+  }
 
   @override
   void dispose() {
@@ -59,6 +83,7 @@ class _LoginScreenState extends State<LoginScreen> {
       final token = json['token'] as String;
       final user = AuthUser.fromJson(json['user'] as Map<String, dynamic>);
       await widget.auth.save(token: token, user: user);
+      await _saveCredentials();
 
       if (mounted) {
         Navigator.of(context).pushReplacementNamed('/dashboard');
