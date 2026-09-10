@@ -251,7 +251,7 @@ class DashboardScreen extends StatelessWidget {
           seedIntensityWidth: snap?.intensityWidth ?? 0,
           seedIntensityHeight: snap?.intensityHeight ?? 0,
           seedGamma: snap?.cachedGamma ?? 1.0,
-          markers: c.markers.toList(),
+          markers: c.markers,
         ),
       ),
     );
@@ -299,12 +299,12 @@ class DashboardScreen extends StatelessWidget {
         clipBehavior: Clip.hardEdge,
         child: SpectrogramCanvas(
           key: c.canvasKey,
-          histories: c.histories.toList(),
+          histories: c.histories,
           gainDb: c.gainDb.value,
           gainNotifier: c.gainNotifier,
           requestStartTime: c.requestStartTime.value,
           requestEndTime: c.requestEndTime.value,
-          markers: c.markers.toList(),
+          markers: c.markers,
           onMarkerAdd: (timeMs) => c.addMarker(timeMs),
           onMarkerRemove: (index) => c.removeMarker(index),
           onMarkerMove: (index, newTimeMs) => c.moveMarker(index, newTimeMs),

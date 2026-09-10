@@ -106,22 +106,22 @@ class DashboardController extends GetxController {
         }
       });
     }
-    final newHistories = [...histories, h]..sort((a, b) {
-        final aStart = DateTime.tryParse(a.startTime ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final bStart = DateTime.tryParse(b.startTime ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return aStart.compareTo(bStart);
-      });
+    histories.add(h);
+    histories.sort((a, b) {
+      final aStart = DateTime.tryParse(a.startTime ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bStart = DateTime.tryParse(b.startTime ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return aStart.compareTo(bStart);
+    });
     final cutoff = DateTime.now().subtract(Duration(minutes: liveWindowMinutes.value));
-    final filtered = newHistories.where((e) {
+    histories.removeWhere((e) {
       final end = DateTime.tryParse(e.endTime ?? '');
-      return end != null ? end.isAfter(cutoff) : true;
-    }).toList();
-    final lastEnd = filtered.isNotEmpty ? filtered.last.endTime : null;
+      return end != null ? !end.isAfter(cutoff) : false;
+    });
+    final lastEnd = histories.isNotEmpty ? histories.last.endTime : null;
     final anchor = lastEnd != null ? DateTime.tryParse(lastEnd) ?? DateTime.now() : DateTime.now();
-    histories.value = filtered;
     requestStartTime.value = anchor.subtract(Duration(minutes: liveWindowMinutes.value)).toIso8601String();
     requestEndTime.value = anchor.toIso8601String();
-    liveDataNotifier.value = (List.unmodifiable(filtered), requestStartTime.value, requestEndTime.value);
+    liveDataNotifier.value = (List.unmodifiable(histories), requestStartTime.value, requestEndTime.value);
     canvasKey.currentState?.forceRender();
   }
 
@@ -305,7 +305,7 @@ class DashboardController extends GetxController {
 
   void _startPolling() {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) => _pollLatest());
+    _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) => _pollLatest());
   }
 
   void _stopPolling() {

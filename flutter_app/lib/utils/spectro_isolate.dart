@@ -443,6 +443,7 @@ class SpectroIsolate {
         (img) => completer.complete(img));
     return completer.future;
   }
+
 }
 
 // ---------------------------------------------------------------------------

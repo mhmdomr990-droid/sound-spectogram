@@ -2,6 +2,9 @@ import 'dart:convert';
 
 import 'package:archive/archive.dart';
 
+/// Shared stateless GZipDecoder instance — avoids reallocation per call.
+final _sharedGZipDecoder = GZipDecoder();
+
 /// AI status values matching the server's `AiStatus` enum.
 enum AiStatus {
   possible(0),
@@ -40,6 +43,9 @@ class DeviceHistory {
   final AiStatus aiStatus;
   final double? confidence;
 
+  /// Cached intensity range — computed once during construction.
+  final List<double> intensityRange;
+
   const DeviceHistory({
     required this.id,
     required this.deviceId,
@@ -51,6 +57,7 @@ class DeviceHistory {
     this.intensityType,
     this.aiStatus = AiStatus.possible,
     this.confidence,
+    required this.intensityRange,
   });
 
   /// Number of time columns in the matrix.
@@ -59,9 +66,8 @@ class DeviceHistory {
   /// Number of frequency rows in the matrix.
   int get height => data.length;
 
-  /// The intensity range present in `data`, as [min, max].
-  /// Returns [0, 1] when empty.
-  List<double> get intensityRange {
+  /// Computes the intensity range [min, max] from a 2D matrix.
+  static List<double> _computeIntensityRange(List<List<double>> data) {
     if (data.isEmpty) {
       return const [0, 1];
     }
@@ -69,15 +75,9 @@ class DeviceHistory {
     double max = double.negativeInfinity;
     for (final row in data) {
       for (final v in row) {
-        if (v.isNaN || v.isInfinite) {
-          continue;
-        }
-        if (v < min) {
-          min = v;
-        }
-        if (v > max) {
-          max = v;
-        }
+        if (v.isNaN || v.isInfinite) continue;
+        if (v < min) min = v;
+        if (v > max) max = v;
       }
     }
     if (!min.isFinite || !max.isFinite) {
@@ -129,7 +129,7 @@ class DeviceHistory {
       if (format == 'gzip-base64-json-v1') {
         final raw = payload['payload'] as String;
         final bytes = base64Decode(raw);
-        final inflated = GZipDecoder().decodeBytes(bytes);
+        final inflated = _sharedGZipDecoder.decodeBytes(bytes);
         final decoded = jsonDecode(utf8.decode(inflated));
         return _matrixFromList(decoded);
       }
@@ -144,16 +144,18 @@ class DeviceHistory {
     if (list is! List || list.isEmpty) {
       return const [];
     }
-    return List<List<double>>.generate(list.length, (r) {
+    final rows = list.length;
+    return List<List<double>>.generate(rows, (r) {
       final row = list[r];
       if (row is! List || row.isEmpty) {
         return const [];
       }
-      return List<double>.generate(row.length, (c) {
+      final cols = row.length;
+      return List<double>.generate(cols, (c) {
         final v = row[c];
         return (v is num) ? v.toDouble() : 0.0;
       });
-    }, growable: true);
+    });
   }
 
   static double? _parseConfidence(dynamic value) {
@@ -182,6 +184,7 @@ class DeviceHistory {
       intensityType: json['intensityType'] as String? ?? json['intensity_type'] as String?,
       aiStatus: AiStatus.fromCode(json['aiStatus'] as num? ?? json['ai_status'] as num?),
       confidence: _parseConfidence(json['confidence']),
+      intensityRange: _computeIntensityRange(data),
     );
   }
 }

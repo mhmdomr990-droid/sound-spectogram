@@ -369,13 +369,17 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _renderDebounce = Timer(const Duration(milliseconds: 100), () {
         if (mounted) _render();
       });
-    } else if (gainChanged && _cachedIntensity != null) {
+    }
+    if (gainChanged && _cachedIntensity != null && _cachedIntensityWidth > 0 && _cachedIntensityHeight > 0) {
       _onGainChanged();
     }
   }
 
   void _onGainChanged() async {
-    if (_cachedIntensity == null || _image == null) return;
+    if (_cachedIntensity == null || _cachedIntensityWidth <= 0 || _cachedIntensityHeight <= 0) {
+      _render();
+      return;
+    }
     final gainDb = widget.gainNotifier?.value ?? widget.gainDb;
     final image = await _applyGainAndBuildImage(gainDb);
     if (!mounted) return;
@@ -392,6 +396,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         colCount: seedSnapshot!.colCount,
         startTime: seedSnapshot!.startTime,
         endTime: seedSnapshot!.endTime,
+        cachedIntensity: seedSnapshot!.cachedIntensity,
+        intensityWidth: seedSnapshot!.intensityWidth,
+        intensityHeight: seedSnapshot!.intensityHeight,
+        cachedGamma: seedSnapshot!.cachedGamma,
       );
     }
     setState(() {});
@@ -484,72 +492,6 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     }
     if (totalDataMs <= 0 || totalDataCols <= 0) return null;
     return totalDataCols / totalDataMs;
-  }
-
-  List<List<num>> _resolvedMatrix() {
-    if (widget.matrix.isNotEmpty) {
-      return widget.matrix;
-    }
-    final histories = widget.histories;
-    if (histories == null || histories.isEmpty) {
-      return const [];
-    }
-
-    final key = Object.hash(histories, widget.requestStartTime, widget.requestEndTime);
-    if (_matrixCacheKey == key && _cachedMatrix != null) {
-      return _cachedMatrix!;
-    }
-
-    final fromMs = _stateParseMs(widget.requestStartTime ?? histories.first.startTime);
-    final toMs = _stateParseMs(widget.requestEndTime ?? histories.last.endTime);
-    if (fromMs == null || toMs == null || toMs <= fromMs) {
-      final result = _resolvedMatrixFallback(histories);
-      _cachedMatrix = result;
-      _matrixCacheKey = key;
-      return result;
-    }
-
-    final colsPerMs = _computeColsPerMs(histories);
-    if (colsPerMs == null) {
-      return _resolvedMatrixFallback(histories);
-    }
-
-    final rangeMs = toMs - fromMs;
-    final totalCols = (rangeMs * colsPerMs).round();
-    if (totalCols <= 0) return const [];
-
-    int targetRows = 0;
-    for (final h in histories) {
-      if (h.data.length > targetRows) targetRows = h.data.length;
-    }
-    if (targetRows == 0) return const [];
-
-    final combined = List.generate(targetRows, (_) => List<num>.filled(totalCols, 0));
-
-    for (final h in histories) {
-      if (h.data.isEmpty) continue;
-      final s = _stateParseMs(h.startTime);
-      final e = _stateParseMs(h.endTime);
-      if (s == null || e == null || e <= s) continue;
-
-      final startCol = ((s - fromMs) * colsPerMs).round().clamp(0, totalCols);
-      final endCol = ((e - fromMs) * colsPerMs).round().clamp(0, totalCols);
-      final srcRows = h.data.length;
-      final srcCols = h.data[0].length;
-
-      for (int r = 0; r < targetRows; r++) {
-        if (r >= srcRows) continue;
-        final srcRow = h.data[r];
-        final width = (endCol - startCol).clamp(0, srcCols);
-        for (int c = 0; c < width; c++) {
-          combined[r][startCol + c] = srcRow[c < srcCols ? c : srcCols - 1];
-        }
-      }
-    }
-
-    _cachedMatrix = combined;
-    _matrixCacheKey = key;
-    return combined;
   }
 
   List<List<num>> _resolvedMatrixFallback(List<DeviceHistory> histories) {
@@ -962,10 +904,31 @@ class _SpectroPainter extends CustomPainter {
   static final Paint _gapStrokePaint = Paint()..color = _gapStroke..style = PaintingStyle.stroke..strokeWidth = 1;
   static final Paint _gridPaint = Paint()..color = _gridColor..strokeWidth = 1;
   static final Paint _axisPaint = Paint()..color = _axisColor..strokeWidth = 1.2..style = PaintingStyle.stroke;
-  static final TextStyle _gapTextStyle = TextStyle(color: Color(0xF2E1F4FF), fontSize: 11);
   static final TextStyle _timeStyle = TextStyle(color: _textColor, fontSize: 10);
-  static final TextStyle _freqStyle = TextStyle(color: _textColor, fontSize: 10);
-  static final TextStyle _titleStyle = TextStyle(color: _textColor, fontSize: 10);
+
+  // Cached TextPainters for static text — avoids per-frame allocation.
+  static final TextPainter _freqTitlePainter = TextPainter(
+    text: const TextSpan(text: 'التردد (Hz)', style: TextStyle(color: _textColor, fontSize: 10)),
+    textDirection: TextDirection.rtl,
+  )..layout();
+  static final TextPainter _timeTitlePainter = TextPainter(
+    text: const TextSpan(text: 'الزمن', style: TextStyle(color: _textColor, fontSize: 10)),
+    textDirection: TextDirection.rtl,
+  )..layout();
+  static final Map<int, TextPainter> _freqLabelCache = {};
+  static final Map<String, TextPainter> _gapTextCache = {};
+  static TextPainter _getFreqLabelPainter(int hz) {
+    return _freqLabelCache.putIfAbsent(hz, () => TextPainter(
+      text: TextSpan(text: '$hz', style: const TextStyle(color: _textColor, fontSize: 10)),
+      textDirection: TextDirection.ltr,
+    )..layout());
+  }
+  static TextPainter _getGapTextPainter(int gapMin) {
+    return _gapTextCache.putIfAbsent('$gapMin', () => TextPainter(
+      text: TextSpan(text: 'لا توجد بيانات $gapMin د', style: const TextStyle(color: Color(0xF2E1F4FF), fontSize: 11)),
+      textDirection: TextDirection.rtl,
+    )..layout());
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1033,7 +996,6 @@ class _SpectroPainter extends CustomPainter {
         }
         final gapFillPaint = _gapFillPaint;
         final gapStrokePaint = _gapStrokePaint;
-        final gapStyle = _gapTextStyle;
         var cursor = visStartCol;
         for (final iv in merged) {
           if (iv.startMs > cursor) {
@@ -1045,10 +1007,7 @@ class _SpectroPainter extends CustomPainter {
             canvas.drawLine(Offset(gx1, pTop), Offset(gx1, pTop + plotH), gapStrokePaint);
             if (gw >= 52) {
               final gapMin = ((iv.startMs - cursor) / visCols * (toMs! - fromMs!) / 60000).round();
-              final gt = TextPainter(
-                text: TextSpan(text: 'لا توجد بيانات $gapMin د', style: gapStyle),
-                textDirection: TextDirection.rtl,
-              )..layout();
+              final gt = _getGapTextPainter(gapMin);
               gt.paint(canvas, Offset(gx0 + gw / 2 - gt.width / 2, pTop + 4));
             }
           }
@@ -1063,10 +1022,7 @@ class _SpectroPainter extends CustomPainter {
           canvas.drawLine(Offset(gx1, pTop), Offset(gx1, pTop + plotH), gapStrokePaint);
           if (gw >= 52) {
             final gapMin = ((visEndCol - cursor) / visCols * (toMs! - fromMs!) / 60000).round();
-            final gt = TextPainter(
-              text: TextSpan(text: 'لا توجد بيانات $gapMin د', style: gapStyle),
-              textDirection: TextDirection.rtl,
-            )..layout();
+            final gt = _getGapTextPainter(gapMin);
             gt.paint(canvas, Offset(gx0 + gw / 2 - gt.width / 2, pTop + 4));
           }
         }
@@ -1161,35 +1117,21 @@ class _SpectroPainter extends CustomPainter {
     }
 
     // 6) Frequency (y) axis labels — 0 to 250 Hz.
-    final freqStyle = _freqStyle;
     for (var i = 0; i <= _yTicks; i++) {
       final hz = ((_yTicks - i) * _maxFrequency / _yTicks).round();
-      final label = '$hz';
       final y = pTop + plotH * i / _yTicks;
-      final fp = TextPainter(
-        text: TextSpan(text: label, style: freqStyle),
-        textDirection: TextDirection.ltr,
-      )..layout();
+      final fp = _getFreqLabelPainter(hz);
       fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
     }
 
     // 7) Axis titles.
-    final titleStyle = _titleStyle;
     canvas.save();
     canvas.translate(10, pTop + plotH / 2);
     canvas.rotate(-3.141592653589793 / 2);
-    final freqTitle = TextPainter(
-      text: TextSpan(text: 'التردد (Hz)', style: titleStyle),
-      textDirection: TextDirection.rtl,
-    )..layout();
-    freqTitle.paint(canvas, Offset(-freqTitle.width / 2, -freqTitle.height / 2));
+    _freqTitlePainter.paint(canvas, Offset(-_freqTitlePainter.width / 2, -_freqTitlePainter.height / 2));
     canvas.restore();
 
-    final timeTitle = TextPainter(
-      text: TextSpan(text: 'الزمن', style: titleStyle),
-      textDirection: TextDirection.rtl,
-    )..layout();
-    timeTitle.paint(canvas, Offset(pLeft + plotW / 2 - timeTitle.width / 2, pTop + plotH + 20));
+    _timeTitlePainter.paint(canvas, Offset(pLeft + plotW / 2 - _timeTitlePainter.width / 2, pTop + plotH + 20));
 
     // 8) AI Status bar (below time title).
     if (showStatusBar && histories != null && histories!.isNotEmpty &&
