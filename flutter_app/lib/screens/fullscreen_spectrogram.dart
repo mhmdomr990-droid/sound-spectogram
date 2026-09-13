@@ -242,6 +242,10 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                 children: [
                                   Expanded(child: _fsBtn(Icons.fit_screen, null, () => _canvasKey.currentState?.fitToScreen())),
                                   const SizedBox(width: 1),
+                                  if (_markers.isNotEmpty)
+                                    Expanded(child: _fsBtn(Icons.delete_outline, null, () => setState(() => _markers.clear()))),
+                                  if (_markers.isNotEmpty)
+                                    const SizedBox(width: 1),
                                   Expanded(child: _fsBtn(Icons.fullscreen_exit, null, _exit)),
                                 ],
                               ),
