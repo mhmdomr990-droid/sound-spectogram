@@ -54,6 +54,7 @@ class SocketService {
 
   DeviceHistory? _payloadToHistory(dynamic payload) {
     if (payload is! Map && payload is! List) {
+      print('[Socket] payload ignored: unexpected type ${payload.runtimeType}');
       return null;
     }
     Map<String, dynamic> map;
@@ -62,10 +63,14 @@ class SocketService {
     } else {
       map = (payload as Map).cast<String, dynamic>();
     }
-    // Broadcast payloads may nest fields under 'data' along with a real matrix.
     try {
-      return DeviceHistory.fromJson(map);
-    } catch (_) {
+      final history = DeviceHistory.fromJson(map);
+      if (history.data.isEmpty) {
+        print('[Socket] packet ${history.startTime}-${history.endTime} has EMPTY data matrix');
+      }
+      return history;
+    } catch (e) {
+      print('[Socket] payload parse FAILED: $e | keys: ${map.keys.toList()}');
       return null;
     }
   }

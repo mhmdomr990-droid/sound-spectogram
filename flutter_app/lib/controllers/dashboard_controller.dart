@@ -78,6 +78,10 @@ class DashboardController extends GetxController {
         return;
       }
       _historyKeys.add(key);
+      if (h.data.isEmpty) {
+        _fetchAndInsertPacket(h);
+        return;
+      }
       insertPacketLive(h);
     });
     socket.connect(_hostFromApi(), token: auth.token);
@@ -303,6 +307,28 @@ class DashboardController extends GetxController {
     }
   }
 
+  Future<void> _fetchAndInsertPacket(DeviceHistory h) async {
+    final device = selected.value;
+    if (device == null) return;
+    try {
+      final start = DateTime.tryParse(h.startTime ?? '');
+      final end = DateTime.tryParse(h.endTime ?? '');
+      if (start == null || end == null) return;
+      final result = await api.fetchHistory(device.id, from: start, to: end);
+      final match = result.where((r) =>
+        r.startTime == h.startTime && r.endTime == h.endTime && r.data.isNotEmpty
+      ).toList();
+      if (match.isNotEmpty) {
+        _historyKeys.remove('${h.deviceId}|${h.startTime}|${h.endTime}');
+        _historyKeys.add('${match.first.deviceId}|${match.first.startTime}|${match.first.endTime}');
+        insertPacketLive(match.first);
+        print('[Recovery] refetched packet ${h.startTime}-${h.endTime} with ${match.first.data.length} rows');
+      }
+    } on Exception catch (e) {
+      print('[Recovery] failed to refetch packet: $e');
+    }
+  }
+
   void _startPolling() {
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) => _pollLatest());
@@ -317,12 +343,20 @@ class DashboardController extends GetxController {
     final device = selected.value;
     if (!followLiveActive.value || device == null || loadingHistory.value) return;
     try {
-      final h = await api.fetchLatest('/devices/', device.id);
+      final now = DateTime.now();
+      final from = now.subtract(Duration(minutes: liveWindowMinutes.value));
+      final result = await api.fetchHistory(device.id, from: from, to: now);
       if (!followLiveActive.value) return;
-      final key = '${h.deviceId}|${h.startTime}|${h.endTime}';
-      if (_historyKeys.contains(key)) return;
-      _historyKeys.add(key);
-      insertPacketLive(h);
+      for (final h in result) {
+        final key = '${h.deviceId}|${h.startTime}|${h.endTime}';
+        if (_historyKeys.contains(key)) continue;
+        _historyKeys.add(key);
+        if (h.data.isEmpty) {
+          _fetchAndInsertPacket(h);
+          continue;
+        }
+        insertPacketLive(h);
+      }
     } on Exception {
       // Ignore polling errors silently
     }
