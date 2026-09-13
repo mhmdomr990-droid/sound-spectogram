@@ -1,749 +1,452 @@
-# خوارزمية رسم المخطط الطيفي (Spectrogram Rendering Algorithm)
+# Spectrogram Rendering & Gap Algorithm — Reference Specification
 
-> دليل شامل لإعادة تنفيذ الرسم المطابق. يصف كل مرحلة من تحميل البيانات إلى رسم البكسل النهائي.
+> **This file is IMMUTABLE.** It describes the **correct** algorithm that the Flutter app must implement.
+> When rendering or gaps break, compare the code against this file and fix the code to match.
+> Do NOT update this file to match broken code.
 
 ---
 
-## ملخص Pipeline
+## 1. Data Flow
 
 ```
-بيانات JSON خام
+Server (JSON blocks)
     │
     ▼
-DeviceHistory.fromJson()          فك ترميز المصفوفة (عادي أو gzip)
+DeviceHistory.fromJson()          Decode matrix (raw or gzip-base64)
     │
     ▼
-buildMatrixFromHistories()        تجميع الكتل في مصفوفة واحدة (في العزل)
+buildMatrixFromHistories()        Merge blocks into one matrix (in isolate)
+    │                             Zero-fill uncovered columns
+    ▼
+_processBlockMatrix()             Noise suppression pipeline (in isolate)
     │
     ▼
-buildRgba()                       قمع الضوضاء + خريطة الألوان + رسم البكسلات
-    │                              (يعمل في isolate منفصل)
+buildRgba()                       Intensity mapping + color map + pixel output
+    │                             (runs in isolate, returns intensity buffer + RGBA)
     ▼
-rgbaToUiImage()                   تحويل البايتات إلى ui.Image
+Apply Gain                        Rebuild image from cached intensity + gainDb
     │
     ▼
-_SpectroPainter                   رسم الصورة + المحاور + الفجوات + المؤشرات
+_SpectroPainter                   Draw image + axes + gaps + markers + status bar
 ```
 
 ---
 
-## هيكل المشروع
+## 2. Matrix Construction
 
-```
-flutter_app/lib/
-├── main.dart                          # نقطة الدخول + kServerBaseUrl + GetMaterialApp
-├── controllers/
-│   ├── auth_controller.dart           # إدارة JWT + login/logout (GetX)
-│   ├── dashboard_controller.dart      # devices + histories + markers + gain + range (GetX)
-│   └── socket_controller.dart         # Socket.IO connection + events (GetX)
-├── models/
-│   ├── device.dart                    # نموذج الجهاز
-│   ├── device_history.dart            # نموذج بيانات التاريخ + فك ترميز المصفوفة
-│   ├── marker.dart                    # نموذج العلامة (MarkerData)
-│   └── range_mode.dart                # enum RangeMode (lastHour, followLive, etc.)
-├── screens/
-│   ├── login_screen.dart              # شاشة تسجيل الدخول (StatelessWidget + Obx)
-│   ├── dashboard_screen.dart          # الشاشة الرئيسية مع كل الأوضاع (StatelessWidget + Obx)
-│   ├── fullscreen_spectrogram.dart    # العرض الكامل أفقي
-│   └── notification_settings_screen.dart
-├── services/
-│   ├── api_client.dart                # HTTP client + JWT auth
-│   ├── auth_service.dart              # إدارة JWT + SharedPreferences
-│   ├── device_id_service.dart         # معرّف الجهاز الفريد (UUID + FlutterSecureStorage)
-│   ├── socket_service.dart            # Socket.IO + device:data
-│   └── telegram_service.dart          # تنبيهات تيليجرام
-├── utils/
-│   ├── spectro.dart                   # خريطة الألوان + تحويل القيم (DO NOT MODIFY)
-│   └── spectro_isolate.dart           # بناء المصفوفة + رسم البكسلات في العزل
-└── widgets/
-    ├── spectrogram_canvas.dart        # الويجت الرئيسي + painter
-    └── spectrogram_axes_painter.dart  # محاور (legacy، الدوال الآن في spectrogram_canvas.dart)
-```
+**Function:** `buildMatrixFromHistories(blocks, requestStart, requestEnd)`
 
----
+### Inputs
+- `blocks`: List of `HistoryBlock` — each has `data` (2D matrix), `startTime`, `endTime`
+- `requestStart`, `requestEnd`: ISO 8601 time strings defining the matrix time range
 
-## 1. تحميل البيانات (`device_history.dart`)
+### Algorithm
+1. `fromMs = parseMs(requestStart)` — left boundary in milliseconds
+2. `toMs = parseMs(requestEnd)` — right boundary in milliseconds
+3. `colsPerMs = totalDataCols / totalDataMs` — **global average** across ALL blocks
+   - `totalDataCols = Σ (block.data[0].length)` for each block with non-empty data
+   - `totalDataMs = Σ (block.endTime - block.startTime)` for each block with non-empty data
+4. `totalCols = round((toMs - fromMs) × colsPerMs)`
+5. Create matrix: `targetRows × totalCols`, **all zeros**
+6. For each block:
+   - `startCol = round((blockStart - fromMs) × colsPerMs).clamp(0, totalCols)`
+   - `endCol = round((blockEnd - fromMs) × colsPerMs).clamp(0, totalCols)`
+   - Copy block data into matrix at `[row][startCol .. endCol]`
+7. Columns not covered by any block remain **0** (these are the gaps)
 
-### صيغة البيانات المقبولة
+### Image Width
+- `image.width = totalCols` (clamped to max **4096**)
+- `image.height = targetRows` (clamped to max **4096**)
 
-المصفوفة يمكن أن تكون:
-- **قائمة مباشرة** `List<List<double>>` — تُحوَّل مباشرة
-- **خريطة gzip** `{ format: "gzip-base64-json-v1", payload: "..." }` — تُفك بـ base64 → gzip → JSON
-
-### تطبيع القيم (`normalizeValue`)
-
-```dart
-static double normalizeValue(double raw, String? intensityType, double min, double max)
-```
-
-| intensityType | المعادلة | المدى |
-|---|---|---|
-| `'db'` | `(raw - (-95)) / ((-20) - (-95))` | خطي من [-95, -20] إلى [0, 1] |
-| `'uint8'` | `raw / 255.0` | [0, 255] → [0, 1] |
-| `'normalized'` | `clamp(raw, 0, 1)` | يكون أصلاً في [0, 1] |
-| `'magnitude'` أو مجهول | `raw <= 1 ? raw : raw / 255` | تلقائي |
-| NaN / Inf | `0` | — |
-
-**الثوابت:**
-- `dbMin = -95.0`
-- `dbMax = -20.0`
-
-### نطاق الشدة (`intensityRange`)
-
-يمسح كل خلايا المصفوفة ويوجد الحد الأدنى والأقصى (يتخطى NaN/Inf). يُرجع `[min, max]` أو `[0, 1]` إذا كانت فارغة.
-
-### AI Status
-
-```dart
-enum AiStatus { possible(0), detected(1), notDetected(2) }
-```
-
-- **الخادم يُرسل:** `aiStatus` كرقم (0, 1, 2) و `confidence` كـ **String** (مثلاً `"78.20"`)
-- **التفسير:** `detected=1` (مكتشف)، `possible=0` (محتمل)، `notDetected=2` (غير مكتشف)
+### Critical Rule
+> `requestStartTime` MUST equal the first block's actual `startTime`.
+> `requestEndTime` MUST equal the last block's actual `endTime`.
+> If `requestStartTime` is set to a time BEFORE the first block, the matrix will have
+> zero-filled columns at the start, causing a **blue gap strip on the left side**.
 
 ---
 
-## 2. بناء المصفوفة في العزل (`spectro_isolate.dart`)
+## 3. Noise Suppression Pipeline
 
-### `buildMatrixFromHistories(blocks, requestStart, requestEnd)`
+Applied per-block before matrix construction.
 
-**المدخلات:**
-- `blocks`: قائمة `HistoryBlock` — كل كتلة تحتوي على `data`, `startTime`, `endTime`, `intensityType`, `minVal`, `maxVal`
-- `requestStart`, `requestEnd`: نطاق الوقت المطلوب (ISO 8601)
+### Step 1: Adaptive Noise Floor (Histogram)
+- Collect normalized histogram: 1024 bins, sample ~64×64 grid
+- Compute 72nd percentile → `adaptiveFloor`
+- `threshold = max(adaptiveFloor, noiseThreshold)`
 
-**الخوارزمية:**
-1. تحويل `requestStart`/`requestEnd` إلى ميلي ثانية
-2. حساب `colsPerMs = totalDataCols / totalDataMs` (متوسط عام لجميع الكتل)
-3. حساب `totalCols = rangeMs * colsPerMs`
-4. إنشاء مصفوفة `targetRows x totalCols` مملوءة بـ 0
-5. لكل كتلة:
-   - حساب `startCol = (blockStart - fromMs) * colsPerMs`
-   - حساب `endCol = (blockEnd - fromMs) * colsPerMs`
-   - نسخ بيانات الكتلة إلى المصفوفة المشتركة
-6. المناطق غير المغطاة تبقى = 0 (هذه هي الفجوات)
-
-**ملاحظة:** `totalCols` قد يكون أكبر من العرض الفعلي للصورة. الصورة تُقص إلى `clamp(totalCols, 1, 4096)`.
-
----
-
-## 3. قمع الضوضاء (`spectro_isolate.dart`)
-
-### المعالجة لكل كتلة (`_processBlockMatrix`)
-
-7 خطوات لكل كتلة بشكل مستقل:
-
-#### الخطوة 1: هيستوجرام + عتبة
-
+### Step 2: Threshold Gate
 ```
-_collectNormalizedHistogram(matrix)
+for each cell (r, c):
+    if matrix[r][c] < threshold: matrix[r][c] = 0
+    mask[r][c] = matrix[r][c] > 0
 ```
 
-- **عدد الخانات:** 1024
-- يُعايِن المصفوفة بشبكة مصغرة ~64x64 (`rowStep = max(1, rows ~/ 64)`)
-- كل قيمة تُطبع إلى [0,1] ثم تُحوَّل لفهرس: `(v * 1023).floor()`
-- النسبة المئوية 72: `target = 0.72 * (total - 1)`
+### Step 3: Isolated Pixel Removal
+- Neighborhood: 5×5 (radius = 2)
+- For each cell: count active neighbors in 5×5 window
+- Keep if: `activeNeighbors >= 2` OR has **line support**
+- Line support: both up+down active OR both left+right active
 
-**النتيجة:** `threshold = max(quantile_0.72, noiseThreshold)`
+### Step 4: Singleton Component Removal
+- Connected components via 8-connectivity BFS
+- Components with size < **15 pixels** → delete entirely
 
-#### الخطوة 2: فتح الضوضاء + قناع نشط
-
-```dart
-for (r, c) in matrix:
-  if matrix[r][c] < threshold:
-    matrix[r][c] = 0.0
-  mask[r][c] = matrix[r][c] > 0
+### Step 5: Morphological Gap Bridging
 ```
-
-#### الخطوة 3: إزالة هيكليّة (Morphological Erosion)
-
-- **نواة:** 3x3
-- **الشرط:** الخلية تبقى فقط إذا >= **3** من جيرانها الـ 9 (بما فيها نفسها) نشطون في القناع
-- **الحدود:** الصف الأول والأخير، العمود الأول والأخير → تُصفَّر دائماً
-
-```dart
-int activeNeighbors = 0;
-for (dr in -1..1):
-  for (dc in -1..1):
-    if mask[r+dr][c+dc]: activeNeighbors++
-if activeNeighbors < 3: mask[r][c] = false
-```
-
-#### الخطوة 4: إزالة بكسلات معزولة (2 جولات)
-
-**الثوابت:**
-- `neighborhoodSize = 5` (نصف قطر = 2)
-- `minActiveNeighbors = 2`
-
-**الخوارزمية لكل خلية:**
-1. عدّ الجيران النشطين في نافذة 5x5
-2. إذا >= 2 → الخلية تبقى
-3. إذا < 2 → تحقق من "دعم خطي": هل يوجد جيران نشطان في اتجاهين متعاكسين (أعلى/أسفل أو يمين/يسار)؟
-4. إذا لا شيء من ذلك → تُحذف
-
-**إزالة المكونات الصغيرة:**
-- اتصال 8-المتداخل
-- BFS/DFS لجمع حجم كل مكون
-- المكونات < **15 بكسل** → تُحذف
-
-**تُكرَّر الخطوة 4 مرتين** (2 passes).
-
-#### الخطوة 5: ربط الفجوات (`_bridgeThinGaps`)
-
-```dart
 if inactive cell has active neighbors above AND below → activate
 if inactive cell has active neighbors left AND right → activate
 ```
 
-#### الخطوة 6: بناء المصفوفة المصفّاة
+---
 
-```dart
-for each cell:
-  if mask[r][c]: denoised[r][c] = matrix[r][c]
-  else:          denoised[r][c] = 0.0
+## 4. Intensity Mapping
+
+### Type Detection
+| Condition | Type |
+|-----------|------|
+| max value ≤ 1.0 | `normalized` |
+| max value ≤ 255.0 | `uint8` |
+| max value > 255.0 | `magnitude` |
+
+### Normalization
+| Type | Formula | Range |
+|------|---------|-------|
+| `normalized` | `clamp01(value)` | [0, 1] |
+| `uint8` | `value / 255.0` | [0, 1] |
+| `db` | `(value - dbMin) / (dbMax - dbMin)` | [0, 1] |
+| `magnitude` | Convert to dB: `20 × log10(value)`, then dB normalization | [0, 1] |
+
+### Percentile Auto-Range (dB/magnitude)
+- Collect subsampled dB values from the matrix
+- `dbMin = 5th percentile`, `dbMax = 99th percentile`
+- Map: `clamp01((dB - dbMin) / (dbMax - dbMin))`
+
+### Display Gain
+```
+scale = 10^(gainDb / 20)
+result = clamp01(value × scale)
 ```
 
 ---
 
-## 4. تطبيق الكسب (`_applyGain`)
+## 5. Color Mapping (Magma)
 
-```dart
-double _applyGain(double value, double gainDb) {
-  if (gainDb == 0 || value <= 0) return value;
-  final scale = pow(10.0, gainDb / 20.0).toDouble();
-  return (value * scale).clamp(0.0, 1.0);
-}
+### Gamma Correction
 ```
+v = pow(normalizedValue, gamma)
+```
+Default `gamma = 1.0` (no change).
 
-**المعادلة:** `scale = 10^(gainDb / 20)` — تحويل dB إلى مقياس خطّي للسعة.
+### Magma Colormap Stops
+| Position | R | G | B |
+|----------|---|---|---|
+| 0.00 | 0 | 0 | 4 |
+| 0.16 | 28 | 16 | 68 |
+| 0.33 | 79 | 18 | 123 |
+| 0.50 | 129 | 37 | 129 |
+| 0.66 | 181 | 54 | 122 |
+| 0.83 | 229 | 80 | 100 |
+| 1.00 | 252 | 253 | 191 |
 
-**كيفية التطبيق:**
-- الصورة مُ.bnّية عند `gainDb = 0` (البيانات الأصلية)
-- `ValueNotifier<double>` مشترك بين Dashboard و Fullscreen
-- عند تغيير الكسب: `_onGainChanged()` يعيد بناء الصورة فقط (لا إعادة render كاملة)
-- `SpectroRgbaResult` يُرجع `intensity` buffer + `gamma` للسماح بإعادة تطبيق الكسب لاحقاً
+### Interpolation
+1. Find two adjacent stops `a` and `b` such that `a.position ≤ v ≤ b.position`
+2. `t = (v - a.position) / (b.position - a.position)`
+3. `R = lerp(a.R, b.R, t)`, same for G, B
+4. Output: RGB bytes (0–255), alpha = 0xFF
 
 ---
 
-## 5. خريطة الألوان (`spectro.dart`)
+## 6. Column → Pixel Mapping
 
-### الخرائط المتاحة
+**Function:** `buildRgba(matrix, width, height, ...)`
 
-```dart
-// كل خانة: [position, R, G, B] — position في [0,1]، RGB في 0..255
-kColorMapMagma = [
-  [0.0,    0,   0,   4],
-  [0.16,  28,  16,  68],
-  [0.33,  79,  18, 123],
-  [0.5,  129,  37, 129],
-  [0.66, 181,  54, 122],
-  [0.83, 229,  80, 100],
-  [1.0,  252, 253, 191],
-];
-
-kColorMapSunset = [
-  [0.0,  15,  16,  50],
-  [0.2,  45,  24, 105],
-  [0.4,  98,  33, 135],
-  [0.6, 170,  52, 112],
-  [0.8, 235,  96,  70],
-  [1.0, 255, 190,  92],
-];
-
-kColorMapGrayscale = [
-  [0.0,   0,   0,   0],
-  [1.0, 255, 255, 255],
-];
+### Per-Column Loop
+For each matrix column `c` (0 to cols−1):
+```
+xStart = floor(c × width / cols)
+xEnd   = ceil((c + 1) × width / cols)
 ```
 
-### `colorMapToColor(colorMap, value) -> [R, G, B]`
+Multiple columns may map to the same pixel → **bucket aggregation**:
+- **max**: `bucketValue = max(bucketValue, newValue)`
+- **hybrid**: `0.7 × max + 0.3 × mean`
 
-```dart
-1. v = pow(clamp01(value), gamma)    // gamma = 1.0 حالياً = لا تغيير
-2. إذا v <= أول خانة → أرجع لون الخانة الأولى
-3. إذا v >= آخر خانة → أرجع لون الخانة الأخيرة
-4. وإلا: ابحث عن الخانتين a, b المحصورتين
-   t = (v - a.position) / (b.position - a.position)
-   R = lerp(a.R, b.R, t)
-   G = lerp(a.G, b.G, t)
-   B = lerp(a.B, b.B, t)
+### Y-Axis Inversion
+Row 0 in the matrix = highest frequency = appears at the **bottom** of the image.
+```
+yNativeTop    = rows - rowEnd
+yNativeBottom = rows - 1 - rowStart
 ```
 
-**`lerp(a, b, t) = a + (b - a) * t`**
+### Final Pixel Value
+```
+value = intensityMapper(groupedValue)   // normalized [0, 1]
+value = clamp01(value × gainScale)      // apply display gain
+byteValue = max(0, min(255, round(value × 255)))
+```
+
+### Background
+- All pixels initialized to background color `0xFF111026` (dark purple)
+- Only cells with `byteValue > noiseThreshold` are painted
 
 ---
 
-## 6. رسم البكسلات (حلقة العزل)
+## 7. Viewport & Canvas Drawing
 
-### المعادلات الأساسية
+### Viewport
+- Range: `[0.0, 1.0]` over the full image width
+- Default: `viewportStart = 0.0`, `viewportEnd = 1.0` (show everything)
+- Pinch/pan gestures modify these values
 
-```dart
-// لكل بكسل في صورة الناتج (px, py):
-rowIndex = clamp(dataHeight - 1 - floor(py * dataHeight / height), 0, dataHeight - 1)
-colIndex = clamp(floor(px * dataWidth / width), 0, dataWidth - 1)
-value = combined[rowIndex][colIndex]
-color = colorMapToColor(colorMap, _applyGain(value, gainDb))
-bytes[offset]     = R
-bytes[offset + 1] = G
-bytes[offset + 2] = B
-bytes[offset + 3] = 0xFF
+### Image Drawing
+```
+srcX0 = viewportStart × image.width
+srcX1 = viewportEnd × image.width
+destX0 = pLeft + ((viewportStart - vpStart) / span) × plotW
+destX1 = pLeft + ((viewportEnd - vpStart) / span) × plotW
+
+canvas.drawImageRect(image, src, dst, imgPaint)
 ```
 
-**ملاحظات:**
-- **Y مقلوب:** الصف 0 في البيانات = أعلى تردد = يظهر في **أسفل** الصورة
-- **استرجاع أقرب جار** (nearest-neighbor): لا توجد مرشّحات تداخل
-- **التنسيق:** RGBA8888 (4 بايتات لكل بكسل)
+### Painter Insets
+| Edge | Value |
+|------|-------|
+| Left | 40 px |
+| Right | 6 px |
+| Top | 4 px |
+| Bottom (no status bar) | 36 px |
+| Bottom (compact status bar) | 50 px |
+| Bottom (full status bar) | 68 px |
+
+### Filter
+- `isAntiAlias = false`
+- `filterQuality = FilterQuality.none` (nearest-neighbor, no smoothing)
 
 ---
 
-## 7. العرض (`spectrogram_canvas.dart`)
+## 8. Gap Algorithm
 
-### تレイوت البناء
+This is the critical section for web parity.
+
+### 8.1 Why Gaps Exist
+
+The matrix is time-aligned: columns represent fixed time steps from `requestStartTime` to `requestEndTime`. When a data block doesn't cover a time range, those matrix columns are **0** (zero-filled). The gap overlay draws semi-transparent blue rectangles over these zero-filled regions to visually indicate missing data.
+
+### 8.2 Coverage Intervals
+
+Computed in the canvas painter, NOT in the isolate.
+
+**Function:** `_buildCoverageIntervals()`
 
 ```
-Container (خلفية: 0xFF140D28)
-  Stack:
-    [0] SingleChildScrollView (أفقي)
-          SizedBox (عرض = max(العرض_المتاح, displayWidth + 34))
-            Stack:
-              [0] Positioned(left: 40, top: 4)
-                    CustomPaint (SpectrogramAxesPainter)
-    [1] Positioned(top: 8, right: 8)
-          Column(أزرار الزووم)
+fromMs = parseMs(requestStartTime)
+toMs = parseMs(requestEndTime)
+colsPerMs = totalDataCols / totalDataMs    // same formula as matrix construction
+
+for each history block with non-empty data:
+    startCol = round((blockStart - fromMs) × colsPerMs).clamp(0, ∞)
+    endCol = round((blockEnd - fromMs) × colsPerMs).clamp(0, ∞)
+    if endCol > startCol:
+        add CoverageInterval(startMs: startCol, endMs: endCol)
 ```
 
-### حساب الأبعاد
+**IMPORTANT:** Despite field names `startMs`/`endMs`, these store **column indices**, not milliseconds.
 
-```dart
-imageAreaHeight = containerHeight - 24        // 24px أسفل للمحاور
-nativeHeight = imageAreaHeight                 // ارتفاع الصورة الأصلي
-aspectRatio = img.width / img.height
-nativeWidth = nativeHeight * aspectRatio
-displayWidth = nativeWidth * zoomLevel
-displayHeight = nativeHeight * zoomLevel
+### 8.3 Gap Detection (Cursor Sweep)
+
+```
+Input:  merged intervals (sorted by start, non-overlapping)
+        visStartCol, visEndCol (visible column range from viewport)
+
+cursor = visStartCol
+
+for each interval iv in merged:
+    if iv.startMs > cursor:
+        GAP from cursor to iv.startMs        ← inter-block gap
+    cursor = max(cursor, iv.endMs)
+
+if cursor < visEndCol:
+    GAP from cursor to visEndCol              ← trailing gap
 ```
 
-### الزووم
+**There is NO leading gap before the first interval** because:
+- `cursor` starts at `visStartCol`
+- First interval starts at `visStartCol` (or very close, since `requestStartTime = first block's startTime`)
+- Therefore `iv.startMs > cursor` is false for the first interval → no gap drawn before it
 
-| الإجراء | المعادلة |
-|---|---|
-| `zoomIn()` | `_zoomLevel = (_zoomLevel * 1.5).clamp(0.05, 4.0)` |
-| `zoomOut()` | `_zoomLevel = (_zoomLevel / 1.5).clamp(0.05, 4.0)` |
-| `fitToScreen()` | `_zoomLevel = ((w - 34) / nativeWidth).clamp(0.05, 4.0)` |
+### 8.4 Gap Rendering
 
-**المدى:** [0.05, 4.0]، خطوة x1.5
+For each detected gap `[gStart, gEnd]`:
 
-### الزووم اللمسي (Pinch)
+```
+gapScale = image.width / totalCols
 
-```dart
-// onScaleUpdate مع pointerCount == 2:
-newSpan = _scaleStart / details.scale
-newStart = center - newSpan * anchor
-newEnd = newStart + newSpan
-// الحدود: newStart >= -(newSpan * 0.8)، newEnd <= 1.0 + newSpan * 0.8
+scaledStart = round(gStart × gapScale)
+scaledEnd = round(gEnd × gapScale)
+clippedStart = scaledStart.clamp(visStartCol, visEndCol)
+clippedEnd = scaledEnd.clamp(visStartCol, visEndCol)
+
+gx0 = pLeft + ((clippedStart - visStartCol) / visCols) × plotW
+gx1 = pLeft + ((clippedEnd - visStartCol) / visCols) × plotW
+gw = gx1 - gx0
+
+1. FILL:    canvas.drawRect(Rect(gx0, pTop, gw, plotH), gapFillPaint)
+2. STROKE:  canvas.drawLine((gx0, pTop), (gx0, pTop + plotH), gapStrokePaint)
+            canvas.drawLine((gx1, pTop), (gx1, pTop + plotH), gapStrokePaint)
+3. LABEL:   if gw >= 52 px:
+               gapMinutes = round((gEnd - gStart) / visCols × (toMs - fromMs) / 60000)
+               text = "لا توجد بيانات {gapMinutes} د"
+               centered horizontally in the gap
 ```
 
-### السحب (Pan)
+### 8.5 Leading Gap Prevention (~30s Bug)
 
-```dart
-// onScaleUpdate مع pointerCount == 1:
-shift = dx / w * span
-newStart = _viewportStart - shift
-newEnd = _viewportEnd - shift
-```
+**Root Cause:** `requestStartTime` was set to a time before the first block's actual start.
+This caused zero-filled columns at the start of the matrix, and the gap overlay drew a blue strip on the left.
 
-### Seed Snapshot (للعرض الكامل)
+**Fix Rule:** `requestStartTime` MUST equal the first block's actual `startTime`.
 
-```dart
-class CanvasSeedSnapshot {
-  final ui.Image? image;
-  final Uint8List? cachedIntensity;
-  final int intensityWidth;
-  final int intensityHeight;
-  final double cachedGamma;
-  // ... أخرى
-}
-```
+| Mode | How to set requestStartTime |
+|------|---------------------------|
+| Custom range | `result.first.startTime` (NOT user-selected `from`) |
+| Follow-live | `max(anchor - window, first block's startTime)` |
+| Last hour / last 5h / last 24h | `result.first.startTime` |
 
-- يُنشأ عند كل render جديد
-- يُمرَّر إلى FullscreenSpectrogram لتجنب إعادة الرسم من الصفر
-- يحتوي على صورة + بيانات الشدة الخام + gamma
+### 8.6 Gap Colors & Sizes
+
+| Element | Value |
+|---------|-------|
+| Fill color | `Color(0x423667C2)` — rgba(54, 103, 194, 0.26) |
+| Stroke color | `Color(0xE766C4E7)` — rgba(102, 196, 231, 0.9) |
+| Min width for label | 52 px |
+| Font size | 11 px |
+| Label format | `"لا توجد بيانات {N} د"` |
 
 ---
 
-## 8. الفجوات الزمنية
+## 9. Time Axis (X)
 
-### خوارزمية حساب الفجوات (`_buildCoverageIntervals`)
+### Labels
+- Format: `HH:MM` (local timezone)
+- If range > 24 hours: `YYYY-MM-DD HH:MM`
 
-```dart
-List<CoverageInterval> _buildCoverageIntervals() {
-  // 1. fromMs = requestStartTime أو أول startTime في البيانات
-  // 2. toMs = requestEndTime أو آخر endTime في البيانات
-  // 3. colsPerMs = مجموع أعمدة الكتل / مجموع مدة الكتل
-  // 4. لكل كتلة:
-  //    startCol = ((blockStart - fromMs) * colsPerMs).round()
-  //    endCol = ((blockEnd - fromMs) * colsPerMs).round()
-  //    → CoverageInterval(startMs: startCol, endMs: endCol)
-}
+### Grid
+- Vertical lines: 4–8 ticks (target ~120 px between ticks)
+- `xTicks = clamp(floor(plotW / 120), 4, 8)`
+- Grid color: `rgba(207, 215, 230, 0.16)`
+
+### Label Placement
 ```
-
-**Fallback** (إذا لم تتوفر الأوقات): تstack الكتل بجانب بعضها دون فجوات.
-
-### رسم الفجوات في `_SpectroPainter.paint()`
-
-```
-// 2b) Gap overlays (بعد رسم الصورة، قبل المحاور)
-1. حساب gapScale = image.width / totalCols
-2. تحويل coverageIntervals إلى م positions في الصورة
-3. دمج التداخل (merge)
-4. الم.delta = gaps = الفراغات بين الـ intervals المدمجة
-5. لكل gap:
-   - رسم مستطيل أزرق شفاف: Color(0x423667C2) — alpha = 26%
-   - رسم خطوط جانبية: Color(0xE766C4E7)
-   - كتابة النص: "لا توجد بيانات X د" (إذا عرض >= 52px)
-```
-
-### الثوابت
-
-| القيمة | المعنى |
-|---|---|
-| `_gapFill = Color(0x423667C2)` | لون ملء الفجوة (أزرق، 26% شفافية) |
-| `_gapStroke = Color(0xE766C4E7)` | لون حدود الفجوة |
-| `_gapTextStyle.fontSize = 11` | حجم خط النص |
-
----
-
-## 9. المحاور والشبكة
-
-### الثوابت
-
-| القيمة | المعنى |
-|---|---|
-| `left = 40` | هامش يسار لأرقام التردد |
-| `right = 6` | هامش يمين |
-| `top = 4` | هامش علوي |
-| `bottom = 36` | هامش سفلي (عادي) |
-| `bottom = 50` | هامش سفلي (مع شريط حالة مدمج) |
-| `bottom = 68` | هامش سفلي (مع شريط حالة كامل) |
-| `_yTicks = 5` | 5 خطوط أفقية (6 تسميات) |
-| `_maxFrequency = 250` | أعلى تردد (Hz) |
-
-### رسم الشبكة
-
-```dart
-// خطوط عمودية (4-8 حسب عرض الرسم، مستهدفة ~120px):
-xTicks = clamp(floor(plotW / 120), 4, 8)
-for tx in 0..xTicks:
-  x = left + round(tx / xTicks * plotW)
-  drawLine(x, top, x, top + plotH)
-
-// خطوط أفقية (دائماً 5):
-for ty in 0..5:
-  y = top + round(ty / 5 * plotH)
-  drawLine(left, y, left + plotW, y)
-```
-
-### حدود L-shape
-
-```dart
-path.moveTo(left, top)          // أعلى يسار
-path.lineTo(left, top + plotH)  // أسفل يسار
-path.lineTo(left + plotW, top + plotH)  // أسفل يمين
-```
-
-### تسميات التردد (Y-axis)
-
-```
-6 تسميات (0..5):
-  yFrac = ly / 5
-  yPos = topPad + round(yFrac * plotH)
-  Hz = 250 - yFrac * 250
-  النص: "${Hz.round()}" بدون "Hz"
-  الموضع: x = left - 6 - عرض_النص (محاذاة يمين)
-```
-
-### تسميات الزمن (X-axis)
-
-```
-totalMs = endTime - startTime
-إذا totalMs > 86400000 (24 ساعة): الصيغة "YYYY-MM-DD HH:MM"
-وإلا: "HH:MM"
-
-xTicks خطوط عمودية (4-8):
-  lf = lx / xTicks
-  labelX = left + round(lf * plotW)
-  النص: منسق حسب lf
-  الموضع: وسط أسفل كل tick
+for i in 0..xTicks:
+    lf = i / xTicks
+    labelMs = fromMs + lf × (toMs - fromMs)
+    labelX = pLeft + lf × plotW
+    drawText(formatTime(labelMs), center: labelX, y: pTop + plotH + 6)
 ```
 
 ---
 
-## 10. شريط حالة AI
+## 10. Frequency Axis (Y)
 
-### الألوان
+### Range
+- **0 Hz** (bottom) to **250 Hz** (top) — **inverted**
 
-| الحالة | اللون | الكود |
-|---|---|---|
-| `detected` (مكتشف) | أحمر | `Color(0xFFD13438)` |
-| `notDetected` (غير مكتشف) | أخضر | `Color(0xFF21A366)` |
-| `possible` (محتمل) | أصفر | `Color(0xFFF59E0B)` |
-| `unknown` | رمادي | `Color(0xFF8A94A6)` |
+### Labels
+- 6 labels: 250, 200, 150, 100, 50, 0
+- Format: bare number (no "Hz" suffix)
+- Position: right-aligned at `x = pLeft - 6 - textWidth`
 
-### الرسم
+### Grid
+- 5 horizontal lines (at each label position)
+- Grid color: `rgba(207, 215, 230, 0.16)`
 
+### L-Shape Border
 ```
-// 8) AI Status bar (تحو عناوين الزمن)
-- barY = pTop + plotH + 36
-- barHeight = compactStatusBar ? 14 : 28
-- لكل كتلة تاريخ:
-  - تحديد الموضع الأفقي بناءً على startTime/endTime
-  - رسم مستطيل باللون المناسب
-  - كتابة النص + الثقة (مثلاً "مكتشف (78.2%)")
-  - إذا عرض >= 50px (compact) أو >= 72px (عادي): يظهر النص
+path.moveTo(pLeft, pTop)
+path.lineTo(pLeft, pTop + plotH)
+path.lineTo(pLeft + plotW, pTop + plotH)
 ```
 
 ---
 
-## 11. المؤشرات (Markers)
+## 11. AI Status Bar
 
-### النموذج
+Drawn below the time axis labels.
 
-```dart
-class MarkerData {
-  final int timeMs;   // الوقت بالميلي ثانية
-}
-```
+| aiStatus | Color | Label |
+|----------|-------|-------|
+| `detected` (1) | `#D13438` (red) | "هدف مكتشف (X%)" |
+| `notDetected` (2) | `#21A366` (green) | "لا يوجد هدف (X%)" |
+| `possible` (0) | `#F59E0B` (amber) | "هدف محتمل (X%)" |
+| unknown | `#8A94A6` (gray) | — |
 
-### الإجراءات
-
-| الإجراء | الطريقة |
-|---|---|
-| **إضافة** | نقر مزدوج على الخط |
-| **حذف** | نقر على الخط |
-| **تحريك** | سحب من الخط أو صندوق التسمية |
-
-### التقاطع (`_markerHitTest`)
-
-```dart
-// يتحقق: هل النقر على خط مؤشر؟
-// يحسب: mx = pLeft + ((dataFrac - viewportStart) / span) * plotW
-// يقارن: |position.dx - mx| < 5.0
-```
-
-### التقاطع مع صندوق التسمية (`_markerLabelHitTest`)
-
-```dart
-// يتحقق: هل النقر على صندوق التسمية؟
-// يستخدم laneY و boxLeft و boxW و boxH منLogica الرسم
-```
-
-### رسم الخطوط والتصنيفات
-
-```dart
-// لكل marker مرئي:
-1. رسم خط عمودي ذهبي: Color(0xF2FFD60A)
-2. حساب وقت UTC → تحويل إلى محلي
-3. تنسيق: "YYYY-MM-DD HH:MM:SS"
-4. حساب موضع صندوق التسمية مع تجنب التداخل (lane system)
-5. رسم صندوق: خلفية Color(0xDC12161E) + حدود ذهبية
-```
-
-### نظام Lane (تجنب التداخل)
-
-```dart
-const boxH = 27.0;
-const laneGap = 8.0;
-final laneBoxes = <_LaneBox>[];
-
-// لكل marker:
-laneY = labelTop
-for (lb in laneBoxes):
-  if horizontallyOverlap && laneY < lb.bottom + laneGap:
-    laneY = lb.bottom + laneGap
-laneBoxes.add(_LaneBox(left: boxLeft, bottom: laneY + boxH, width: boxW))
-```
+- Bar Y position: `pTop + plotH + 36`
+- Bar height: 28 px (normal) or 14 px (compact)
+- Each block rendered as a colored rectangle spanning its time range
+- Label shown if segment width ≥ 72 px (normal) or ≥ 50 px (compact)
 
 ---
 
-## 12. البث المباشر (Follow-live)
+## 12. Constants Reference
 
-### أوضاع العرض
-
-```dart
-enum _RangeMode { latestPacket, lastHour, last5h, last24h, followLive, custom }
-```
-
-### تدفق البث المباشر
-
-```
-1. المستخدم يضغط "متابعة البث"
-   → _setFollowLive() يستدعي fetchHistory() مع النطاق الحالي
-   → يبدأ التصويت (polling) كل 5 ثوانٍ
-
-2. Socket يُرسل device:data
-   → _dataSub يستقبل الحزمة
-   → يتحقق: deviceId مطابق + followLiveActive + ليس قيد التحميل
-   → يتحقق من التكرار باستخدام _historyKeys ("$deviceId|$startTime|$endTime")
-   → إذا كان قيد التحميل → يُخزّن في _pendingLivePackets
-   → وإلا → _insertPacketLive(h)
-
-3. _insertPacketLive(h):
-   → يتحقق من aiStatus == detected → يُرسل تنبيه تيليجرام
-   → يُضيف الحزمة إلى _histories
-   → يُرتب حسب startTime
-   → يُصفّي حسب _liveWindowMinutes (الحد الأقصى)
-   → يحدث _requestStartTime و _requestEndTime
-   → يحدث _liveDataNotifier
-   → يستدعي forceRender()
-
-4. Polling (كل 5 ثوانٍ):
-   → fetchLatest() → إذا حزمة جديدة → _insertPacketLive()
-```
-
-### النافذة الزمنية
-
-- القيم المتاحة: 5, 10, 15, 20, 30 دقيقة
-- القيمة الافتراضية: 15 دقيقة
-- `_requestStartTime = anchor - liveWindowMinutes`
-- `_requestEndTime = anchor` (آخر endTime)
-
----
-
-## 13. العرض الكامل (Fullscreen)
-
-### الخصائص
-
-- **اتجاه أفقي** (landscapeLeft/landscapeRight)
-- **_immersiveSticky** (إخفاء شريط الحالة)
-- **illo Shared gainNotifier** — نفس الكسب من Dashboard
-- **illo Shared markers** — يُعاد عند الخروج
-
-### التحكم
-
-- **زر ملء الشاشة** (fitToScreen)
-- **زر الخروج** (fullscreen_exit) → يُرجع FullscreenResult
-- **شريط كسب مدمج** (Slider -24 إلى 24 dB)
-
-### Seed Snapshot
-
-```dart
-// عند فتح Fullscreen:
-// 1. يأخذ seedSnapshot من Dashboard
-// 2. يمرر: seedImage, seedIntensity, seedGamma, etc.
-// 3. SpectrogramCanvas يستخدم هذه البيانات كنقطة بداية
-// 4. لا إعادة render من الصفر
-```
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `dbMin` | `-95.0` | dB range minimum |
+| `dbMax` | `-20.0` | dB range maximum |
+| `gamma` | `1.0` | Gamma correction (1.0 = none) |
+| `noiseThreshold` | `0.06` | Minimum noise gate |
+| Histogram bins | `1024` | Histogram resolution |
+| Noise floor percentile | `72` | Adaptive threshold percentile |
+| Isolated pixel neighborhood | `5×5` (radius 2) | Window for neighbor counting |
+| Min active neighbors | `2` | Minimum to keep a pixel |
+| Singleton component threshold | `15 px` | Components smaller than this are deleted |
+| `colsPerMs` | global average | `Σ columns / Σ milliseconds` across all blocks |
+| Image max width | `4096 px` | Matrix columns clamped to this |
+| Image max height | `4096 px` | Matrix rows clamped to this |
+| Background color | `0xFF111026` | Dark purple |
+| Gap fill color | `0x423667C2` | Blue, 26% opacity |
+| Gap stroke color | `0xE766C4E7` | Light blue, 90% opacity |
+| Gap label min width | `52 px` | Minimum gap width to show text |
+| Max frequency | `250 Hz` | Top of Y-axis |
+| Y ticks | `5` | Number of horizontal grid lines |
+| X ticks | `4–8` | Vertical grid lines (target 120px spacing) |
+| Painter left inset | `40 px` | Space for frequency labels |
+| Painter right inset | `6 px` | Right padding |
+| Painter top inset | `4 px` | Top padding |
+| Painter bottom inset | `36 / 50 / 68 px` | Depends on status bar mode |
+| Zoom min | `0.05` | Minimum zoom level |
+| Zoom max | `4.0` | Maximum zoom level |
+| Zoom step | `×1.5` | Zoom in/out multiplier |
+| Live window default | `15 min` | Default follow-live window |
+| Live window options | `5, 10, 15, 20, 30` min | Available window sizes |
+| Polling interval | `8 sec` | How often to poll for new data |
+| Max custom range | `2 hours` | Maximum custom range duration |
+| Gain range | `-24 to +24 dB` | Display gain slider range |
+| Gain divisions | `48` | Slider divisions |
+| Marker hit radius | `5 px` | Tap tolerance for marker detection |
+| Marker line color | `0xF2FFD60A` | Gold vertical line |
+| Marker box background | `0xDC12161E` | Dark label box |
+| Marker box height | `27 px` | Label box height |
+| Marker lane gap | `8 px` | Vertical gap between overlapping labels |
 
 ---
 
-## 14. الاتصال بالسيرفر
+## 13. Common Bugs & How to Fix Using This File
 
-### `kServerBaseUrl`
-
-```dart
-const String kServerBaseUrl = 'http://172.20.20.92:3111';
-```
-
-### AuthService
-
-- **التخزين:** SharedPreferences (`auth_token`, `auth_user`)
-- **التحميل:** `load()` عند بدء التطبيق
-- **ال_guard:** `isLoggedIn = token != null && token.isNotEmpty`
-
-### DeviceIdService
-
-- **التخزين:** FlutterSecureStorage (`device_id`)
-- **الUUID:** يُولَّد مرة واحدة بأول تشغيل (UUID v4) ويُخزَّن بشكل آمن
-- **الاستمرارية:** يبقى نفسه طول ما التطبيق مثبّت (حتى لو أُغلق وأُعيد فتحه)
-- **التغيير:** فقط عند حذف التطبيق وتثبيته من جديد أو نقله لجهاز آخر
-- **الإرسال:** يُرسل مع كل طلب `POST /api/auth/login` كحقل `deviceId`
-- **الرد المتوقع:** 403 "بانتظار الموافقة" إذا كان الجهاز غير معتمد من المسؤول
-
-### ApiClient
-
-| الدالة | Endpoint | الملاحظات |
-|---|---|---|
-| `fetchDevices()` | `GET /api/devices` | قائمة الأجهزة |
-| `fetchLatest(path, id)` | `GET /api/devices/{id}/history/latest?decode=1` | آخر باكت |
-| `fetchHistory(id, from, to)` | `GET /api/devices/{id}/history?from=...&to=...` | بدون decode=1 (العميل يفك الترميز) |
-
-**ملاحظة مهمة:** `fetchHistory` لا يرسل `decode=1` لتجنب خطأ `decodeMatrix` على السيرفر. الترميز يتم client-side عبر `decodeMatrixPayload` في `DeviceHistory.fromJson`.
-
-### SocketService
-
-| الحدث | الاتجاه | البيانات |
-|---|---|---|
-| `connect` | → السيرفر | `{ token: "..." }` |
-| `device:subscribe` | → السيرفر | `{}` |
-| `device:data` | ← السيرفر | `DeviceHistory` payload |
-| `check_ai_status` | → السيرفر | `{ startTime, endTime }` |
-| `check_ai_status` (ack) | ← السيرفر | `{ ok: true, data: { items: [...] } }` |
-
-**التوصل:** WebSocket (`ws://`)
-**المصادقة:** JWT token في `opts.auth`
-
-### TelegramService
-
-- يُرسل تنبيهات عند `aiStatus == detected`
-- يُرسل تنبيهات تغيير حالة التوصيل
-
----
-
-## 15. جدول جميع الثوابت
-
-| الثابت | القيمة | الموقع |
-|---|---|---|
-| `dbMin` | `-95.0` | `device_history.dart` |
-| `dbMax` | `-20.0` | `device_history.dart` |
-| `gamma` | `1.0` | `spectro.dart` |
-| `noiseThreshold` (افتراضي) | `0.06` | `spectro_isolate.dart` |
-| عدد خانات الهيستوجرام | `1024` | `spectro_isolate.dart` |
-| حجم عينة الهيستوجرام | `~64x64` | `spectro_isolate.dart` |
-| النسبة للعتبة | `0.72` (72%) | `spectro_isolate.dart` |
-| عتبة الإزالة الهيكلية | `>= 3 من 9` جيران | `spectro_isolate.dart` |
-| نصف قطر Neighborhood | `2` (نافذة 5x5) | `spectro_isolate.dart` |
-| الحد الأدنى للجيران النشطين | `2` | `spectro_isolate.dart` |
-| جولات إزالة المعزول | `2` | `spectro_isolate.dart` |
-| حد المكونات الصغيرة | `15` بكسل | `spectro_isolate.dart` |
-| الزووم الأدنى | `0.05` | `spectrogram_canvas.dart` |
-| الزووم الأعلى | `4.0` | `spectrogram_canvas.dart` |
-| خطوة الزووم | `x1.5` | `spectrogram_canvas.dart` |
-| هامش يسار المحاور | `40px` | `spectrogram_canvas.dart` |
-| هامش يمين المحاور | `6px` | `spectrogram_canvas.dart` |
-| هامش علوي المحاور | `4px` | `spectrogram_canvas.dart` |
-| هامش سفلي (عادي) | `36px` | `spectrogram_canvas.dart` |
-| هامش سفلي (مدمج) | `50px` | `spectrogram_canvas.dart` |
-| هامش سفلي (كامل) | `68px` | `spectrogram_canvas.dart` |
-| تقسيمات Y | `5` | `spectrogram_canvas.dart` |
-| أعلى تردد | `250 Hz` | `spectrogram_canvas.dart` |
-| استهداف مسافة X | `120px` | `spectrogram_canvas.dart` |
-| عتبة التاريخ | `24 ساعة (86400000 ms)` | `spectrogram_canvas.dart` |
-| لون الخلفية | `0xFF140D28` | `spectrogram_canvas.dart` |
-| لون الفجوة | `0x423667C2` (26% شفافية) | `spectrogram_canvas.dart` |
-| لون حدود الفجوة | `0xE766C4E7` | `spectrogram_canvas.dart` |
-| لون خط المؤشر | `0xF2FFD60A` (ذهبي) | `spectrogram_canvas.dart` |
-| لون صندوق المؤشر | `0xDC12161E` (خلفية) | `spectrogram_canvas.dart` |
-| عرض الصورة الأقصى | `4096` بكسل | `spectro_isolate.dart` |
-| Polling interval | `5` ثوانٍ | `dashboard_screen.dart` |
-|/max custom range | `2` ساعة | `dashboard_screen.dart` |
-| live window choices | `5, 10, 15, 20, 30` دقيقة | `dashboard_screen.dart` |
-| Gain range | `-24` إلى `24` dB | `dashboard_screen.dart` |
-| Gain divisions | `48` | `dashboard_screen.dart` |
-
----
-
-## اتفاقية تحديث هذا الملف
-
-> **عند أي تعديل على التطبيق** (خوارزمية رسم، فيتشر جديد، تغيير ثوابت، إضافة شاشة):
-> 1. حدّث هذا الملف ليعكس التغيير
-> 2. أضف سطر في "سجل التغييرات" أدناه
-> 3. لا تحذف أي معلومات موجودة — أضف فقط
-
-### سجل التغييرات
-
-| التاريخ | التغيير | المسؤول |
-|---|---|---|
-| 2026-09-09 | الإنشاء الأولي — تغطية كاملة للخوارزمية والفيتشرات | AI |
-| 2026-09-09 | إزالة وضع الاختبار بالكامل (test_data.dart + أزرار + route) | AI |
-| 2026-09-09 | إصلاح اختفاء الماركر فوراً في الوضع العادي (lastMarkerAddedAt guard) | AI |
-| 2026-09-09 | إضافة معرّف الجهاز الفريد (UUID + FlutterSecureStorage) + إرساله مع تسجيل الدخول + التعامل مع 403 "بانتظار الموافقة" | AI |
-| 2026-09-09 | تحويل إلى GetX state management — AuthController + DashboardController + SocketController + StatelessWidget + Obx | AI |
+| Symptom | Section | Likely Cause | Fix |
+|---------|---------|--------------|-----|
+| ~30s blue strip on left side | §8.5 | `requestStartTime` set before first block | Set `requestStartTime = result.first.startTime` |
+| No gap shown between two blocks | §8.2 | Coverage intervals not computed from data | Ensure `_buildCoverageIntervals()` uses block start/end times |
+| Gap text shows wrong duration | §8.4 | `visCols` or time range wrong | Check `gapMin` formula: `(gapWidth / visCols) × (toMs - fromMs) / 60000` |
+| Image appears stretched | §6 | `colsPerMs` mismatch between canvas and isolate | Both must use identical formula: `Σ columns / Σ milliseconds` |
+| Colors look inverted | §10 | Y-axis inversion not applied | Row 0 = top freq = bottom of image: `yNative = rows - 1 - row` |
+| Colors look wrong/washed out | §5 | Gamma or colormap error | Check `pow(v, gamma)` and magma stops match table in §5 |
+| Gap appears after zooming | §8.3 | Cursor sweep using stale viewport columns | Recompute `visStartCol`/`visEndCol` from current viewport |
+| Matrix has wrong width | §2 | `totalCols` calculation error | `totalCols = round((toMs - fromMs) × colsPerMs)` |
+| Noise floor too aggressive | §3 | Percentile changed or threshold too high | Check 72nd percentile and `noiseThreshold = 0.06` |
+| Single-pixel gaps in spectrogram | §3 Step 5 | Gap bridging not applied | Morphological bridge: inactive cell with active above+below → activate |
+| Status bar misaligned with data | §11 | Status bar X position not using same time mapping as image | Must use same `fromMs`/`toMs` as the matrix |
+| Markers jump when panning | — | Marker timeMs not converted correctly to viewport fraction | `markerFrac = (markerMs - fromMs) / (toMs - fromMs)` |
+| Gain doesn't apply instantly | §4 | Using full re-render instead of intensity rebuild | Cache intensity buffer, rebuild image with `gainScale` only |
+| Flicker on live updates | — | Full matrix rebuild on every packet | Use `insertPacketLive` — add/sort/remove, rebuild only on change |
