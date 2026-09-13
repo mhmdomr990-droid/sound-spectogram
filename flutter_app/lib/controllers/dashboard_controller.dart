@@ -123,7 +123,10 @@ class DashboardController extends GetxController {
     });
     final lastEnd = histories.isNotEmpty ? histories.last.endTime : null;
     final anchor = lastEnd != null ? DateTime.tryParse(lastEnd) ?? DateTime.now() : DateTime.now();
-    requestStartTime.value = anchor.subtract(Duration(minutes: liveWindowMinutes.value)).toIso8601String();
+    final windowStart = anchor.subtract(Duration(minutes: liveWindowMinutes.value));
+    final firstDataStart = histories.isNotEmpty ? DateTime.tryParse(histories.first.startTime ?? '') : null;
+    final adjustedStart = (firstDataStart != null && firstDataStart.isAfter(windowStart)) ? firstDataStart : windowStart;
+    requestStartTime.value = adjustedStart.toIso8601String();
     requestEndTime.value = anchor.toIso8601String();
     liveDataNotifier.value = (List.unmodifiable(histories), requestStartTime.value, requestEndTime.value);
     canvasKey.currentState?.forceRender();
@@ -254,8 +257,13 @@ class DashboardController extends GetxController {
       final result = await api.fetchHistory(device.id, from: from, to: to);
       histories.value = result;
       loadingHistory.value = false;
-      requestStartTime.value = from.toIso8601String();
-      requestEndTime.value = to.toIso8601String();
+      if (result.isNotEmpty) {
+        requestStartTime.value = result.first.startTime;
+        requestEndTime.value = result.last.endTime;
+      } else {
+        requestStartTime.value = from.toIso8601String();
+        requestEndTime.value = to.toIso8601String();
+      }
       liveDataNotifier.value = (List.unmodifiable(histories), requestStartTime.value, requestEndTime.value);
     } on Exception catch (e) {
       error.value = e.toString();
@@ -293,7 +301,10 @@ class DashboardController extends GetxController {
       if (histories.isNotEmpty) {
         final lastEnd = histories.last.endTime;
         final anchor = lastEnd != null ? DateTime.tryParse(lastEnd) ?? DateTime.now() : DateTime.now();
-        requestStartTime.value = anchor.subtract(Duration(minutes: liveWindowMinutes.value)).toIso8601String();
+        final windowStart = anchor.subtract(Duration(minutes: liveWindowMinutes.value));
+        final firstDataStart = histories.isNotEmpty ? DateTime.tryParse(histories.first.startTime ?? '') : null;
+        final adjustedStart = (firstDataStart != null && firstDataStart.isAfter(windowStart)) ? firstDataStart : windowStart;
+        requestStartTime.value = adjustedStart.toIso8601String();
         requestEndTime.value = anchor.toIso8601String();
       }
       loadingHistory.value = false;
