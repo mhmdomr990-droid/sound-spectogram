@@ -79,31 +79,47 @@ class DashboardScreen extends StatelessWidget {
     return Container(
       color: const Color(0xFF111111),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      child: Obx(() => c.loadingDevices.value
-          ? const LinearProgressIndicator()
-          : SizedBox(
-              height: 40,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  for (final d in c.devices)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: ChoiceChip(
-                        label: Text(d.name),
-                        selected: c.selected.value?.id == d.id,
-                        onSelected: (_) => c.selectDevice(d),
-                        selectedColor: scheme.primary,
-                        backgroundColor: const Color(0xFF1A1A1A),
-                        labelStyle: TextStyle(
-                          color: c.selected.value?.id == d.id ? Colors.black : Colors.white70,
+      child: Obx(() {
+        c.deviceStatusMap.length;
+        return c.loadingDevices.value
+            ? const LinearProgressIndicator()
+            : SizedBox(
+                height: 40,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    for (final d in c.devices)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: ChoiceChip(
+                          label: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.circle, size: 8, color: _deviceStatusColor(c, d.name)),
+                              const SizedBox(width: 4),
+                              Text(d.name),
+                            ],
+                          ),
+                          selected: c.selected.value?.id == d.id,
+                          onSelected: (_) => c.selectDevice(d),
+                          selectedColor: scheme.primary,
+                          backgroundColor: const Color(0xFF1A1A1A),
+                          labelStyle: TextStyle(
+                            color: c.selected.value?.id == d.id ? Colors.black : Colors.white70,
+                          ),
                         ),
                       ),
-                    ),
-                ],
-              ),
-            )),
+                  ],
+                ),
+              );
+      }),
     );
+  }
+
+  Color _deviceStatusColor(DashboardController c, String deviceName) {
+    final status = c.deviceStatusMap[deviceName];
+    if (status == null) return Colors.white24;
+    return status.internet.toUpperCase() == 'UP' ? Colors.greenAccent : Colors.redAccent;
   }
 
   Widget _buildRangeControls(BuildContext context, DashboardController c, ColorScheme scheme) {
@@ -318,6 +334,10 @@ class DashboardScreen extends StatelessWidget {
     return Obx(() {
       final connected = c.socketStatus.value == SocketStatus.connected;
       final packetCount = c.histories.length;
+      final selectedName = c.selected.value?.name ?? '';
+      final devStatus = c.deviceStatusMap[selectedName];
+      final temp = devStatus?.temperature;
+      final batt = devStatus?.battery;
       return Container(
         height: 24,
         color: const Color(0xFF111111),
@@ -335,8 +355,20 @@ class DashboardScreen extends StatelessWidget {
               ),
             ),
             const Spacer(),
+            if (temp != null) ...[
+              Icon(Icons.thermostat, size: 12, color: Colors.white38),
+              const SizedBox(width: 2),
+              Text('${temp.toStringAsFixed(0)}°C', style: const TextStyle(color: Colors.white38, fontSize: 11)),
+              const SizedBox(width: 10),
+            ],
+            if (batt != null) ...[
+              Icon(Icons.battery_std, size: 12, color: Colors.white38),
+              const SizedBox(width: 2),
+              Text('${batt.toStringAsFixed(0)}%', style: const TextStyle(color: Colors.white38, fontSize: 11)),
+              const SizedBox(width: 10),
+            ],
             Text(
-              '${c.selected.value?.name ?? ''} • $packetCount باكت',
+              '$selectedName • $packetCount باكت',
               style: const TextStyle(color: Colors.white38, fontSize: 12),
             ),
           ],

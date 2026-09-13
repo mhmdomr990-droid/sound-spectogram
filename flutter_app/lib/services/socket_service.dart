@@ -6,10 +6,27 @@ import '../models/device_history.dart';
 
 enum SocketStatus { disconnected, connecting, connected }
 
+class DeviceStatusEntry {
+  final String deviceId;
+  final String internet;
+  final double? battery;
+  final double? temperature;
+  final String? uptime;
+
+  const DeviceStatusEntry({
+    required this.deviceId,
+    required this.internet,
+    this.battery,
+    this.temperature,
+    this.uptime,
+  });
+}
+
 class SocketService {
   io.Socket? _socket;
   final _onData = StreamController<DeviceHistory>.broadcast();
   final _onStatus = StreamController<SocketStatus>.broadcast();
+  final _onDeviceStatus = StreamController<List<DeviceStatusEntry>>.broadcast();
 
   bool _started = false;
 
@@ -17,6 +34,7 @@ class SocketService {
 
   Stream<DeviceHistory> get onData => _onData.stream;
   Stream<SocketStatus> get onStatus => _onStatus.stream;
+  Stream<List<DeviceStatusEntry>> get onDeviceStatus => _onDeviceStatus.stream;
 
   void connect(String serverUrl, {String? token}) {
     if (_started) {
@@ -47,6 +65,45 @@ class SocketService {
       if (history != null) {
         _onData.add(history);
       }
+    });
+
+    _socket!.on('devices_status', (payload) {
+      print('[Socket] devices_status RAW: $payload');
+      try {
+        final entries = <DeviceStatusEntry>[];
+        if (payload is Map && payload['entries'] is List) {
+          for (final e in payload['entries']) {
+            if (e is Map) {
+              entries.add(DeviceStatusEntry(
+                deviceId: (e['device_id'] ?? '').toString(),
+                internet: (e['internet'] ?? 'DOWN').toString(),
+                battery: (e['battery'] as num?)?.toDouble(),
+                temperature: (e['temperature'] as num?)?.toDouble(),
+                uptime: e['uptime']?.toString(),
+              ));
+            }
+          }
+        }
+        if (entries.isNotEmpty) {
+          print('[Socket] devices_status parsed: ${entries.map((e) => '${e.deviceId}=${e.internet}').toList()}');
+          _onDeviceStatus.add(entries);
+        }
+      } catch (_) {}
+    });
+
+    _socket!.on('device_telemetry_update', (payload) {
+      print('[Socket] device_telemetry_update RAW: $payload');
+      try {
+        if (payload is Map) {
+          _onDeviceStatus.add([DeviceStatusEntry(
+            deviceId: (payload['device_id'] ?? '').toString(),
+            internet: (payload['internet'] ?? 'DOWN').toString(),
+            battery: (payload['battery'] as num?)?.toDouble(),
+            temperature: (payload['temperature'] as num?)?.toDouble(),
+            uptime: payload['uptime']?.toString(),
+          )]);
+        }
+      } catch (_) {}
     });
 
     _socket!.connect();
@@ -114,5 +171,6 @@ class SocketService {
     disconnect();
     _onData.close();
     _onStatus.close();
+    _onDeviceStatus.close();
   }
 }

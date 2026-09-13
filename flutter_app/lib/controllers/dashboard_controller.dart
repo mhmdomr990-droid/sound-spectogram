@@ -13,6 +13,14 @@ import '../services/socket_service.dart';
 import '../services/telegram_service.dart';
 import '../widgets/spectrogram_canvas.dart';
 
+class DeviceStatusInfo {
+  String internet;
+  double? battery;
+  double? temperature;
+  String? uptime;
+  DeviceStatusInfo({this.internet = 'DOWN', this.battery, this.temperature, this.uptime});
+}
+
 class DashboardController extends GetxController {
   final ApiClient api;
   final AuthService auth;
@@ -36,11 +44,13 @@ class DashboardController extends GetxController {
   final liveWindowMinutes = 15.obs;
   final requestStartTime = RxnString();
   final requestEndTime = RxnString();
+  final deviceStatusMap = <String, DeviceStatusInfo>{}.obs;
 
   final canvasKey = GlobalKey<SpectrogramCanvasState>();
 
   StreamSubscription<DeviceHistory>? _dataSub;
   StreamSubscription<SocketStatus>? _statusSub;
+  StreamSubscription<List<DeviceStatusEntry>>? _deviceStatusSub;
   final _pendingLivePackets = <DeviceHistory>[];
   final _historyKeys = <String>{};
   Timer? _pollTimer;
@@ -59,6 +69,7 @@ class DashboardController extends GetxController {
     _pollTimer?.cancel();
     _dataSub?.cancel();
     _statusSub?.cancel();
+    _deviceStatusSub?.cancel();
     super.onClose();
   }
 
@@ -83,6 +94,18 @@ class DashboardController extends GetxController {
         return;
       }
       insertPacketLive(h);
+    });
+    _deviceStatusSub = socket.onDeviceStatus.listen((entries) {
+      for (final e in entries) {
+        final info = deviceStatusMap[e.deviceId] ?? DeviceStatusInfo();
+        info.internet = e.internet;
+        info.battery = e.battery;
+        info.temperature = e.temperature;
+        info.uptime = e.uptime;
+        deviceStatusMap[e.deviceId] = info;
+      }
+      print('[DeviceBar] statusMap: ${deviceStatusMap.entries.map((e) => '${e.key}=${e.value.internet}').toList()}');
+      deviceStatusMap.refresh();
     });
     socket.connect(_hostFromApi(), token: auth.token);
   }
@@ -144,6 +167,7 @@ class DashboardController extends GetxController {
     try {
       final result = await api.fetchDevices();
       devices.value = result;
+      print('[DeviceBar] API devices: ${result.map((d) => '${d.id}=${d.name}').toList()}');
       loadingDevices.value = false;
       if (result.isNotEmpty && selected.value == null) {
         selected.value = result.first;
