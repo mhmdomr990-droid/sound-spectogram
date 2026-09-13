@@ -196,7 +196,11 @@ class DashboardScreen extends StatelessWidget {
                           min: -24,
                           max: 24,
                           divisions: 48,
-                          onChanged: (v) => c.updateGain(v),
+                          onChanged: (v) {
+                            c.gainDb.value = v;
+                            c.gainNotifier.value = v;
+                          },
+                          onChangeEnd: (_) => c.canvasKey.currentState?.applyGain(),
                         ),
                       ),
                     ),
@@ -298,7 +302,6 @@ class DashboardScreen extends StatelessWidget {
         child: SpectrogramCanvas(
           key: c.canvasKey,
           histories: c.histories,
-          gainDb: c.gainDb.value,
           gainNotifier: c.gainNotifier,
           requestStartTime: c.requestStartTime.value,
           requestEndTime: c.requestEndTime.value,

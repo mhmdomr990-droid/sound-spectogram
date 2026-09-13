@@ -341,16 +341,11 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     _cachedIntensityWidth = widget.seedIntensityWidth;
     _cachedIntensityHeight = widget.seedIntensityHeight;
     _cachedGamma = widget.seedGamma;
-    widget.gainNotifier?.addListener(_onGainChanged);
   }
 
   @override
   void didUpdateWidget(SpectrogramCanvas oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.gainNotifier != widget.gainNotifier) {
-      oldWidget.gainNotifier?.removeListener(_onGainChanged);
-      widget.gainNotifier?.addListener(_onGainChanged);
-    }
     final renderingChanged = oldWidget.matrix != widget.matrix ||
         oldWidget.gamma != widget.gamma ||
         oldWidget.inputValueMax != widget.inputValueMax;
@@ -375,6 +370,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _onGainChanged();
     }
   }
+
+  void applyGain() => _onGainChanged();
 
   void _onGainChanged() async {
     if (_cachedIntensity == null || _cachedIntensityWidth <= 0 || _cachedIntensityHeight <= 0) {
@@ -608,7 +605,6 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
 
   @override
   void dispose() {
-    widget.gainNotifier?.removeListener(_onGainChanged);
     _renderDebounce?.cancel();
     _jobId++;
     if (_imageOwned) _image?.dispose();

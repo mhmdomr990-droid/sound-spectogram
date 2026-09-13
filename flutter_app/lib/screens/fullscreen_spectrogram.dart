@@ -119,7 +119,6 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                   return SpectrogramCanvas(
                     key: _canvasKey,
                     histories: histories,
-                    gainDb: _gainDb,
                     gainNotifier: _gainNotifier,
                     seedImage: widget.seedImage,
                     seedCachedCombined: widget.seedCachedCombined,
@@ -222,6 +221,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                               max: 24,
                                               divisions: 48,
                                               onChanged: (v) => setState(() { _gainDb = v; _gainNotifier.value = v; }),
+                                              onChangeEnd: (_) => _canvasKey.currentState?.applyGain(),
                                             ),
                                           ),
                                         ),
