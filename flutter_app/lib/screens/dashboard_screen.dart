@@ -285,6 +285,9 @@ class DashboardScreen extends StatelessWidget {
         return const Center(child: Text('اختر جهازاً', style: TextStyle(color: Colors.white38)));
       }
 
+      // Force Obx to track markers for reactive rebuild.
+      c.markers.length;
+
       return Container(
         margin: const EdgeInsets.all(8),
         decoration: BoxDecoration(

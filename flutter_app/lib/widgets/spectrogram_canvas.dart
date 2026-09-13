@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:typed_data' show Uint8List;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
 import '../models/device_history.dart';
@@ -826,7 +827,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                     histories: widget.histories,
                     showStatusBar: widget.showStatusBar,
                     compactStatusBar: widget.compactStatusBar,
-                    markers: widget.markers,
+                    markers: List<MarkerData>.from(widget.markers),
                   ),
                 ),
               ),
@@ -1241,6 +1242,6 @@ class _SpectroPainter extends CustomPainter {
         oldDelegate.compactStatusBar != compactStatusBar ||
         !identical(oldDelegate.coverageIntervals, coverageIntervals) ||
         !identical(oldDelegate.histories, histories) ||
-        !identical(oldDelegate.markers, markers);
+        !listEquals(oldDelegate.markers, markers);
   }
 }
