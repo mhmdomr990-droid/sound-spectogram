@@ -144,8 +144,8 @@ class DashboardScreen extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
               children: [
-                btn('آخر باكت', Icons.flash_on, () => c.setRange(RangeMode.latestPacket), active: mode(RangeMode.latestPacket)),
-                btn('متابعة البث', Icons.play_circle, () => c.setRange(RangeMode.followLive), active: mode(RangeMode.followLive)),
+                Obx(() => btn('آخر باكت', Icons.flash_on, () => c.setRange(RangeMode.latestPacket), active: mode(RangeMode.latestPacket))),
+                Obx(() => btn('متابعة البث', Icons.play_circle, () => c.setRange(RangeMode.followLive), active: mode(RangeMode.followLive))),
                 Container(
                   height: 28,
                   padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -166,9 +166,9 @@ class DashboardScreen extends StatelessWidget {
                     },
                   )),
                 ),
-                btn('آخر ساعة', Icons.timer, () => c.setRange(RangeMode.lastHour), active: mode(RangeMode.lastHour)),
-                btn('آخر ساعتين', Icons.history, () => c.setRange(RangeMode.last5h), active: mode(RangeMode.last5h)),
-                btn('تحميل النطاق', Icons.date_range, () => c.pickCustomRange(context), active: mode(RangeMode.custom)),
+                Obx(() => btn('آخر ساعة', Icons.timer, () => c.setRange(RangeMode.lastHour), active: mode(RangeMode.lastHour))),
+                Obx(() => btn('آخر ساعتين', Icons.history, () => c.setRange(RangeMode.last5h), active: mode(RangeMode.last5h))),
+                Obx(() => btn('تحميل النطاق', Icons.date_range, () => c.pickCustomRange(context), active: mode(RangeMode.custom))),
                 Obx(() => c.markers.isNotEmpty
                     ? btn('إزالة العلامات', Icons.clear, () => c.clearMarkers())
                     : const SizedBox.shrink()),
