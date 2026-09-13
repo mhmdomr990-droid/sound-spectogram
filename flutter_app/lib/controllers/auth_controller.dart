@@ -3,7 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
-import '../services/device_id_service.dart';
 
 class AuthController extends GetxController {
   final AuthService _auth;
@@ -92,15 +91,6 @@ class AuthController extends GetxController {
   Future<void> logout() async {
     await _auth.logout();
     isLoggedIn.value = false;
-  }
-
-  Future<void> resetApp() async {
-    await logout();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
-    await DeviceIdService().reset();
-    savedUsername.value = '';
-    savedPassword.value = '';
   }
 
   String? get token => _auth.token;
