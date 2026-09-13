@@ -332,6 +332,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _cachedIntensityHeight = 0;
   double _cachedGamma = 1.0;
 
+  Uint8List? _gainLut;
+  double _gainLutGainDb = double.nan;
+  double _gainLutGamma = double.nan;
+
   @override
   void initState() {
     super.initState();
@@ -415,20 +419,35 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     }
     final w = _cachedIntensityWidth;
     final h = _cachedIntensityHeight;
-    final gainScale = gainDb == 0.0 ? 1.0 : pow(10.0, gainDb / 20.0).toDouble();
-    final gamma = _cachedGamma;
+    _buildGainLut(gainDb, _cachedGamma);
+    final lut = _gainLut!;
     final rgba = Uint8List(w * h * 4);
     for (var i = 0; i < w * h; i++) {
-      var value = intensity[i].toDouble() / 255.0;
-      value = clampDouble(value * gainScale, 0.0, 1.0);
-      final rgb = _colorForGamma(value, gamma);
-      final offset = i * 4;
-      rgba[offset] = (rgb >> 16) & 0xFF;
-      rgba[offset + 1] = (rgb >> 8) & 0xFF;
-      rgba[offset + 2] = rgb & 0xFF;
-      rgba[offset + 3] = 0xFF;
+      final src = intensity[i] * 4;
+      final dst = i * 4;
+      rgba[dst]     = lut[src];
+      rgba[dst + 1] = lut[src + 1];
+      rgba[dst + 2] = lut[src + 2];
+      rgba[dst + 3] = 0xFF;
     }
     return rgbaToUiImage(rgba, w, h);
+  }
+
+  void _buildGainLut(double gainDb, double gammaValue) {
+    if (_gainLut != null && _gainLutGainDb == gainDb && _gainLutGamma == gammaValue) return;
+    final gainScale = gainDb == 0.0 ? 1.0 : pow(10.0, gainDb / 20.0).toDouble();
+    final buf = Uint8List(256 * 4);
+    for (var i = 0; i < 256; i++) {
+      final v = clampDouble(i.toDouble() / 255.0 * gainScale, 0.0, 1.0);
+      final rgb = _colorForGamma(v, gammaValue);
+      buf[i * 4]     = (rgb >> 16) & 0xFF;
+      buf[i * 4 + 1] = (rgb >> 8) & 0xFF;
+      buf[i * 4 + 2] = rgb & 0xFF;
+      buf[i * 4 + 3] = 0xFF;
+    }
+    _gainLut = buf;
+    _gainLutGainDb = gainDb;
+    _gainLutGamma = gammaValue;
   }
 
   static double clampDouble(double v, double min, double max) {
