@@ -345,7 +345,15 @@ class DashboardController extends GetxController {
     requestStartTime.value = from.toIso8601String();
     requestEndTime.value = to.toIso8601String();
     try {
-      final result = await api.fetchHistory(device.id, from: from, to: to);
+      var result = await api.fetchHistory(device.id, from: from, to: to);
+      for (var attempt = 0; attempt < 3; attempt++) {
+        final coverage = _calculateCoverage(result, from, to);
+        print('[FollowLive] attempt ${attempt + 1}: ${result.length} packets, coverage: ${(coverage * 100).toStringAsFixed(0)}%');
+        if (coverage >= 0.7 || result.length >= 3) break;
+        await Future.delayed(const Duration(seconds: 4));
+        final retry = await api.fetchHistory(device.id, from: from, to: to);
+        if (retry.length > result.length) result = retry;
+      }
       histories.value = result;
       _historyKeys
         ..clear()
@@ -402,6 +410,31 @@ class DashboardController extends GetxController {
     }
   }
 
+  double _calculateCoverage(List<DeviceHistory> packets, DateTime from, DateTime to) {
+    if (packets.isEmpty) return 0.0;
+    final totalMs = to.difference(from).inMilliseconds;
+    if (totalMs <= 0) return 0.0;
+    final ranges = <({int start, int end})>[];
+    for (final p in packets) {
+      final s = DateTime.tryParse(p.startTime ?? '');
+      final e = DateTime.tryParse(p.endTime ?? '');
+      if (s == null || e == null) continue;
+      final sMs = s.millisecondsSinceEpoch.clamp(from.millisecondsSinceEpoch, to.millisecondsSinceEpoch);
+      final eMs = e.millisecondsSinceEpoch.clamp(from.millisecondsSinceEpoch, to.millisecondsSinceEpoch);
+      if (eMs > sMs) ranges.add((start: sMs, end: eMs));
+    }
+    if (ranges.isEmpty) return 0.0;
+    ranges.sort((a, b) => a.start.compareTo(b.start));
+    int covered = 0;
+    int lastEnd = from.millisecondsSinceEpoch;
+    for (final r in ranges) {
+      if (r.start > lastEnd) covered += r.start - lastEnd;
+      if (r.end > lastEnd) lastEnd = r.end;
+    }
+    if (lastEnd < to.millisecondsSinceEpoch) covered += to.millisecondsSinceEpoch - lastEnd;
+    return (to.millisecondsSinceEpoch - from.millisecondsSinceEpoch - covered) / totalMs;
+  }
+
   void _startPolling() {
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) => _pollLatest());
@@ -446,6 +479,7 @@ class DashboardController extends GetxController {
     followLiveActive.value = false;
     histories.clear();
     _historyKeys.clear();
+    _pendingLivePackets.clear();
     requestStartTime.value = null;
     requestEndTime.value = null;
     loadRange();
