@@ -346,11 +346,11 @@ class DashboardController extends GetxController {
     requestEndTime.value = to.toIso8601String();
     try {
       var result = await api.fetchHistory(device.id, from: from, to: to);
-      for (var attempt = 0; attempt < 3; attempt++) {
+      for (var attempt = 0; attempt < 2; attempt++) {
         final coverage = _calculateCoverage(result, from, to);
         print('[FollowLive] attempt ${attempt + 1}: ${result.length} packets, coverage: ${(coverage * 100).toStringAsFixed(0)}%');
         if (coverage >= 0.7 || result.length >= 3) break;
-        await Future.delayed(const Duration(seconds: 4));
+        await Future.delayed(const Duration(seconds: 2));
         final retry = await api.fetchHistory(device.id, from: from, to: to);
         if (retry.length > result.length) result = retry;
       }
