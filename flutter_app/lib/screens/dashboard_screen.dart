@@ -386,6 +386,7 @@ class DashboardScreen extends StatelessWidget {
         initialDevice: c.selected.value,
         initialFrom: now.subtract(const Duration(hours: 24)),
         initialTo: now,
+        deviceStatusMap: c.deviceStatusMap,
       ),
     );
   }
@@ -396,12 +397,14 @@ class _AIReportDialog extends StatefulWidget {
   final Device? initialDevice;
   final DateTime initialFrom;
   final DateTime initialTo;
+  final Map<String, DeviceStatusInfo> deviceStatusMap;
 
   const _AIReportDialog({
     required this.devices,
     this.initialDevice,
     required this.initialFrom,
     required this.initialTo,
+    required this.deviceStatusMap,
   });
 
   @override
@@ -759,6 +762,10 @@ class _AIReportDialogState extends State<_AIReportDialog> {
         _buildStatRow(color: const Color(0xFF21A366), label: 'غير مكتشفة', count: notDetectedCount),
         const SizedBox(height: 4),
         _buildStatRow(color: Colors.white54, label: 'إجمالي الباكتات', count: filteredItems.length),
+        const SizedBox(height: 14),
+        const Divider(color: Colors.white24),
+        const SizedBox(height: 8),
+        _buildDeviceStatusSection(),
       ],
     );
   }
@@ -805,6 +812,59 @@ class _AIReportDialogState extends State<_AIReportDialog> {
         Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
         const Spacer(),
         Text('$count', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+      ],
+    );
+  }
+
+  Widget _buildDeviceStatusSection() {
+    final name = _device?.name ?? '';
+    final status = widget.deviceStatusMap[name];
+    if (status == null) {
+      return const Text('لا توجد بيانات حالة الجهاز', style: TextStyle(color: Colors.white54, fontSize: 12));
+    }
+    final isUp = status.internet.toUpperCase() == 'UP';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('حالة الجهاز:', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Icon(Icons.circle, size: 8, color: isUp ? Colors.greenAccent : Colors.redAccent),
+            const SizedBox(width: 8),
+            Text('الاتصال: ${isUp ? "متصل" : "غير متصل"}', style: TextStyle(color: isUp ? Colors.greenAccent : Colors.redAccent, fontSize: 12)),
+          ],
+        ),
+        if (status.temperature != null) ...[
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Icon(Icons.thermostat, size: 12, color: Colors.white54),
+              const SizedBox(width: 8),
+              Text('درجة الحرارة: ${status.temperature!.toStringAsFixed(1)}°C', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            ],
+          ),
+        ],
+        if (status.battery != null) ...[
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Icon(Icons.battery_std, size: 12, color: Colors.white54),
+              const SizedBox(width: 8),
+              Text('البطارية: ${status.battery!.toStringAsFixed(0)}%', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            ],
+          ),
+        ],
+        if (status.uptime != null) ...[
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Icon(Icons.access_time, size: 12, color: Colors.white54),
+              const SizedBox(width: 8),
+              Text('مدة التشغيل: ${status.uptime}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            ],
+          ),
+        ],
       ],
     );
   }

@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/device.dart';
 import '../models/device_history.dart';
@@ -58,6 +60,7 @@ class DashboardController extends GetxController {
   @override
   void onInit() {
     super.onInit();
+    _loadDeviceStatus();
     _bindSocket();
     _loadDevices();
   }
@@ -104,8 +107,8 @@ class DashboardController extends GetxController {
         info.uptime = e.uptime;
         deviceStatusMap[e.deviceId] = info;
       }
-      print('[DeviceBar] statusMap: ${deviceStatusMap.entries.map((e) => '${e.key}=${e.value.internet}').toList()}');
       deviceStatusMap.refresh();
+      _saveDeviceStatus();
     });
     socket.connect(_hostFromApi(), token: auth.token);
   }
@@ -118,6 +121,41 @@ class DashboardController extends GetxController {
     } else if (s == SocketStatus.disconnected) {
       TelegramService.sendConnectionAlert('disconnected');
     }
+  }
+
+  static const _deviceStatusKey = 'device_status_map';
+
+  Future<void> _saveDeviceStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    final map = <String, dynamic>{};
+    for (final e in deviceStatusMap.entries) {
+      map[e.key] = {
+        'internet': e.value.internet,
+        'battery': e.value.battery,
+        'temperature': e.value.temperature,
+        'uptime': e.value.uptime,
+      };
+    }
+    await prefs.setString(_deviceStatusKey, jsonEncode(map));
+  }
+
+  Future<void> _loadDeviceStatus() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_deviceStatusKey);
+      if (raw == null) return;
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      for (final e in map.entries) {
+        final v = e.value as Map<String, dynamic>;
+        deviceStatusMap[e.key] = DeviceStatusInfo(
+          internet: (v['internet'] ?? 'DOWN').toString(),
+          battery: (v['battery'] as num?)?.toDouble(),
+          temperature: (v['temperature'] as num?)?.toDouble(),
+          uptime: v['uptime']?.toString(),
+        );
+      }
+      deviceStatusMap.refresh();
+    } catch (_) {}
   }
 
   void insertPacketLive(DeviceHistory h) {
