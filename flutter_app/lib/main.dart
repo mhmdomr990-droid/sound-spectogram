@@ -4,7 +4,6 @@ import 'package:get/get.dart';
 
 import 'controllers/auth_controller.dart';
 import 'controllers/dashboard_controller.dart';
-import 'controllers/socket_controller.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/api_client.dart';
@@ -28,7 +27,6 @@ Future<void> main() async {
   Get.put<ApiClient>(api);
   Get.put<SocketService>(socket);
   Get.put(AuthController(auth, api));
-  Get.put(SocketController(socket));
   Get.lazyPut(() => DashboardController(
         Get.find<ApiClient>(),
         Get.find<AuthService>(),

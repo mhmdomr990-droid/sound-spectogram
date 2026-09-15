@@ -37,15 +37,6 @@ double normalizeIntensity(num value, {num inputValueMax = 255}) {
   return clamp01(n / maxValue);
 }
 
-/// Maps an intensity value (0..255 or 0..1) to an ARGB 32-bit int using the
-/// magma colour map (identical stops to the web dashboard).
-int valueToColor(num value, {num gamma = 1.0, num inputValueMax = 255}) {
-  return _colorForNormalized(
-    normalizeIntensity(value, inputValueMax: inputValueMax),
-    gamma.toDouble(),
-  );
-}
-
 int _colorForNormalized(double v0, double gammaValue) {
   final g = gammaValue > 0 ? gammaValue : 1.0;
   double v = clamp01(v0);
@@ -649,17 +640,6 @@ SpectroRgbaResult buildRgba(
   }
 
   return SpectroRgbaResult(rgba, width, height, intensity: Uint8List.fromList(intensity), gamma: gammaArg);
-}
-
-/// Convert an RGBA byte buffer into a ui.Image for painting.
-Future<ui.Image> rgbaToImage(Uint8List rgba, int width, int height) async {
-  final codec = await ui.instantiateImageCodec(
-    rgba,
-    targetWidth: width,
-    targetHeight: height,
-  );
-  final frame = await codec.getNextFrame();
-  return frame.image;
 }
 
 typedef _IntensityMapFn = double Function(num value);

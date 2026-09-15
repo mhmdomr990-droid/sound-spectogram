@@ -37,14 +37,6 @@ const List<List<double>> kColorMapViridis = [
   [1.0, 253.0 / 255.0, 231.0 / 255.0, 37.0 / 255.0],
 ];
 
-const List<List<List<double>>> kColorMaps = [
-  kColorMapMagma,
-  kColorMapSunset,
-  kColorMapViridis,
-];
-
-const List<String> kColorMapNames = ['magma', 'sunset', 'viridis'];
-
 class CanvasSeedSnapshot {
   final ui.Image? image;
   final List<List<double>>? cachedCombined;
