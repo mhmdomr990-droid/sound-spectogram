@@ -173,4 +173,25 @@ class SocketService {
     _onStatus.close();
     _onDeviceStatus.close();
   }
+
+  Future<Map<String, dynamic>?> requestLatestTelemetry() async {
+    if (_socket == null || _socket?.connected != true) return null;
+
+    final completer = Completer<Map<String, dynamic>?>();
+
+    _socket!.emitWithAck('mobile:request_latest_telemetry', {}, ack: (dynamic response) {
+      if (!completer.isCompleted) {
+        if (response is Map) {
+          completer.complete(Map<String, dynamic>.from(response.cast()));
+        } else {
+          completer.complete(null);
+        }
+      }
+    });
+
+    return completer.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () => null,
+    );
+  }
 }

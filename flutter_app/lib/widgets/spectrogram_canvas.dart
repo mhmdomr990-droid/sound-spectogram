@@ -718,6 +718,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) _render();
             });
+          } else if (_image == null && widget.histories != null && widget.histories!.isNotEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _render();
+            });
           }
         }
         final img = _image;

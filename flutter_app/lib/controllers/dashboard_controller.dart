@@ -16,11 +16,11 @@ import '../services/telegram_service.dart';
 import '../widgets/spectrogram_canvas.dart';
 
 class DeviceStatusInfo {
-  String internet;
+  String? internet;
   double? battery;
   double? temperature;
   String? uptime;
-  DeviceStatusInfo({this.internet = 'DOWN', this.battery, this.temperature, this.uptime});
+  DeviceStatusInfo({this.internet, this.battery, this.temperature, this.uptime});
 }
 
 class DashboardController extends GetxController {
@@ -106,6 +106,8 @@ class DashboardController extends GetxController {
         info.temperature = e.temperature;
         info.uptime = e.uptime;
         deviceStatusMap[e.deviceId] = info;
+        final name = _deviceNameFromId(e.deviceId);
+        if (name != null) deviceStatusMap[name] = info;
       }
       deviceStatusMap.refresh();
       _saveDeviceStatus();
@@ -114,16 +116,62 @@ class DashboardController extends GetxController {
   }
 
   void _onSocketStatusChanged(SocketStatus s) async {
-    final enabled = await TelegramService.isEnabled();
-    if (!enabled) return;
     if (s == SocketStatus.connected) {
-      TelegramService.sendConnectionAlert('connected');
+      _fetchLatestTelemetry();
+      final enabled = await TelegramService.isEnabled();
+      if (enabled) {
+        TelegramService.sendConnectionAlert('connected');
+      }
     } else if (s == SocketStatus.disconnected) {
-      TelegramService.sendConnectionAlert('disconnected');
+      final enabled = await TelegramService.isEnabled();
+      if (enabled) {
+        TelegramService.sendConnectionAlert('disconnected');
+      }
     }
   }
 
+  void _fetchLatestTelemetry() async {
+    final response = await socket.requestLatestTelemetry();
+    print('[Telemetry] FULL RESPONSE: $response');
+    if (response == null || response['ok'] != true) return;
+    final snapshot = response['snapshot'];
+    if (snapshot is! Map) return;
+    for (final entry in snapshot.entries) {
+      final deviceId = entry.key.toString();
+      final data = entry.value;
+      if (data is! Map) continue;
+      print('[Telemetry] deviceId=$deviceId data=$data');
+      final name = (data['name'] ?? '').toString();
+      final externalDeviceId = (data['externalDeviceId'] ?? '').toString();
+      final temperature = (data['temperature'] as num?)?.toDouble();
+      final battery = (data['battery'] as num?)?.toDouble();
+      final internet = data['internet']?.toString();
+      final uptime = data['uptime']?.toString();
+      print('[Telemetry] $name (id=$deviceId, ext=$externalDeviceId): temp=$temperature, battery=$battery%, internet=$internet, uptime=$uptime');
+      final info = deviceStatusMap[deviceId] ?? DeviceStatusInfo();
+      info.internet = internet;
+      info.battery = battery;
+      info.temperature = temperature;
+      info.uptime = uptime;
+      deviceStatusMap[deviceId] = info;
+      if (name.isNotEmpty) {
+        deviceStatusMap[name] = info;
+      }
+    }
+    deviceStatusMap.refresh();
+    _saveDeviceStatus();
+  }
+
   static const _deviceStatusKey = 'device_status_map';
+
+  String? _deviceNameFromId(String deviceId) {
+    final id = int.tryParse(deviceId);
+    if (id == null) return null;
+    for (final d in devices) {
+      if (d.id == id) return d.name;
+    }
+    return null;
+  }
 
   Future<void> _saveDeviceStatus() async {
     final prefs = await SharedPreferences.getInstance();
@@ -148,7 +196,7 @@ class DashboardController extends GetxController {
       for (final e in map.entries) {
         final v = e.value as Map<String, dynamic>;
         deviceStatusMap[e.key] = DeviceStatusInfo(
-          internet: (v['internet'] ?? 'DOWN').toString(),
+          internet: v['internet']?.toString(),
           battery: (v['battery'] as num?)?.toDouble(),
           temperature: (v['temperature'] as num?)?.toDouble(),
           uptime: v['uptime']?.toString(),

@@ -118,8 +118,8 @@ class DashboardScreen extends StatelessWidget {
 
   Color _deviceStatusColor(DashboardController c, String deviceName) {
     final status = c.deviceStatusMap[deviceName];
-    if (status == null) return Colors.white24;
-    return status.internet.toUpperCase() == 'UP' ? Colors.greenAccent : Colors.redAccent;
+    if (status == null || status.internet == null) return Colors.white24;
+    return status.internet!.toUpperCase() == 'UP' ? Colors.greenAccent : Colors.redAccent;
   }
 
   Widget _buildRangeControls(BuildContext context, DashboardController c, ColorScheme scheme) {
@@ -308,24 +308,52 @@ class DashboardScreen extends StatelessWidget {
       // Force Obx to track markers for reactive rebuild.
       c.markers.length;
 
-      return Container(
-        margin: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.white12),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        clipBehavior: Clip.hardEdge,
-        child: SpectrogramCanvas(
-          key: c.canvasKey,
-          histories: c.histories,
-          gainNotifier: c.gainNotifier,
-          requestStartTime: c.requestStartTime.value,
-          requestEndTime: c.requestEndTime.value,
-          markers: c.markers,
-          onMarkerAdd: (timeMs) => c.addMarker(timeMs),
-          onMarkerRemove: (index) => c.removeMarker(index),
-          onMarkerMove: (index, newTimeMs) => c.moveMarker(index, newTimeMs),
-        ),
+      return Stack(
+        children: [
+          Container(
+            margin: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.white12),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            clipBehavior: Clip.hardEdge,
+            child: SpectrogramCanvas(
+              key: c.canvasKey,
+              histories: c.histories,
+              gainNotifier: c.gainNotifier,
+              requestStartTime: c.requestStartTime.value,
+              requestEndTime: c.requestEndTime.value,
+              markers: c.markers,
+              onMarkerAdd: (timeMs) => c.addMarker(timeMs),
+              onMarkerRemove: (index) => c.removeMarker(index),
+              onMarkerMove: (index, newTimeMs) => c.moveMarker(index, newTimeMs),
+            ),
+          ),
+          if (c.markers.isNotEmpty)
+            Positioned(
+              left: 14,
+              bottom: 14,
+              child: GestureDetector(
+                onTap: () => c.clearMarkers(),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.7),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.delete_outline, color: Colors.redAccent, size: 16),
+                      SizedBox(width: 4),
+                      Text('مسح العلامات', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
       );
     });
   }
@@ -819,10 +847,10 @@ class _AIReportDialogState extends State<_AIReportDialog> {
   Widget _buildDeviceStatusSection() {
     final name = _device?.name ?? '';
     final status = widget.deviceStatusMap[name];
-    if (status == null) {
+    if (status == null || status.internet == null) {
       return const Text('لا توجد بيانات حالة الجهاز', style: TextStyle(color: Colors.white54, fontSize: 12));
     }
-    final isUp = status.internet.toUpperCase() == 'UP';
+    final isUp = status.internet!.toUpperCase() == 'UP';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
