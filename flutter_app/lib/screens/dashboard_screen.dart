@@ -53,9 +53,19 @@ class DashboardScreen extends StatelessWidget {
           IconButton(
             tooltip: 'تسجيل الخروج',
             icon: const Icon(Icons.logout),
-            onPressed: () async {
-              await Get.find<AuthController>().logout();
-              Get.offAllNamed('/login');
+            onPressed: () {
+              Get.defaultDialog(
+                title: 'تأكيد تسجيل الخروج',
+                middleText: 'هل أنت متأكد أنك تريد تسجيل الخروج؟',
+                textConfirm: 'نعم',
+                textCancel: 'إلغاء',
+                confirmTextColor: Colors.white,
+                onConfirm: () async {
+                  Get.back();
+                  await Get.find<AuthController>().logout();
+                  Get.offAllNamed('/login');
+                },
+              );
             },
           ),
         ],
