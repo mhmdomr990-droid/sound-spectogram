@@ -25,7 +25,7 @@ class LoginScreen extends StatelessWidget {
         children: [
           const Positioned.fill(child: _SpectrogramBackground()),
           Positioned.fill(
-            child: Container(color: Colors.black.withOpacity(0.55)),
+            child: Container(color: Colors.black.withOpacity(0.35)),
           ),
           Center(
             child: SingleChildScrollView(
@@ -201,8 +201,8 @@ class _SpectrogramBackgroundState extends State<_SpectrogramBackground>
   _SpectrogramColumn _generateColumn() {
     return _SpectrogramColumn(
       x: _random.nextDouble(),
-      width: 2.0 + _random.nextDouble() * 6.0,
-      heightFraction: 0.15 + _random.nextDouble() * 0.85,
+      width: 3.0 + _random.nextDouble() * 4.0,
+      heightFraction: 0.35 + _random.nextDouble() * 0.65,
       colorIndex: _random.nextDouble(),
       speed: 0.8 + _random.nextDouble() * 1.5,
       yPhase: _random.nextDouble() * pi * 2,
@@ -257,17 +257,17 @@ class _SpectrogramPainter extends CustomPainter {
   _SpectrogramPainter({required this.columns, required this.progress});
 
   static const _magmaColors = [
-    Color(0xFF000004),
-    Color(0xFF160B39),
-    Color(0xFF420A68),
-    Color(0xFF6A176E),
-    Color(0xFF932667),
-    Color(0xFFBC3754),
-    Color(0xFFDD513A),
-    Color(0xFFF37819),
-    Color(0xFFFCA50A),
-    Color(0xFFF6D746),
-    Color(0xFFFFFDAF),
+    Color(0xFF1A1600),
+    Color(0xFF2D2400),
+    Color(0xFF4A3D00),
+    Color(0xFF6B5A00),
+    Color(0xFF8A7500),
+    Color(0xFFAA9000),
+    Color(0xFFC8AB00),
+    Color(0xFFE0C200),
+    Color(0xFFF0D840),
+    Color(0xFFFFEEA0),
+    Color(0xFFFFFFFF),
   ];
 
   Color _magmaColor(double t) {
@@ -293,8 +293,9 @@ class _SpectrogramPainter extends CustomPainter {
       final top = size.height - h;
 
       final paint = Paint()
-        ..color = _magmaColor(col.colorIndex).withOpacity(0.15)
-        ..style = PaintingStyle.fill;
+        ..color = _magmaColor(col.colorIndex).withOpacity(0.55)
+        ..style = PaintingStyle.fill
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
 
       canvas.drawRect(
         Rect.fromLTWH(px - col.width / 2, top, col.width, h),
