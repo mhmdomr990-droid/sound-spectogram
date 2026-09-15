@@ -37,6 +37,8 @@ class AuthController extends GetxController {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_savedUsernameKey, username);
     await prefs.setString(_savedPasswordKey, password);
+    savedUsername.value = username;
+    savedPassword.value = password;
   }
 
   Future<void> login({
