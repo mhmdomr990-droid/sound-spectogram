@@ -56,6 +56,7 @@ class DashboardController extends GetxController {
   final _pendingLivePackets = <DeviceHistory>[];
   final _historyKeys = <String>{};
   Timer? _pollTimer;
+  Timer? _telemetryTimer;
 
   @override
   void onInit() {
@@ -63,6 +64,7 @@ class DashboardController extends GetxController {
     _loadDeviceStatus();
     _bindSocket();
     _loadDevices();
+    _telemetryTimer = Timer.periodic(const Duration(seconds: 60), (_) => _fetchLatestTelemetry());
   }
 
   @override
@@ -70,6 +72,7 @@ class DashboardController extends GetxController {
     gainNotifier.dispose();
     liveDataNotifier.dispose();
     _pollTimer?.cancel();
+    _telemetryTimer?.cancel();
     _dataSub?.cancel();
     _statusSub?.cancel();
     _deviceStatusSub?.cancel();
