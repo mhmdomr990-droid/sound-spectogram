@@ -103,7 +103,9 @@ class DashboardController extends GetxController {
     _deviceStatusSub = socket.onDeviceStatus.listen((entries) {
       for (final e in entries) {
         final info = deviceStatusMap[e.deviceId] ?? DeviceStatusInfo();
-        info.internet = e.internet;
+        if (e.source == DeviceStatusSource.ping) {
+          info.internet = e.internet;
+        }
         info.battery = e.battery;
         info.temperature = e.temperature;
         info.uptime = e.uptime;
@@ -125,7 +127,6 @@ class DashboardController extends GetxController {
 
   void _fetchLatestTelemetry() async {
     final response = await socket.requestLatestTelemetry();
-    print('[Telemetry] FULL RESPONSE: $response');
     if (response == null || response['ok'] != true) return;
     final snapshot = response['snapshot'];
     if (snapshot is! Map) return;
@@ -133,16 +134,11 @@ class DashboardController extends GetxController {
       final deviceId = entry.key.toString();
       final data = entry.value;
       if (data is! Map) continue;
-      print('[Telemetry] deviceId=$deviceId data=$data');
       final name = (data['name'] ?? '').toString();
-      final externalDeviceId = (data['externalDeviceId'] ?? '').toString();
       final temperature = (data['temperature'] as num?)?.toDouble();
       final battery = (data['battery'] as num?)?.toDouble();
-      final internet = data['internet']?.toString();
       final uptime = data['uptime']?.toString();
-      print('[Telemetry] $name (id=$deviceId, ext=$externalDeviceId): temp=$temperature, battery=$battery%, internet=$internet, uptime=$uptime');
       final info = deviceStatusMap[deviceId] ?? DeviceStatusInfo();
-      info.internet = internet;
       info.battery = battery;
       info.temperature = temperature;
       info.uptime = uptime;
@@ -234,7 +230,6 @@ class DashboardController extends GetxController {
     try {
       final result = await api.fetchDevices();
       devices.value = result;
-      print('[DeviceBar] API devices: ${result.map((d) => '${d.id}=${d.name}').toList()}');
       loadingDevices.value = false;
       if (result.isNotEmpty && selected.value == null) {
         selected.value = result.first;
@@ -424,10 +419,8 @@ class DashboardController extends GetxController {
         _historyKeys.remove('${h.deviceId}|${h.startTime}|${h.endTime}');
         _historyKeys.add('${match.first.deviceId}|${match.first.startTime}|${match.first.endTime}');
         insertPacketLive(match.first);
-        print('[Recovery] refetched packet ${h.startTime}-${h.endTime} with ${match.first.data.length} rows');
       }
-    } on Exception catch (e) {
-      print('[Recovery] failed to refetch packet: $e');
+    } on Exception catch (_) {
     }
   }
 

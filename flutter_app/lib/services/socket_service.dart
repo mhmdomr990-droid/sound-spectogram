@@ -6,12 +6,16 @@ import '../models/device_history.dart';
 
 enum SocketStatus { disconnected, connecting, connected }
 
+enum DeviceStatusSource { ping, telemetry, query }
+
 class DeviceStatusEntry {
   final String deviceId;
   final String internet;
   final double? battery;
   final double? temperature;
   final String? uptime;
+  final double? ping;
+  final DeviceStatusSource source;
 
   const DeviceStatusEntry({
     required this.deviceId,
@@ -19,6 +23,8 @@ class DeviceStatusEntry {
     this.battery,
     this.temperature,
     this.uptime,
+    this.ping,
+    this.source = DeviceStatusSource.query,
   });
 }
 
@@ -53,7 +59,7 @@ class SocketService {
 
     _socket!.onConnect((_) {
       _onStatus.add(SocketStatus.connected);
-      _socket!.emit('device:subscribe', {});
+      _socket!.emit('mobile:subscribe', {});
     });
 
     _socket!.onDisconnect((_) => _onStatus.add(SocketStatus.disconnected));
@@ -80,6 +86,7 @@ class SocketService {
                 battery: (e['battery'] as num?)?.toDouble(),
                 temperature: (e['temperature'] as num?)?.toDouble(),
                 uptime: e['uptime']?.toString(),
+                source: DeviceStatusSource.telemetry,
               ));
             }
           }
@@ -92,18 +99,67 @@ class SocketService {
     });
 
     _socket!.on('device_telemetry_update', (payload) {
-      print('[Socket] device_telemetry_update RAW: $payload');
+      print('[Socket] device_telemetry_update RAW type=${payload.runtimeType}: $payload');
       try {
         if (payload is Map) {
-          _onDeviceStatus.add([DeviceStatusEntry(
-            deviceId: (payload['device_id'] ?? '').toString(),
+          final rawId = payload['device_id'] ?? payload['deviceId'] ?? payload['id'] ?? '';
+          final deviceId = rawId.toString();
+          final name = (payload['name'] ?? '').toString();
+          final info = DeviceStatusEntry(
+            deviceId: deviceId,
             internet: (payload['internet'] ?? 'DOWN').toString(),
             battery: (payload['battery'] as num?)?.toDouble(),
             temperature: (payload['temperature'] as num?)?.toDouble(),
             uptime: payload['uptime']?.toString(),
-          )]);
+            source: DeviceStatusSource.telemetry,
+          );
+          _onDeviceStatus.add([info]);
+          print('[Socket] device_telemetry_update parsed: id=$deviceId name=$name internet=${info.internet}');
         }
-      } catch (_) {}
+      } catch (e) {
+        print('[Socket] device_telemetry_update ERROR: $e');
+      }
+    });
+
+    _socket!.on('device_ping_update', (payload) {
+      print('[Socket] device_ping_update RAW type=${payload.runtimeType}: $payload');
+      try {
+        if (payload is Map) {
+          final rawId = payload['device_id'] ?? payload['deviceId'] ?? payload['id'] ?? '';
+          final deviceId = rawId.toString();
+          final status = (payload['status'] ?? '').toString().toLowerCase();
+          final ping = (payload['ping'] as num?)?.toDouble();
+          final isOnline = status == 'on' || status == 'up' || status == 'online';
+          print('[Socket] device_ping_update parsed: id=$deviceId status=$status ping=$ping');
+          _onDeviceStatus.add([DeviceStatusEntry(
+            deviceId: deviceId,
+            internet: isOnline ? 'UP' : 'DOWN',
+            ping: ping,
+            source: DeviceStatusSource.ping,
+          )]);
+        } else if (payload is List) {
+          final entries = <DeviceStatusEntry>[];
+          for (final e in payload) {
+            if (e is Map) {
+              final rawId = e['device_id'] ?? e['deviceId'] ?? e['id'] ?? '';
+              final deviceId = rawId.toString();
+              final status = (e['status'] ?? '').toString().toLowerCase();
+              final ping = (e['ping'] as num?)?.toDouble();
+              final isOnline = status == 'on' || status == 'up' || status == 'online';
+              entries.add(DeviceStatusEntry(
+                deviceId: deviceId,
+                internet: isOnline ? 'UP' : 'DOWN',
+                ping: ping,
+                source: DeviceStatusSource.ping,
+              ));
+            }
+          }
+          print('[Socket] device_ping_update parsed list: ${entries.length} entries');
+          if (entries.isNotEmpty) _onDeviceStatus.add(entries);
+        }
+      } catch (e) {
+        print('[Socket] device_ping_update ERROR: $e');
+      }
     });
 
     _socket!.connect();
