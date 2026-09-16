@@ -844,6 +844,37 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     );
   }
 
+  String _formatUptime(String? raw) {
+    if (raw == null || raw.isEmpty) return 'غير معروف';
+    final dMatch = RegExp(r'(\d+)d').firstMatch(raw);
+    final hMatch = RegExp(r'(\d+)h').firstMatch(raw);
+    final mMatch = RegExp(r'(\d+)m').firstMatch(raw);
+    final days = dMatch != null ? int.parse(dMatch.group(1)!) : 0;
+    final hours = hMatch != null ? int.parse(hMatch.group(1)!) : 0;
+    final minutes = mMatch != null ? int.parse(mMatch.group(1)!) : 0;
+    String dayWord(int n) {
+      if (n == 1) return 'يوم';
+      if (n == 2) return 'يومان';
+      return '$n أيام';
+    }
+    String hourWord(int n) {
+      if (n == 1) return 'ساعة';
+      if (n == 2) return 'ساعتان';
+      return '$n ساعات';
+    }
+    String minWord(int n) {
+      if (n == 1) return 'دقيقة';
+      if (n == 2) return 'دقيقتان';
+      return '$n دقائق';
+    }
+    final parts = <String>[];
+    if (days > 0) parts.add(dayWord(days));
+    if (hours > 0) parts.add(hourWord(hours));
+    if (minutes > 0) parts.add(minWord(minutes));
+    if (parts.isEmpty) return 'أقل من دقيقة';
+    return parts.join(' و ');
+  }
+
   Widget _buildDeviceStatusSection() {
     final name = _device?.name ?? '';
     final status = widget.deviceStatusMap[name];
@@ -889,7 +920,10 @@ class _AIReportDialogState extends State<_AIReportDialog> {
             children: [
               const Icon(Icons.access_time, size: 12, color: Colors.white54),
               const SizedBox(width: 8),
-              Text('مدة التشغيل: ${status.uptime}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              Directionality(
+                textDirection: TextDirection.rtl,
+                child: Text('مدة التشغيل: ${_formatUptime(status.uptime)}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              ),
             ],
           ),
         ],
