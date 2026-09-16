@@ -12,7 +12,6 @@ import '../models/range_mode.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/socket_service.dart';
-import '../services/telegram_service.dart';
 import '../widgets/spectrogram_canvas.dart';
 
 class DeviceStatusInfo {
@@ -118,18 +117,9 @@ class DashboardController extends GetxController {
     socket.connect(_hostFromApi(), token: auth.token);
   }
 
-  void _onSocketStatusChanged(SocketStatus s) async {
+  void _onSocketStatusChanged(SocketStatus s) {
     if (s == SocketStatus.connected) {
       _fetchLatestTelemetry();
-      final enabled = await TelegramService.isEnabled();
-      if (enabled) {
-        TelegramService.sendConnectionAlert('connected');
-      }
-    } else if (s == SocketStatus.disconnected) {
-      final enabled = await TelegramService.isEnabled();
-      if (enabled) {
-        TelegramService.sendConnectionAlert('disconnected');
-      }
     }
   }
 
@@ -210,18 +200,6 @@ class DashboardController extends GetxController {
   }
 
   void insertPacketLive(DeviceHistory h) {
-    if (h.aiStatus == AiStatus.detected) {
-      TelegramService.isEnabled().then((on) {
-        if (on) {
-          TelegramService.sendAlert(
-            device: selected.value?.name ?? 'Unknown',
-            status: 'detected',
-            confidence: h.confidence?.toStringAsFixed(1) ?? 'N/A',
-            time: h.endTime ?? h.startTime ?? '',
-          );
-        }
-      });
-    }
     histories.add(h);
     histories.sort((a, b) {
       final aStart = DateTime.tryParse(a.startTime ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);

@@ -9,7 +9,6 @@ import '../models/device.dart';
 import '../models/device_history.dart';
 import '../models/range_mode.dart';
 import '../screens/fullscreen_spectrogram.dart';
-import '../screens/notification_settings_screen.dart';
 import '../services/api_client.dart';
 import '../services/socket_service.dart';
 import '../widgets/spectrogram_canvas.dart';
@@ -36,15 +35,6 @@ class DashboardScreen extends StatelessWidget {
           ],
         ),
         actions: [
-          IconButton(
-            tooltip: 'Notifications',
-            icon: const Icon(Icons.notifications_outlined, color: Colors.white70),
-            onPressed: () {
-              Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const NotificationSettingsScreen(),
-              ));
-            },
-          ),
           IconButton(
             tooltip: 'تقرير الأهداف',
             icon: const Icon(Icons.assessment, color: Colors.white70),
