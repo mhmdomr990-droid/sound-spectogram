@@ -900,7 +900,10 @@ class _AIReportDialogState extends State<_AIReportDialog> {
             children: [
               const Icon(Icons.thermostat, size: 12, color: Colors.white54),
               const SizedBox(width: 8),
-              Text('درجة الحرارة: ${status.temperature!.toStringAsFixed(1)}°C', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              Directionality(
+                textDirection: TextDirection.rtl,
+                child: Text('°C ${status.temperature!.toStringAsFixed(1)} درجة الحرارة', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              ),
             ],
           ),
         ],
@@ -910,7 +913,10 @@ class _AIReportDialogState extends State<_AIReportDialog> {
             children: [
               const Icon(Icons.battery_std, size: 12, color: Colors.white54),
               const SizedBox(width: 8),
-              Text('البطارية: ${status.battery!.toStringAsFixed(0)}%', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              Directionality(
+                textDirection: TextDirection.rtl,
+                child: Text('% ${status.battery!.toStringAsFixed(0)} البطارية', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              ),
             ],
           ),
         ],
