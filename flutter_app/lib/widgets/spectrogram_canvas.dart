@@ -1226,6 +1226,8 @@ class _SpectroPainter extends CustomPainter {
         return const Color(0xFF21A366);
       case AiStatus.possible:
         return const Color(0xFFF59E0B);
+      case AiStatus.unknown:
+        return const Color(0xFF8A94A6);
     }
   }
 
@@ -1237,6 +1239,8 @@ class _SpectroPainter extends CustomPainter {
         return 'لا يوجد هدف';
       case AiStatus.possible:
         return 'هدف محتمل';
+      case AiStatus.unknown:
+        return 'غير محدد';
     }
   }
 

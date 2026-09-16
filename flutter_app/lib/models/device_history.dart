@@ -7,6 +7,7 @@ final _sharedGZipDecoder = GZipDecoder();
 
 /// AI status values matching the server's `AiStatus` enum.
 enum AiStatus {
+  unknown(-1),
   possible(0),
   detected(1),
   notDetected(2);
@@ -15,13 +16,16 @@ enum AiStatus {
   const AiStatus(this.code);
 
   static AiStatus fromCode(num? code) {
-    switch (code?.toInt()) {
+    if (code == null) return AiStatus.unknown;
+    switch (code.toInt()) {
+      case 0:
+        return AiStatus.possible;
       case 1:
         return AiStatus.detected;
       case 2:
         return AiStatus.notDetected;
       default:
-        return AiStatus.possible;
+        return AiStatus.unknown;
     }
   }
 }
