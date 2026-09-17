@@ -61,9 +61,11 @@ class NotificationService {
   }) async {
     if (!_initialized || !enabledNotifier.value) return;
 
+    final now = DateTime.now();
+    final time = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
     final body = confidence != null
-        ? '$deviceName — ${confidence.toStringAsFixed(1)}%'
-        : deviceName;
+        ? '$deviceName — ${confidence.toStringAsFixed(1)}%\n$time'
+        : '$deviceName\n$time';
 
     const androidDetails = AndroidNotificationDetails(
       _channelId,
