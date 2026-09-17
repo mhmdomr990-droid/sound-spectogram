@@ -101,30 +101,6 @@ class LoginScreen extends StatelessWidget {
                             : const Text('LOGIN', style: TextStyle(letterSpacing: 3)),
                       )),
                     ),
-                    const SizedBox(height: 10),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 44,
-                      child: Obx(() => OutlinedButton(
-                        onPressed: controller.isLoading.value
-                            ? null
-                            : () async {
-                                await controller.login(
-                                  username: usernameCtrl.text,
-                                  password: passwordCtrl.text,
-                                  serverUrl: serverCtrl.text.trim(),
-                                );
-                                if (controller.isLoggedIn.value) {
-                                  Get.offAllNamed('/dashboard');
-                                }
-                              },
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.orange,
-                          side: const BorderSide(color: Colors.orange),
-                        ),
-                        child: const Text('DEV LOGIN', style: TextStyle(letterSpacing: 2)),
-                      )),
-                    ),
                     const SizedBox(height: 12),
                   ],
                 ),
