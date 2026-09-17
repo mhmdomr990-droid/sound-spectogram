@@ -22,7 +22,6 @@ Future<void> main() async {
 
   await NotificationService.init();
   await AppForegroundService.init();
-  await AppForegroundService.start();
 
   final auth = AuthService();
   await auth.load();

@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
+import '../services/foreground_service.dart';
 
 class AuthController extends GetxController {
   final AuthService _auth;
@@ -75,6 +76,7 @@ class AuthController extends GetxController {
       await _saveCredentials(username.trim(), password);
 
       isLoggedIn.value = true;
+      await AppForegroundService.start();
     } on ApiException catch (e) {
       if (e.statusCode == 403 && e.message.contains('بانتظار الموافقة')) {
         error.value = 'حسابك بانتظار موافقة المسؤول. تواصل مع الإدارة.';
@@ -93,6 +95,7 @@ class AuthController extends GetxController {
   Future<void> logout() async {
     await _auth.logout();
     isLoggedIn.value = false;
+    await AppForegroundService.stop();
   }
 
   String? get token => _auth.token;

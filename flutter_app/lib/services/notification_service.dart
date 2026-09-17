@@ -71,7 +71,7 @@ class NotificationService {
 
     await _plugin.show(
       DateTime.now().millisecondsSinceEpoch.remainder(100000),
-      'هدف مكتشف!',
+      '🔴 هدف مكتشف',
       body,
       details,
     );
