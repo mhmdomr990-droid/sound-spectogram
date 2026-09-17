@@ -87,6 +87,19 @@ class DashboardController extends GetxController {
       _onSocketStatusChanged(s);
     });
     _dataSub = socket.onData.listen((h) {
+      if (h.aiStatus == AiStatus.detected) {
+        final now = DateTime.now();
+        final last = _lastNotifiedAt[h.deviceId];
+        if (last == null || now.difference(last) >= _notificationCooldown) {
+          _lastNotifiedAt[h.deviceId] = now;
+          final deviceName = devices.where((d) => d.id == h.deviceId).map((d) => d.name).firstOrNull;
+          NotificationService.showTargetNotification(
+            deviceName: deviceName ?? 'جهاز ${h.deviceId}',
+            confidence: h.confidence,
+          );
+        }
+      }
+
       if (!followLiveActive.value || selected.value == null) return;
       if (h.deviceId != selected.value!.id) return;
       final key = '${h.deviceId}|${h.startTime}|${h.endTime}';
@@ -102,19 +115,6 @@ class DashboardController extends GetxController {
         return;
       }
       insertPacketLive(h);
-
-      if (h.aiStatus == AiStatus.detected) {
-        final now = DateTime.now();
-        final last = _lastNotifiedAt[h.deviceId];
-        if (last == null || now.difference(last) >= _notificationCooldown) {
-          _lastNotifiedAt[h.deviceId] = now;
-          final deviceName = devices.where((d) => d.id == h.deviceId).map((d) => d.name).firstOrNull;
-          NotificationService.showTargetNotification(
-            deviceName: deviceName ?? 'جهاز ${h.deviceId}',
-            confidence: h.confidence,
-          );
-        }
-      }
     });
     _deviceStatusSub = socket.onDeviceStatus.listen((entries) {
       for (final e in entries) {
