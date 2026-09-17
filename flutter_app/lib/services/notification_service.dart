@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'foreground_service.dart';
+
 class NotificationService {
   static final _plugin = FlutterLocalNotificationsPlugin();
   static bool _initialized = false;
@@ -45,6 +47,12 @@ class NotificationService {
     enabledNotifier.value = !enabledNotifier.value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_prefsKey, enabledNotifier.value);
+
+    if (!enabledNotifier.value) {
+      await AppForegroundService.stop();
+    } else {
+      await AppForegroundService.start();
+    }
   }
 
   static Future<void> showTargetNotification({
