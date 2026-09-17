@@ -11,6 +11,7 @@ import '../models/range_mode.dart';
 import '../screens/fullscreen_spectrogram.dart';
 import '../services/api_client.dart';
 import '../services/socket_service.dart';
+import '../services/notification_service.dart';
 import '../widgets/spectrogram_canvas.dart';
 
 class DashboardScreen extends StatelessWidget {
@@ -35,6 +36,17 @@ class DashboardScreen extends StatelessWidget {
           ],
         ),
         actions: [
+          ValueListenableBuilder<bool>(
+            valueListenable: NotificationService.enabledNotifier,
+            builder: (_, enabled, __) => IconButton(
+              tooltip: enabled ? 'الإشعارات مفعلة' : 'الإشعارات معطّلة',
+              icon: Icon(
+                enabled ? Icons.notifications : Icons.notifications_off,
+                color: enabled ? Colors.white70 : Colors.white30,
+              ),
+              onPressed: () => NotificationService.toggle(),
+            ),
+          ),
           IconButton(
             tooltip: 'تقرير الأهداف',
             icon: const Icon(Icons.assessment, color: Colors.white70),

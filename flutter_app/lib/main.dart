@@ -8,6 +8,8 @@ import 'screens/dashboard_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
+import 'services/foreground_service.dart';
+import 'services/notification_service.dart';
 import 'services/socket_service.dart';
 
 const String kServerBaseUrl = 'http://172.20.20.92:3111';
@@ -17,6 +19,10 @@ Future<void> main() async {
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
   ]);
+
+  await NotificationService.init();
+  await AppForegroundService.init();
+  await AppForegroundService.start();
 
   final auth = AuthService();
   await auth.load();

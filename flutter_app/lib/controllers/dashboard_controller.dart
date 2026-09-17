@@ -11,6 +11,7 @@ import '../models/marker.dart';
 import '../models/range_mode.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
+import '../services/notification_service.dart';
 import '../services/socket_service.dart';
 import '../widgets/spectrogram_canvas.dart';
 
@@ -54,6 +55,8 @@ class DashboardController extends GetxController {
   StreamSubscription<List<DeviceStatusEntry>>? _deviceStatusSub;
   final _pendingLivePackets = <DeviceHistory>[];
   final _historyKeys = <String>{};
+  final _lastNotifiedAt = <int, DateTime>{};
+  static const _notificationCooldown = Duration(seconds: 60);
   Timer? _pollTimer;
   Timer? _telemetryTimer;
 
@@ -99,6 +102,19 @@ class DashboardController extends GetxController {
         return;
       }
       insertPacketLive(h);
+
+      if (h.aiStatus == AiStatus.detected) {
+        final now = DateTime.now();
+        final last = _lastNotifiedAt[h.deviceId];
+        if (last == null || now.difference(last) >= _notificationCooldown) {
+          _lastNotifiedAt[h.deviceId] = now;
+          final deviceName = devices.where((d) => d.id == h.deviceId).map((d) => d.name).firstOrNull;
+          NotificationService.showTargetNotification(
+            deviceName: deviceName ?? 'جهاز ${h.deviceId}',
+            confidence: h.confidence,
+          );
+        }
+      }
     });
     _deviceStatusSub = socket.onDeviceStatus.listen((entries) {
       for (final e in entries) {

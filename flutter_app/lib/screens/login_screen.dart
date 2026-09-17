@@ -74,7 +74,7 @@ class LoginScreen extends StatelessWidget {
                         'Server URL (optional)',
                         Icons.dns,
                       ).copyWith(
-                        hintText: Get.find<ApiClient>().baseUrl,
+                        hintText: 'http://111.01.11.01:1001',
                         hintStyle: const TextStyle(color: Colors.white24),
                       ),
                     ),
@@ -126,11 +126,6 @@ class LoginScreen extends StatelessWidget {
                       )),
                     ),
                     const SizedBox(height: 12),
-                    Text(
-                      Get.find<ApiClient>().baseUrl,
-                      style: const TextStyle(color: Colors.white24, fontSize: 12),
-                      textAlign: TextAlign.center,
-                    ),
                   ],
                 ),
               ),
