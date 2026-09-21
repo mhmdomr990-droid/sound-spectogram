@@ -15,7 +15,7 @@ class LoginScreen extends StatelessWidget {
     final controller = Get.find<AuthController>();
     final usernameCtrl = TextEditingController(text: controller.savedUsername.value);
     final passwordCtrl = TextEditingController(text: controller.savedPassword.value);
-    final serverCtrl = TextEditingController();
+    final serverCtrl = TextEditingController(text: controller.savedServerUrl.value);
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(

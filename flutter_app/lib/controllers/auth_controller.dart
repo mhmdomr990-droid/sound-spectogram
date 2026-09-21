@@ -17,9 +17,11 @@ class AuthController extends GetxController {
 
   static const _savedUsernameKey = 'saved_username';
   static const _savedPasswordKey = 'saved_password';
+  static const _savedServerKey = 'saved_server_url';
 
   final savedUsername = ''.obs;
   final savedPassword = ''.obs;
+  final savedServerUrl = ''.obs;
 
   @override
   void onInit() {
@@ -32,14 +34,20 @@ class AuthController extends GetxController {
     final prefs = await SharedPreferences.getInstance();
     savedUsername.value = prefs.getString(_savedUsernameKey) ?? '';
     savedPassword.value = prefs.getString(_savedPasswordKey) ?? '';
+    savedServerUrl.value = prefs.getString(_savedServerKey) ?? '';
+    if (savedServerUrl.value.isNotEmpty) {
+      _api.baseUrl = savedServerUrl.value;
+    }
   }
 
-  Future<void> _saveCredentials(String username, String password) async {
+  Future<void> _saveCredentials(String username, String password, String serverUrl) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_savedUsernameKey, username);
     await prefs.setString(_savedPasswordKey, password);
+    await prefs.setString(_savedServerKey, serverUrl);
     savedUsername.value = username;
     savedPassword.value = password;
+    savedServerUrl.value = serverUrl;
   }
 
   Future<void> login({
@@ -73,7 +81,7 @@ class AuthController extends GetxController {
       final token = json['token'] as String;
       final user = AuthUser.fromJson(json['user'] as Map<String, dynamic>);
       await _auth.save(token: token, user: user);
-      await _saveCredentials(username.trim(), password);
+      await _saveCredentials(username.trim(), password, serverUrl ?? '');
 
       isLoggedIn.value = true;
       await AppForegroundService.start();
@@ -96,6 +104,14 @@ class AuthController extends GetxController {
     await _auth.logout();
     isLoggedIn.value = false;
     await AppForegroundService.stop();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_savedUsernameKey);
+    await prefs.remove(_savedPasswordKey);
+    await prefs.remove(_savedServerKey);
+    savedUsername.value = '';
+    savedPassword.value = '';
+    savedServerUrl.value = '';
+    _api.baseUrl = '';
   }
 
   String? get token => _auth.token;

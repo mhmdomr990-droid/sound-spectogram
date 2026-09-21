@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'controllers/auth_controller.dart';
 import 'controllers/dashboard_controller.dart';
@@ -12,8 +13,6 @@ import 'services/foreground_service.dart';
 import 'services/notification_service.dart';
 import 'services/socket_service.dart';
 
-const String kServerBaseUrl = 'http://172.20.20.92:3111';
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([
@@ -23,9 +22,12 @@ Future<void> main() async {
   await NotificationService.init();
   await AppForegroundService.init();
 
+  final prefs = await SharedPreferences.getInstance();
+  final savedServer = prefs.getString('saved_server_url') ?? '';
+
   final auth = AuthService();
   await auth.load();
-  final api = ApiClient(kServerBaseUrl, auth);
+  final api = ApiClient(savedServer, auth);
   final socket = SocketService();
 
   Get.put<AuthService>(auth);
