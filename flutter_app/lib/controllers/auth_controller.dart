@@ -84,6 +84,7 @@ class AuthController extends GetxController {
       await _saveCredentials(username.trim(), password, serverUrl ?? '');
 
       isLoggedIn.value = true;
+      print('[AUTH] login SUCCESS | api.baseUrl="${_api.baseUrl}" | token=${_auth.token != null ? "YES" : "NULL"}');
       await AppForegroundService.start();
     } on ApiException catch (e) {
       if (e.statusCode == 403 && e.message.contains('بانتظار الموافقة')) {
