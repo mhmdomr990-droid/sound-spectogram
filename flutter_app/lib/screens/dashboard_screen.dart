@@ -524,7 +524,6 @@ class _AIReportDialogState extends State<_AIReportDialog> {
   }
 
   Future<void> _fetch() async {
-    print('[REPORT] _fetch() started | device=${_device?.name}(${_device?.id}) | from=${_iso(_from)} to=${_iso(_to)}');
     setState(() {
       _loading = true;
       _error = null;
@@ -537,11 +536,6 @@ class _AIReportDialogState extends State<_AIReportDialog> {
       startTime: _iso(_from),
       endTime: _iso(_to),
     );
-
-    print('[REPORT] response is null: ${response == null}');
-    if (response != null) {
-      print('[REPORT] response ok: ${response['ok']}');
-    }
 
     if (!mounted) return;
 

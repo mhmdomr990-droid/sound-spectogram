@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/foreground_service.dart';
+import '../services/socket_service.dart';
 
 class AuthController extends GetxController {
   final AuthService _auth;
@@ -84,7 +85,6 @@ class AuthController extends GetxController {
       await _saveCredentials(username.trim(), password, serverUrl ?? '');
 
       isLoggedIn.value = true;
-      print('[AUTH] login SUCCESS | api.baseUrl="${_api.baseUrl}" | token=${_auth.token != null ? "YES" : "NULL"}');
       await AppForegroundService.start();
     } on ApiException catch (e) {
       if (e.statusCode == 403 && e.message.contains('بانتظار الموافقة')) {
@@ -105,6 +105,7 @@ class AuthController extends GetxController {
     await _auth.logout();
     isLoggedIn.value = false;
     await AppForegroundService.stop();
+    Get.find<SocketService>().disconnect();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_savedUsernameKey);
     await prefs.remove(_savedPasswordKey);

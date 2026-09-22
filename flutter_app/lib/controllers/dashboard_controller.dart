@@ -82,7 +82,6 @@ class DashboardController extends GetxController {
   }
 
   void _bindSocket() {
-    print('[DASHBOARD] _bindSocket | api.baseUrl="${api.baseUrl}" | token=${auth.token != null ? "YES" : "NULL"}');
     _statusSub = socket.onStatus.listen((s) {
       socketStatus.value = s;
       _onSocketStatusChanged(s);
@@ -134,7 +133,6 @@ class DashboardController extends GetxController {
       _saveDeviceStatus();
     });
     socket.connect(_hostFromApi(), token: auth.token);
-    print('[DASHBOARD] socket.connect called with url="${_hostFromApi()}"');
   }
 
   void _onSocketStatusChanged(SocketStatus s) {

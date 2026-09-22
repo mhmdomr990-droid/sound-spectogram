@@ -45,26 +45,17 @@ class SocketService {
 
   void connect(String serverUrl, {String? token}) {
     final base = serverUrl.replaceFirst(RegExp(r'^wss?://'), '').replaceFirst(RegExp(r'^https?://'), '').replaceAll(RegExp(r'/$'), '');
-    print('[SOCKET] connect() called | started=$_started | url="$serverUrl" | base="$base" | currentBase="$_currentBase" | token=${token != null ? "YES" : "NULL"}');
 
-    if (base.isEmpty) {
-      print('[SOCKET] connect() SKIPPED - empty URL');
-      return;
-    }
+    if (base.isEmpty) return;
 
-    if (_started && _currentBase == base && _socket?.connected == true) {
-      print('[SOCKET] connect() SKIPPED - already connected to same URL');
-      return;
-    }
+    if (_started && _currentBase == base && _socket?.connected == true) return;
 
     if (_started && _currentBase != base) {
-      print('[SOCKET] connect() URL CHANGED from "$_currentBase" to "$base" - reconnecting');
       _socket?.dispose();
     }
 
     _started = true;
     _currentBase = base;
-    print('[SOCKET] base after strip: "$base" | final url: "ws://$base"');
 
     final opts = io.OptionBuilder()
         .setTransports(['websocket'])
@@ -74,24 +65,13 @@ class SocketService {
     _socket = io.io('ws://$base', opts);
 
     _socket!.onConnect((_) {
-      print('[SOCKET] ✓ onConnect | connected=${_socket?.connected}');
       _onStatus.add(SocketStatus.connected);
       _socket!.emit('mobile:subscribe', {});
-      print('[SOCKET] → mobile:subscribe emitted');
     });
 
-    _socket!.onDisconnect((_) {
-      print('[SOCKET] ✗ onDisconnect');
-      _onStatus.add(SocketStatus.disconnected);
-    });
-    _socket!.onConnectError((e) {
-      print('[SOCKET] ✗ onConnectError: $e');
-      _onStatus.add(SocketStatus.disconnected);
-    });
-    _socket!.onError((e) {
-      print('[SOCKET] ✗ onError: $e');
-      _onStatus.add(SocketStatus.disconnected);
-    });
+    _socket!.onDisconnect((_) => _onStatus.add(SocketStatus.disconnected));
+    _socket!.onConnectError((_) => _onStatus.add(SocketStatus.disconnected));
+    _socket!.onError((_) => _onStatus.add(SocketStatus.disconnected));
 
     _socket!.on('device:data', (payload) {
       final history = _payloadToHistory(payload);
@@ -220,11 +200,7 @@ class SocketService {
     required String startTime,
     required String endTime,
   }) async {
-    print('[SOCKET] emitCheckAiStatus called | socket=${_socket != null ? "present" : "NULL"} | connected=${_socket?.connected}');
-    if (_socket == null || _socket?.connected != true) {
-      print('[SOCKET] emitCheckAiStatus ABORTED - socket not ready');
-      return null;
-    }
+    if (_socket == null || _socket?.connected != true) return null;
 
     final completer = Completer<Map<String, dynamic>?>();
 
@@ -233,7 +209,6 @@ class SocketService {
       'startTime': startTime,
       'endTime': endTime,
     }, ack: (dynamic response) {
-      print('[SOCKET] check_ai_status ACK received | type=${response.runtimeType} | isNull=${response == null}');
       if (!completer.isCompleted) {
         if (response is Map) {
           completer.complete(Map<String, dynamic>.from(response.cast()));
@@ -243,15 +218,10 @@ class SocketService {
       }
     });
 
-    final result = await completer.future.timeout(
+    return completer.future.timeout(
       const Duration(seconds: 10),
-      onTimeout: () {
-        print('[SOCKET] emitCheckAiStatus TIMEOUT after 10s');
-        return null;
-      },
+      onTimeout: () => null,
     );
-    print('[SOCKET] emitCheckAiStatus result: ${result != null ? "SUCCESS" : "NULL"}');
-    return result;
   }
 
   void disconnect() {
