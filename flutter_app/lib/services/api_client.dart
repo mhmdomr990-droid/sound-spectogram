@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
@@ -70,17 +72,38 @@ class ApiClient {
   }
 
   Future<dynamic> get(String path, {Map<String, String>? query, bool authRequired = true}) async {
-    final response = await _http.get(_uri(path, query: query), headers: _headers(authRequired: authRequired));
-    return _decodeResponse(response);
+    try {
+      final response = await _http.get(_uri(path, query: query), headers: _headers(authRequired: authRequired))
+          .timeout(const Duration(seconds: 10));
+      return _decodeResponse(response);
+    } on TimeoutException {
+      throw ApiException(0, 'تعذر الاتصال بالسيرفر — تحقق من عنوان URL');
+    } on http.ClientException {
+      throw ApiException(0, 'عنوان URL غير صالح');
+    } on FormatException {
+      throw ApiException(0, 'عنوان URL غير صالح');
+    } on SocketException {
+      throw ApiException(0, 'تعذر الاتصال بالسيرفر — تحقق من الشبكة');
+    }
   }
 
   Future<dynamic> post(String path, {Map<String, dynamic>? body, bool authRequired = true}) async {
-    final response = await _http.post(
-      _uri(path),
-      headers: _headers(authRequired: authRequired),
-      body: body == null ? null : jsonEncode(body),
-    );
-    return _decodeResponse(response);
+    try {
+      final response = await _http.post(
+        _uri(path),
+        headers: _headers(authRequired: authRequired),
+        body: body == null ? null : jsonEncode(body),
+      ).timeout(const Duration(seconds: 10));
+      return _decodeResponse(response);
+    } on TimeoutException {
+      throw ApiException(0, 'تعذر الاتصال بالسيرفر — تحقق من عنوان URL');
+    } on http.ClientException {
+      throw ApiException(0, 'عنوان URL غير صالح');
+    } on FormatException {
+      throw ApiException(0, 'عنوان URL غير صالح');
+    } on SocketException {
+      throw ApiException(0, 'تعذر الاتصال بالسيرفر — تحقق من الشبكة');
+    }
   }
 
   Future<List<Device>> fetchDevices() async {

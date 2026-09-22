@@ -95,7 +95,7 @@ class AuthController extends GetxController {
         error.value = e.message;
       }
     } catch (e) {
-      error.value = (e as Exception?)?.toString() ?? 'Login failed';
+      error.value = e.toString().isNotEmpty ? e.toString() : 'Login failed';
     } finally {
       isLoading.value = false;
     }
