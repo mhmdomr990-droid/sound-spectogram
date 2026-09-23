@@ -71,10 +71,21 @@ class ApiClient {
     }
   }
 
+  Future<dynamic> _requestWithRetry(Future<http.Response> Function() fn) async {
+    try {
+      return await fn().timeout(const Duration(seconds: 10));
+    } on TimeoutException {
+      _client?.close();
+      _client = null;
+      return await fn().timeout(const Duration(seconds: 10));
+    }
+  }
+
   Future<dynamic> get(String path, {Map<String, String>? query, bool authRequired = true}) async {
     try {
-      final response = await _http.get(_uri(path, query: query), headers: _headers(authRequired: authRequired))
-          .timeout(const Duration(seconds: 10));
+      final response = await _requestWithRetry(
+        () => _http.get(_uri(path, query: query), headers: _headers(authRequired: authRequired)),
+      );
       return _decodeResponse(response);
     } on TimeoutException {
       throw ApiException(0, 'تعذر الاتصال بالسيرفر — تحقق من عنوان URL');
@@ -89,11 +100,13 @@ class ApiClient {
 
   Future<dynamic> post(String path, {Map<String, dynamic>? body, bool authRequired = true}) async {
     try {
-      final response = await _http.post(
-        _uri(path),
-        headers: _headers(authRequired: authRequired),
-        body: body == null ? null : jsonEncode(body),
-      ).timeout(const Duration(seconds: 10));
+      final response = await _requestWithRetry(
+        () => _http.post(
+          _uri(path),
+          headers: _headers(authRequired: authRequired),
+          body: body == null ? null : jsonEncode(body),
+        ),
+      );
       return _decodeResponse(response);
     } on TimeoutException {
       throw ApiException(0, 'تعذر الاتصال بالسيرفر — تحقق من عنوان URL');

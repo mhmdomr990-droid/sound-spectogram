@@ -30,6 +30,10 @@ Future<void> main() async {
   final api = ApiClient(savedServer, auth);
   final socket = SocketService();
 
+  if (auth.isLoggedIn && NotificationService.enabled) {
+    await AppForegroundService.start();
+  }
+
   Get.put<AuthService>(auth);
   Get.put<ApiClient>(api);
   Get.put<SocketService>(socket);

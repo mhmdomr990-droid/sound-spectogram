@@ -14,6 +14,7 @@ import '../services/auth_service.dart';
 import '../services/notification_service.dart';
 import '../services/socket_service.dart';
 import '../widgets/spectrogram_canvas.dart';
+import 'auth_controller.dart';
 
 class DeviceStatusInfo {
   String? internet;
@@ -59,6 +60,10 @@ class DashboardController extends GetxController {
   static const _notificationCooldown = Duration(seconds: 60);
   Timer? _pollTimer;
   Timer? _telemetryTimer;
+  Timer? _healthTimer;
+  Timer? _disconnectRetry;
+  bool _recoveringSocket = false;
+  DateTime? _lastSocketRecovery;
 
   @override
   void onInit() {
@@ -67,6 +72,7 @@ class DashboardController extends GetxController {
     _bindSocket();
     _loadDevices();
     _telemetryTimer = Timer.periodic(const Duration(seconds: 60), (_) => _fetchLatestTelemetry());
+    _healthTimer = Timer.periodic(const Duration(seconds: 30), (_) => _healthCheck());
   }
 
   @override
@@ -75,6 +81,8 @@ class DashboardController extends GetxController {
     liveDataNotifier.dispose();
     _pollTimer?.cancel();
     _telemetryTimer?.cancel();
+    _healthTimer?.cancel();
+    _disconnectRetry?.cancel();
     _dataSub?.cancel();
     _statusSub?.cancel();
     _deviceStatusSub?.cancel();
@@ -137,8 +145,58 @@ class DashboardController extends GetxController {
 
   void _onSocketStatusChanged(SocketStatus s) {
     if (s == SocketStatus.connected) {
+      _disconnectRetry?.cancel();
       _fetchLatestTelemetry();
+    } else if (s == SocketStatus.disconnected) {
+      _disconnectRetry?.cancel();
+      _disconnectRetry = Timer(const Duration(seconds: 5), () {
+        if (socket.status != SocketStatus.connected) {
+          _attemptSocketRecovery();
+        }
+      });
     }
+  }
+
+  /// Periodic health check: refresh token if expiring, reconnect if socket down.
+  Future<void> _healthCheck() async {
+    if (!auth.isLoggedIn) return;
+    if (auth.isTokenExpiringSoon()) {
+      final refreshed = await _refreshTokenSafely();
+      if (refreshed != null && socket.status != SocketStatus.connected) {
+        socket.reconnect(token: refreshed);
+        return;
+      }
+      if (refreshed != null) return;
+    }
+    if (socket.status != SocketStatus.connected) {
+      await _attemptSocketRecovery();
+    }
+  }
+
+  Future<void> _attemptSocketRecovery() async {
+    if (_recoveringSocket) return;
+    if (socket.status == SocketStatus.connected) return;
+    final now = DateTime.now();
+    if (_lastSocketRecovery != null && now.difference(_lastSocketRecovery!) < const Duration(seconds: 15)) {
+      return;
+    }
+    _recoveringSocket = true;
+    _lastSocketRecovery = now;
+    try {
+      var token = auth.token;
+      if (token == null || auth.isTokenExpiringSoon()) {
+        final refreshed = await _refreshTokenSafely();
+        if (refreshed != null) token = refreshed;
+      }
+      socket.reconnect(token: token);
+    } finally {
+      _recoveringSocket = false;
+    }
+  }
+
+  Future<String?> _refreshTokenSafely() {
+    if (!Get.isRegistered<AuthController>()) return Future.value(null);
+    return Get.find<AuthController>().tryRefreshToken();
   }
 
   void _fetchLatestTelemetry() async {

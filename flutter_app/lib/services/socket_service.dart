@@ -50,8 +50,9 @@ class SocketService {
 
     if (_started && _currentBase == base && _socket?.connected == true) return;
 
-    if (_started && _currentBase != base) {
+    if (_started) {
       _socket?.dispose();
+      _socket = null;
     }
 
     _started = true;
@@ -60,6 +61,9 @@ class SocketService {
     final opts = io.OptionBuilder()
         .setTransports(['websocket'])
         .setAuth({'token': token})
+        .setReconnectionAttempts(999999)
+        .setReconnectionDelay(1000)
+        .setReconnectionDelayMax(10000)
         .build();
 
     _socket = io.io('ws://$base', opts);
@@ -229,6 +233,17 @@ class SocketService {
     _socket = null;
     _started = false;
     _currentBase = '';
+  }
+
+  /// Dispose the current socket and open a fresh one with [token].
+  /// Used when the JWT expired and a new one was obtained.
+  void reconnect({String? token}) {
+    final base = _currentBase;
+    if (base.isEmpty) return;
+    _socket?.dispose();
+    _socket = null;
+    _started = false;
+    connect('ws://$base', token: token);
   }
 
   void dispose() {

@@ -116,6 +116,28 @@ class AuthController extends GetxController {
     _api.baseUrl = '';
   }
 
+  /// Silent re-login using saved credentials. Returns new token or null.
+  /// Does not touch UI state (isLoading/error) or navigate.
+  Future<String?> tryRefreshToken() async {
+    if (!_auth.isLoggedIn) return null;
+    final username = savedUsername.value;
+    final password = savedPassword.value;
+    if (username.isEmpty || password.isEmpty) return null;
+    try {
+      final json = await _api.post(
+        '/api/auth/login',
+        body: {'username': username.trim(), 'password': password},
+        authRequired: false,
+      ) as Map<String, dynamic>;
+      final token = json['token'] as String;
+      final user = AuthUser.fromJson(json['user'] as Map<String, dynamic>);
+      await _auth.save(token: token, user: user);
+      return token;
+    } catch (_) {
+      return null;
+    }
+  }
+
   String? get token => _auth.token;
   AuthUser? get user => _auth.user;
 }
