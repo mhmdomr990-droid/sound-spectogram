@@ -292,11 +292,7 @@ class DashboardController extends GetxController {
     canvasKey.currentState?.forceRender();
   }
 
-  String _apiHost() => api.baseUrl.replaceFirst(RegExp(r'^https?://'), '');
-  String _hostFromApi() {
-    final base = _apiHost().replaceAll(RegExp(r'/$'), '');
-    return 'ws://$base';
-  }
+  String _hostFromApi() => api.baseUrl.replaceAll(RegExp(r'/$'), '');
 
   Future<void> _loadDevices() async {
     loadingDevices.value = true;

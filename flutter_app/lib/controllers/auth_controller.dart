@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -12,13 +14,14 @@ class AuthController extends GetxController {
 
   AuthController(this._auth, this._api);
 
-  final isLoggedIn = false.obs;
-  final isLoading = false.obs;
-  final error = ''.obs;
-
   static const _savedUsernameKey = 'saved_username';
   static const _savedPasswordKey = 'saved_password';
   static const _savedServerKey = 'saved_server_url';
+  static const FlutterSecureStorage _secure = FlutterSecureStorage();
+
+  final isLoggedIn = false.obs;
+  final isLoading = false.obs;
+  final error = ''.obs;
 
   final savedUsername = ''.obs;
   final savedPassword = ''.obs;
@@ -34,8 +37,16 @@ class AuthController extends GetxController {
   Future<void> _loadSavedCredentials() async {
     final prefs = await SharedPreferences.getInstance();
     savedUsername.value = prefs.getString(_savedUsernameKey) ?? '';
-    savedPassword.value = prefs.getString(_savedPasswordKey) ?? '';
     savedServerUrl.value = prefs.getString(_savedServerKey) ?? '';
+
+    // Migrate legacy plaintext password from SharedPreferences → secure storage.
+    final legacyPassword = prefs.getString(_savedPasswordKey);
+    if (legacyPassword != null && legacyPassword.isNotEmpty) {
+      await _secure.write(key: _savedPasswordKey, value: legacyPassword);
+      await prefs.remove(_savedPasswordKey);
+    }
+    savedPassword.value = await _secure.read(key: _savedPasswordKey) ?? '';
+
     if (savedServerUrl.value.isNotEmpty) {
       _api.baseUrl = savedServerUrl.value;
     }
@@ -44,11 +55,26 @@ class AuthController extends GetxController {
   Future<void> _saveCredentials(String username, String password, String serverUrl) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_savedUsernameKey, username);
-    await prefs.setString(_savedPasswordKey, password);
     await prefs.setString(_savedServerKey, serverUrl);
+    await _secure.write(key: _savedPasswordKey, value: password);
     savedUsername.value = username;
     savedPassword.value = password;
     savedServerUrl.value = serverUrl;
+  }
+
+  static String? _validateServerUrl(String serverUrl) {
+    final trimmed = serverUrl.trim();
+    if (trimmed.isEmpty) return null;
+    if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+      return 'عنوان السيرفر يجب أن يبدأ بـ http:// أو https://';
+    }
+    try {
+      final uri = Uri.parse(trimmed);
+      if (uri.host.isEmpty) return 'عنوان السيرفر غير صالح';
+    } catch (_) {
+      return 'عنوان السيرفر غير صالح';
+    }
+    return null;
   }
 
   Future<void> login({
@@ -57,12 +83,18 @@ class AuthController extends GetxController {
     String? serverUrl,
     String? deviceId,
   }) async {
-    if (serverUrl != null && serverUrl.isNotEmpty) {
-      _api.baseUrl = serverUrl;
-    }
-
     isLoading.value = true;
     error.value = '';
+
+    if (serverUrl != null && serverUrl.isNotEmpty) {
+      final urlError = _validateServerUrl(serverUrl);
+      if (urlError != null) {
+        error.value = urlError;
+        isLoading.value = false;
+        return;
+      }
+      _api.baseUrl = serverUrl.trim();
+    }
 
     try {
       final body = <String, dynamic>{
@@ -95,6 +127,7 @@ class AuthController extends GetxController {
         error.value = e.message;
       }
     } catch (e) {
+      if (kDebugMode) debugPrint('[AUTH] login failed: $e');
       error.value = e.toString().isNotEmpty ? e.toString() : 'Login failed';
     } finally {
       isLoading.value = false;
@@ -110,6 +143,7 @@ class AuthController extends GetxController {
     await prefs.remove(_savedUsernameKey);
     await prefs.remove(_savedPasswordKey);
     await prefs.remove(_savedServerKey);
+    await _secure.delete(key: _savedPasswordKey);
     savedUsername.value = '';
     savedPassword.value = '';
     savedServerUrl.value = '';
@@ -121,7 +155,10 @@ class AuthController extends GetxController {
   Future<String?> tryRefreshToken() async {
     if (!_auth.isLoggedIn) return null;
     final username = savedUsername.value;
-    final password = savedPassword.value;
+    var password = savedPassword.value;
+    if (password.isEmpty) {
+      password = await _secure.read(key: _savedPasswordKey) ?? '';
+    }
     if (username.isEmpty || password.isEmpty) return null;
     try {
       final json = await _api.post(

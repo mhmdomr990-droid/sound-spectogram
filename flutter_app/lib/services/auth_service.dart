@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthUser {
@@ -28,6 +29,7 @@ class AuthUser {
 class AuthService {
   static const _tokenKey = 'auth_token';
   static const _userKey = 'auth_user';
+  static const FlutterSecureStorage _secure = FlutterSecureStorage();
 
   String? _token;
   AuthUser? _user;
@@ -59,9 +61,26 @@ class AuthService {
   }
 
   Future<void> load() async {
+    _token = await _secure.read(key: _tokenKey);
+    var userJson = await _secure.read(key: _userKey);
+
     final prefs = await SharedPreferences.getInstance();
-    _token = prefs.getString(_tokenKey);
-    final userJson = prefs.getString(_userKey);
+    // Migrate legacy plaintext values from SharedPreferences → secure storage.
+    final legacyToken = prefs.getString(_tokenKey);
+    if (_token == null && legacyToken != null && legacyToken.isNotEmpty) {
+      _token = legacyToken;
+      await _secure.write(key: _tokenKey, value: legacyToken);
+    }
+    final legacyUser = prefs.getString(_userKey);
+    if (userJson == null && legacyUser != null && legacyUser.isNotEmpty) {
+      userJson = legacyUser;
+      await _secure.write(key: _userKey, value: legacyUser);
+    }
+    if (legacyToken != null || legacyUser != null) {
+      await prefs.remove(_tokenKey);
+      await prefs.remove(_userKey);
+    }
+
     if (userJson != null) {
       try {
         _user = AuthUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
@@ -74,9 +93,8 @@ class AuthService {
   Future<void> save({required String token, required AuthUser user}) async {
     _token = token;
     _user = user;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_tokenKey, token);
-    await prefs.setString(_userKey, jsonEncode({
+    await _secure.write(key: _tokenKey, value: token);
+    await _secure.write(key: _userKey, value: jsonEncode({
       'id': user.id,
       'name': user.name,
       'username': user.username,
@@ -87,6 +105,8 @@ class AuthService {
   Future<void> logout() async {
     _token = null;
     _user = null;
+    await _secure.delete(key: _tokenKey);
+    await _secure.delete(key: _userKey);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_tokenKey);
     await prefs.remove(_userKey);

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import '../models/device_history.dart';
@@ -36,6 +37,7 @@ class SocketService {
 
   bool _started = false;
   String _currentBase = '';
+  bool _secureConnection = false;
 
   SocketStatus get status => _socket?.connected == true ? SocketStatus.connected : SocketStatus.disconnected;
 
@@ -44,11 +46,12 @@ class SocketService {
   Stream<List<DeviceStatusEntry>> get onDeviceStatus => _onDeviceStatus.stream;
 
   void connect(String serverUrl, {String? token}) {
+    final secure = serverUrl.startsWith('https') || serverUrl.startsWith('wss');
     final base = serverUrl.replaceFirst(RegExp(r'^wss?://'), '').replaceFirst(RegExp(r'^https?://'), '').replaceAll(RegExp(r'/$'), '');
 
     if (base.isEmpty) return;
 
-    if (_started && _currentBase == base && _socket?.connected == true) return;
+    if (_started && _currentBase == base && _secureConnection == secure && _socket?.connected == true) return;
 
     if (_started) {
       _socket?.dispose();
@@ -57,6 +60,7 @@ class SocketService {
 
     _started = true;
     _currentBase = base;
+    _secureConnection = secure;
 
     final opts = io.OptionBuilder()
         .setTransports(['websocket'])
@@ -66,7 +70,8 @@ class SocketService {
         .setReconnectionDelayMax(10000)
         .build();
 
-    _socket = io.io('ws://$base', opts);
+    final scheme = secure ? 'wss' : 'ws';
+    _socket = io.io('$scheme://$base', opts);
 
     _socket!.onConnect((_) {
       _onStatus.add(SocketStatus.connected);
@@ -85,7 +90,7 @@ class SocketService {
     });
 
     _socket!.on('devices_status', (payload) {
-      print('[Socket] devices_status RAW: $payload');
+      if (kDebugMode) print('[Socket] devices_status RAW: $payload');
       try {
         final entries = <DeviceStatusEntry>[];
         if (payload is Map && payload['entries'] is List) {
@@ -103,14 +108,14 @@ class SocketService {
           }
         }
         if (entries.isNotEmpty) {
-          print('[Socket] devices_status parsed: ${entries.map((e) => '${e.deviceId}=${e.internet}').toList()}');
+          if (kDebugMode) print('[Socket] devices_status parsed: ${entries.map((e) => '${e.deviceId}=${e.internet}').toList()}');
           _onDeviceStatus.add(entries);
         }
       } catch (_) {}
     });
 
     _socket!.on('device_telemetry_update', (payload) {
-      print('[Socket] device_telemetry_update RAW type=${payload.runtimeType}: $payload');
+      if (kDebugMode) print('[Socket] device_telemetry_update RAW type=${payload.runtimeType}: $payload');
       try {
         if (payload is Map) {
           final rawId = payload['device_id'] ?? payload['deviceId'] ?? payload['id'] ?? '';
@@ -125,15 +130,15 @@ class SocketService {
             source: DeviceStatusSource.telemetry,
           );
           _onDeviceStatus.add([info]);
-          print('[Socket] device_telemetry_update parsed: id=$deviceId name=$name internet=${info.internet}');
+          if (kDebugMode) print('[Socket] device_telemetry_update parsed: id=$deviceId name=$name internet=${info.internet}');
         }
       } catch (e) {
-        print('[Socket] device_telemetry_update ERROR: $e');
+        if (kDebugMode) print('[Socket] device_telemetry_update ERROR: $e');
       }
     });
 
     _socket!.on('device_ping_update', (payload) {
-      print('[Socket] device_ping_update RAW type=${payload.runtimeType}: $payload');
+      if (kDebugMode) print('[Socket] device_ping_update RAW type=${payload.runtimeType}: $payload');
       try {
         if (payload is Map) {
           final rawId = payload['device_id'] ?? payload['deviceId'] ?? payload['id'] ?? '';
@@ -141,7 +146,7 @@ class SocketService {
           final status = (payload['status'] ?? '').toString().toLowerCase();
           final ping = (payload['ping'] as num?)?.toDouble();
           final isOnline = status == 'on' || status == 'up' || status == 'online';
-          print('[Socket] device_ping_update parsed: id=$deviceId status=$status ping=$ping');
+          if (kDebugMode) print('[Socket] device_ping_update parsed: id=$deviceId status=$status ping=$ping');
           _onDeviceStatus.add([DeviceStatusEntry(
             deviceId: deviceId,
             internet: isOnline ? 'UP' : 'DOWN',
@@ -165,11 +170,11 @@ class SocketService {
               ));
             }
           }
-          print('[Socket] device_ping_update parsed list: ${entries.length} entries');
+          if (kDebugMode) print('[Socket] device_ping_update parsed list: ${entries.length} entries');
           if (entries.isNotEmpty) _onDeviceStatus.add(entries);
         }
       } catch (e) {
-        print('[Socket] device_ping_update ERROR: $e');
+        if (kDebugMode) print('[Socket] device_ping_update ERROR: $e');
       }
     });
 
@@ -178,7 +183,7 @@ class SocketService {
 
   DeviceHistory? _payloadToHistory(dynamic payload) {
     if (payload is! Map && payload is! List) {
-      print('[Socket] payload ignored: unexpected type ${payload.runtimeType}');
+      if (kDebugMode) print('[Socket] payload ignored: unexpected type ${payload.runtimeType}');
       return null;
     }
     Map<String, dynamic> map;
@@ -189,12 +194,12 @@ class SocketService {
     }
     try {
       final history = DeviceHistory.fromJson(map);
-      if (history.data.isEmpty) {
+      if (history.data.isEmpty && kDebugMode) {
         print('[Socket] packet ${history.startTime}-${history.endTime} has EMPTY data matrix');
       }
       return history;
     } catch (e) {
-      print('[Socket] payload parse FAILED: $e | keys: ${map.keys.toList()}');
+      if (kDebugMode) print('[Socket] payload parse FAILED: $e | keys: ${map.keys.toList()}');
       return null;
     }
   }
@@ -233,6 +238,7 @@ class SocketService {
     _socket = null;
     _started = false;
     _currentBase = '';
+    _secureConnection = false;
   }
 
   /// Dispose the current socket and open a fresh one with [token].
@@ -240,10 +246,11 @@ class SocketService {
   void reconnect({String? token}) {
     final base = _currentBase;
     if (base.isEmpty) return;
+    final scheme = _secureConnection ? 'wss' : 'ws';
     _socket?.dispose();
     _socket = null;
     _started = false;
-    connect('ws://$base', token: token);
+    connect('$scheme://$base', token: token);
   }
 
   void dispose() {

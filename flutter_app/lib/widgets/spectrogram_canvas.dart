@@ -1209,7 +1209,7 @@ class _SpectroPainter extends CustomPainter {
       )..layout();
       final boxW = guideTp.width + 12;
       final boxH = guideTp.height + 6;
-      final boxX = (pLeft + plotW - boxW - 4).clamp(pLeft, pLeft + plotW - boxW);
+      final boxX = (pLeft + 4).clamp(pLeft, pLeft + plotW - boxW);
       final boxY = (guideY - boxH - 4).clamp(pTop, pTop + plotH - boxH);
       canvas.drawRect(
         Rect.fromLTWH(boxX, boxY, boxW, boxH),
