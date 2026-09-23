@@ -178,6 +178,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _draggingMarkerIndex = -1;
   double _markerDragStartX = 0;
 
+  // Long-press frequency guide line (null = hidden)
+  double? _freqGuideY;
+
   // Prevent onTapDown from removing a marker that was just added by onDoubleTapDown.
   int _lastMarkerAddedAt = 0;
 
@@ -843,6 +846,18 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
               onScaleEnd: (details) {
                 _draggingMarkerIndex = -1;
               },
+              onLongPressStart: (details) {
+                _freqGuideY = details.localPosition.dy;
+                setState(() {});
+              },
+              onLongPressMoveUpdate: (details) {
+                _freqGuideY = details.localPosition.dy;
+                setState(() {});
+              },
+              onLongPressEnd: (details) {
+                _freqGuideY = null;
+                setState(() {});
+              },
               child: RepaintBoundary(
                 child: CustomPaint(
                   size: Size(constraints.maxWidth, constraints.maxHeight),
@@ -863,6 +878,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                     compactStatusBar: widget.compactStatusBar,
                     markers: List<MarkerData>.from(widget.markers),
                     maxFrequency: _effectiveMaxFreq(),
+                    freqGuideY: _freqGuideY,
                   ),
                 ),
               ),
@@ -904,6 +920,7 @@ class _SpectroPainter extends CustomPainter {
   final bool compactStatusBar;
   final List<MarkerData> markers;
   final double maxFrequency;
+  final double? freqGuideY;
 
   _SpectroPainter(this.image,
       {this.background = const Color(0xFF111026),
@@ -920,7 +937,8 @@ class _SpectroPainter extends CustomPainter {
       this.showStatusBar = true,
       this.compactStatusBar = false,
       this.markers = const [],
-      this.maxFrequency = 250.0});
+      this.maxFrequency = 250.0,
+      this.freqGuideY});
 
   static const double _leftInset = 40;
   static const double _rightInset = 6;
@@ -1161,6 +1179,52 @@ class _SpectroPainter extends CustomPainter {
       fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
     }
 
+    // 6b) Long-press frequency guide (dashed horizontal line + Hz label).
+    final guideY = freqGuideY;
+    if (guideY != null && guideY >= pTop && guideY <= pTop + plotH) {
+      final hz = maxFrequency * (1.0 - (guideY - pTop) / plotH);
+      final guidePaint = Paint()
+        ..color = const Color(0xFF00E676)
+        ..strokeWidth = 1.2;
+      const dash = 6.0;
+      const gap = 4.0;
+      var x = pLeft;
+      while (x < pLeft + plotW) {
+        final x2 = min(x + dash, pLeft + plotW);
+        canvas.drawLine(Offset(x, guideY), Offset(x2, guideY), guidePaint);
+        x = x2 + gap;
+      }
+      final hzLabel = hz >= 100 ? '${hz.round()} Hz' : '${hz.toStringAsFixed(1)} Hz';
+      final guideTp = TextPainter(
+        text: TextSpan(
+          text: hzLabel,
+          style: const TextStyle(
+            color: Color(0xFF00E676),
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            fontFamily: 'monospace',
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final boxW = guideTp.width + 12;
+      final boxH = guideTp.height + 6;
+      final boxX = (pLeft + plotW - boxW - 4).clamp(pLeft, pLeft + plotW - boxW);
+      final boxY = (guideY - boxH - 4).clamp(pTop, pTop + plotH - boxH);
+      canvas.drawRect(
+        Rect.fromLTWH(boxX, boxY, boxW, boxH),
+        Paint()..color = const Color(0xDC0A0E14),
+      );
+      canvas.drawRect(
+        Rect.fromLTWH(boxX, boxY, boxW, boxH),
+        Paint()
+          ..color = const Color(0xFF00E676)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
+      );
+      guideTp.paint(canvas, Offset(boxX + 6, boxY + 3));
+    }
+
     // 7) Axis titles.
     canvas.save();
     canvas.translate(10, pTop + plotH / 2);
@@ -1282,6 +1346,7 @@ class _SpectroPainter extends CustomPainter {
         oldDelegate.compactStatusBar != compactStatusBar ||
         !identical(oldDelegate.coverageIntervals, coverageIntervals) ||
         !identical(oldDelegate.histories, histories) ||
-        !listEquals(oldDelegate.markers, markers);
+        !listEquals(oldDelegate.markers, markers) ||
+        oldDelegate.freqGuideY != freqGuideY;
   }
 }
