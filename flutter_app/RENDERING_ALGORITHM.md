@@ -350,10 +350,14 @@ for i in 0..xTicks:
 ## 10. Frequency Axis (Y)
 
 ### Range
-- **0 Hz** (bottom) to **250 Hz** (top) — **inverted**
+- **0 Hz** (bottom) to **maxFrequency** (top) — **inverted**
+- **Dynamic maxFrequency** derived in priority order:
+  1. `frequencyBins.last` from histories (if available and valid)
+  2. Explicit `maxFrequency` parameter (from `device.maxFrequency`)
+  3. Fallback: **250 Hz**
 
 ### Labels
-- 6 labels: 250, 200, 150, 100, 50, 0
+- 6 labels evenly spaced from 0 to maxFrequency
 - Format: bare number (no "Hz" suffix)
 - Position: right-aligned at `x = pLeft - 6 - textWidth`
 
@@ -408,7 +412,7 @@ Drawn below the time axis labels.
 | Gap fill color | `0x423667C2` | Blue, 26% opacity |
 | Gap stroke color | `0xE766C4E7` | Light blue, 90% opacity |
 | Gap label min width | `52 px` | Minimum gap width to show text |
-| Max frequency | `250 Hz` | Top of Y-axis |
+| Max frequency | dynamic | Top of Y-axis: `frequencyBins.last` → `device.maxFrequency` → `250 Hz` fallback |
 | Y ticks | `5` | Number of horizontal grid lines |
 | X ticks | `4–8` | Vertical grid lines (target 120px spacing) |
 | Painter left inset | `40 px` | Space for frequency labels |

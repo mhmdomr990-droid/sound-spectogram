@@ -35,6 +35,7 @@ class FullscreenSpectrogram extends StatefulWidget {
   final int seedIntensityHeight;
   final double seedGamma;
   final List<MarkerData> markers;
+  final double? maxFrequency;
 
   const FullscreenSpectrogram({
     super.key,
@@ -53,6 +54,7 @@ class FullscreenSpectrogram extends StatefulWidget {
     this.seedIntensityHeight = 0,
     this.seedGamma = 1.0,
     this.markers = const [],
+    this.maxFrequency,
   });
 
   @override
@@ -136,6 +138,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                     requestEndTime: endTime,
                     showStatusBar: true,
                     compactStatusBar: true,
+                    maxFrequency: widget.maxFrequency,
                     markers: _markers,
                     onMarkerAdd: (timeMs) => setState(() => _markers = [..._markers, MarkerData(timeMs: timeMs)]),
                     onMarkerRemove: (index) => setState(() {

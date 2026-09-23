@@ -279,6 +279,7 @@ class DashboardScreen extends StatelessWidget {
           seedIntensityHeight: snap?.intensityHeight ?? 0,
           seedGamma: snap?.cachedGamma ?? 1.0,
           markers: c.markers,
+          maxFrequency: c.selected.value?.maxFrequency,
         ),
       ),
     );
@@ -336,6 +337,7 @@ class DashboardScreen extends StatelessWidget {
               requestStartTime: c.requestStartTime.value,
               requestEndTime: c.requestEndTime.value,
               markers: c.markers,
+              maxFrequency: c.selected.value?.maxFrequency,
               onMarkerAdd: (timeMs) => c.addMarker(timeMs),
               onMarkerRemove: (index) => c.removeMarker(index),
               onMarkerMove: (index, newTimeMs) => c.moveMarker(index, newTimeMs),

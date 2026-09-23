@@ -116,6 +116,10 @@ class SpectrogramCanvas extends StatefulWidget {
   final void Function(int index)? onMarkerRemove;
   final void Function(int index, int newTimeMs)? onMarkerMove;
 
+  /// Maximum frequency for the Y-axis labels. When null, derived from
+  /// frequencyBins in histories, then device maxFrequency, then 250.
+  final double? maxFrequency;
+
   const SpectrogramCanvas({
     super.key,
     this.matrix = const [],
@@ -154,6 +158,7 @@ class SpectrogramCanvas extends StatefulWidget {
       this.onMarkerAdd,
       this.onMarkerRemove,
       this.onMarkerMove,
+      this.maxFrequency,
   });
 
   @override
@@ -187,6 +192,24 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _viewportStart = 0.0;
       _viewportEnd = 1.0;
     });
+  }
+
+  double _effectiveMaxFreq() {
+    if (widget.maxFrequency != null && widget.maxFrequency! > 0) {
+      return widget.maxFrequency!;
+    }
+    final histories = widget.histories;
+    if (histories != null) {
+      for (final h in histories) {
+        final bins = h.frequencyBins;
+        if (bins != null && bins.length > 1) {
+          final last = bins.last;
+          final first = bins.first;
+          if (last > first && last > 0) return last;
+        }
+      }
+    }
+    return 250.0;
   }
 
   int? _markerLineHitTest(Offset position) {
@@ -839,6 +862,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                     showStatusBar: widget.showStatusBar,
                     compactStatusBar: widget.compactStatusBar,
                     markers: List<MarkerData>.from(widget.markers),
+                    maxFrequency: _effectiveMaxFreq(),
                   ),
                 ),
               ),
@@ -879,6 +903,7 @@ class _SpectroPainter extends CustomPainter {
   final bool showStatusBar;
   final bool compactStatusBar;
   final List<MarkerData> markers;
+  final double maxFrequency;
 
   _SpectroPainter(this.image,
       {this.background = const Color(0xFF111026),
@@ -894,7 +919,8 @@ class _SpectroPainter extends CustomPainter {
       this.histories,
       this.showStatusBar = true,
       this.compactStatusBar = false,
-      this.markers = const []});
+      this.markers = const [],
+      this.maxFrequency = 250.0});
 
   static const double _leftInset = 40;
   static const double _rightInset = 6;
@@ -902,7 +928,6 @@ class _SpectroPainter extends CustomPainter {
   double get _bottomInset => showStatusBar ? (compactStatusBar ? 50.0 : 68.0) : 36.0;
   static const int _xTicks = 5;
   static const int _yTicks = 5;
-  static const double _maxFrequency = 250.0;
 
   static const Color _gridColor = Color(0x29CFD7E6);
   static const Color _axisColor = Color(0xFFCFD7E6);
@@ -1130,7 +1155,7 @@ class _SpectroPainter extends CustomPainter {
 
     // 6) Frequency (y) axis labels — 0 to 250 Hz.
     for (var i = 0; i <= _yTicks; i++) {
-      final hz = ((_yTicks - i) * _maxFrequency / _yTicks).round();
+      final hz = ((_yTicks - i) * maxFrequency / _yTicks).round();
       final y = pTop + plotH * i / _yTicks;
       final fp = _getFreqLabelPainter(hz);
       fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
