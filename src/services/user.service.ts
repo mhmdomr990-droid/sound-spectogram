@@ -5,6 +5,7 @@ import { Device } from "../entities/Device";
 import { User, UserRole } from "../entities/User";
 import { HttpError } from "../utils/http-error";
 import { signJwt } from "../utils/jwt";
+import { normalizeNaiveDateTimeString } from "../utils/validation";
 
 interface CreateUserInput {
   name: string;
@@ -25,6 +26,23 @@ interface UpdateUserInput {
 type SafeUser = Omit<User, "password" | "devices"> & {
   deviceIds: number[];
 };
+
+export interface PendingMobileDeviceRequest {
+  id: number;
+  name: string;
+  username: string;
+  mobileDeviceId: string;
+  mobileDeviceFirstSeenAt: string | null;
+}
+
+export interface MobileDeviceChangeRequest {
+  id: number;
+  name: string;
+  username: string;
+  mobileDeviceId: string | null;
+  mobileDeviceChangeRequestId: string;
+  mobileDeviceChangeRequestedAt: string | null;
+}
 
 export class UserService {
   private readonly userRepo: Repository<User>;
@@ -61,6 +79,16 @@ export class UserService {
     return devices;
   }
 
+  private getNowNaiveDateTime(): string {
+    const normalized = normalizeNaiveDateTimeString(new Date());
+    if (normalized) {
+      return normalized;
+    }
+
+    const fallback = new Date().toISOString().replace("Z", "");
+    return fallback.slice(0, 19);
+  }
+
   async createUser(input: CreateUserInput): Promise<SafeUser> {
     const existing = await this.userRepo.findOne({ where: { username: input.username } });
     if (existing) {
@@ -91,7 +119,7 @@ export class UserService {
     return this.sanitizeUser(reloaded);
   }
 
-  async authenticateUser(username: string, password: string): Promise<{
+  async authenticateUser(username: string, password: string, deviceId?: string): Promise<{
     token: string;
     user: { id: number; name: string; username: string; role: UserRole; deviceIds: number[] };
   }> {
@@ -103,6 +131,36 @@ export class UserService {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       throw new HttpError(401, "Invalid username or password");
+    }
+
+    const normalizedDeviceId = typeof deviceId === "string" ? deviceId.trim() : "";
+    if (normalizedDeviceId) {
+      const boundDeviceId = typeof user.mobileDeviceId === "string" ? user.mobileDeviceId.trim() : "";
+      const boundStatus = typeof user.mobileDeviceStatus === "string" ? user.mobileDeviceStatus.trim().toLowerCase() : "";
+
+      if (!boundDeviceId) {
+        user.mobileDeviceId = normalizedDeviceId;
+        user.mobileDeviceStatus = "pending";
+        user.mobileDeviceFirstSeenAt = this.getNowNaiveDateTime();
+        user.mobileDeviceApprovedAt = null;
+        await this.userRepo.save(user);
+        throw new HttpError(403, "بانتظار موافقة الإدارة على هذا الجهاز");
+      }
+
+      if (boundDeviceId !== normalizedDeviceId) {
+        const currentRequestedDeviceId = typeof user.mobileDeviceChangeRequestId === "string" ? user.mobileDeviceChangeRequestId.trim() : "";
+        if (currentRequestedDeviceId !== normalizedDeviceId) {
+          user.mobileDeviceChangeRequestId = normalizedDeviceId;
+          user.mobileDeviceChangeRequestedAt = this.getNowNaiveDateTime();
+          await this.userRepo.save(user);
+        }
+
+        throw new HttpError(403, "هذا الحساب مرتبط بجهاز آخر. تم تسجيل طلب تغيير الجهاز وسيتم مراجعته من الإدارة.");
+      }
+
+      if (boundStatus !== "approved") {
+        throw new HttpError(403, "الجهاز لا يزال بانتظار موافقة الإدارة");
+      }
     }
 
     const token = signJwt({
@@ -124,6 +182,105 @@ export class UserService {
         deviceIds: Array.isArray(user.devices) ? user.devices.map((device) => device.id) : []
       }
     };
+  }
+
+  async getPendingMobileDeviceRequests(): Promise<PendingMobileDeviceRequest[]> {
+    const users = await this.userRepo.find({
+      where: { mobileDeviceStatus: "pending" },
+      order: { mobileDeviceFirstSeenAt: "ASC", id: "ASC" }
+    });
+
+    return users
+      .map((user) => {
+        const mobileDeviceId = typeof user.mobileDeviceId === "string" ? user.mobileDeviceId.trim() : "";
+        if (!mobileDeviceId) {
+          return null;
+        }
+
+        return {
+          id: user.id,
+          name: user.name,
+          username: user.username,
+          mobileDeviceId,
+          mobileDeviceFirstSeenAt: user.mobileDeviceFirstSeenAt
+        };
+      })
+      .filter((user): user is PendingMobileDeviceRequest => Boolean(user));
+  }
+
+  async approvePendingMobileDevice(userId: number): Promise<void> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    const hasPendingStatus = typeof user?.mobileDeviceStatus === "string" && user.mobileDeviceStatus.trim().toLowerCase() === "pending";
+    const hasBoundDevice = typeof user?.mobileDeviceId === "string" && user.mobileDeviceId.trim().length > 0;
+
+    if (!user || !hasPendingStatus || !hasBoundDevice) {
+      throw new HttpError(404, "No pending mobile device request found for this user");
+    }
+
+    user.mobileDeviceStatus = "approved";
+    user.mobileDeviceApprovedAt = this.getNowNaiveDateTime();
+    await this.userRepo.save(user);
+  }
+
+  async resetMobileDeviceBinding(userId: number): Promise<void> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new HttpError(404, "User not found");
+    }
+
+    user.mobileDeviceId = null;
+    user.mobileDeviceStatus = null;
+    user.mobileDeviceFirstSeenAt = null;
+    user.mobileDeviceApprovedAt = null;
+    await this.userRepo.save(user);
+  }
+
+  async getMobileDeviceChangeRequests(): Promise<MobileDeviceChangeRequest[]> {
+    const users = await this.userRepo
+      .createQueryBuilder("user")
+      .where("user.mobileDeviceChangeRequestId IS NOT NULL")
+      .andWhere("TRIM(user.mobileDeviceChangeRequestId) <> ''")
+      .orderBy("user.mobileDeviceChangeRequestedAt", "ASC")
+      .addOrderBy("user.id", "ASC")
+      .getMany();
+
+    return users.map((user) => ({
+      id: user.id,
+      name: user.name,
+      username: user.username,
+      mobileDeviceId: user.mobileDeviceId,
+      mobileDeviceChangeRequestId: String(user.mobileDeviceChangeRequestId).trim(),
+      mobileDeviceChangeRequestedAt: user.mobileDeviceChangeRequestedAt
+    }));
+  }
+
+  async approveMobileDeviceChange(userId: number): Promise<void> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    const requestedDeviceId = typeof user?.mobileDeviceChangeRequestId === "string" ? user.mobileDeviceChangeRequestId.trim() : "";
+
+    if (!user || !requestedDeviceId) {
+      throw new HttpError(404, "No pending mobile device change request found for this user");
+    }
+
+    user.mobileDeviceId = requestedDeviceId;
+    user.mobileDeviceStatus = "approved";
+    user.mobileDeviceApprovedAt = this.getNowNaiveDateTime();
+    user.mobileDeviceChangeRequestId = null;
+    user.mobileDeviceChangeRequestedAt = null;
+    await this.userRepo.save(user);
+  }
+
+  async rejectMobileDeviceChange(userId: number): Promise<void> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    const requestedDeviceId = typeof user?.mobileDeviceChangeRequestId === "string" ? user.mobileDeviceChangeRequestId.trim() : "";
+
+    if (!user || !requestedDeviceId) {
+      throw new HttpError(404, "No pending mobile device change request found for this user");
+    }
+
+    user.mobileDeviceChangeRequestId = null;
+    user.mobileDeviceChangeRequestedAt = null;
+    await this.userRepo.save(user);
   }
 
   async getUsers(): Promise<Array<SafeUser>> {

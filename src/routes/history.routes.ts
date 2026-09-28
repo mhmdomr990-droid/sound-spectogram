@@ -13,6 +13,13 @@ router.get(
 );
 
 router.get(
+  "/devices/:id/history/latest-batch",
+  authMiddleware,
+  requireRole(UserRole.ADMIN, UserRole.EMP),
+  historyController.getLatestPacketsBatch
+);
+
+router.get(
   "/devices/:id/history",
   authMiddleware,
   requireRole(UserRole.ADMIN, UserRole.EMP),

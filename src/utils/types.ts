@@ -23,6 +23,7 @@ export interface IncomingDeviceDataPayload {
   frequencyBins?: number[];
   intensityType?: IntensityType;
   aiStatus?: 0 | 1 | 2;
+  confidence?: number | null;
 }
 
 export interface DeviceDataBroadcastPayload {
@@ -36,7 +37,25 @@ export interface DeviceDataBroadcastPayload {
   frequencyBins?: number[];
   intensityType?: IntensityType;
   aiStatus?: 0 | 1 | 2;
+  confidence?: number | null;
   persisted?: boolean;
+}
+
+export interface CheckAiStatusRequestPayload {
+  startTime?: string;
+  endTime?: string;
+  start_time?: string;
+  end_time?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface AiStatusRangeResultItem {
+  deviceId: number;
+  startTime: string;
+  endTime: string;
+  aiStatus: 0 | 1 | 2 | null;
+  confidence: number | null;
 }
 
 export interface JwtUserPayload {

@@ -27,6 +27,24 @@ export const historyController = {
     }
   },
 
+  getLatestPacketsBatch: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const deviceId = Number(req.params.id);
+      if (!isPositiveInteger(deviceId)) {
+        throw new HttpError(400, "device id must be a positive integer");
+      }
+
+      const decodeData = String((req.query as { decode?: string }).decode || "") === "1";
+      const rawCount = Number.parseInt(String((req.query as { count?: string }).count || ""), 10);
+      const count = Number.isFinite(rawCount) && rawCount > 0 ? Math.max(1, Math.min(20, rawCount)) : 5;
+
+      const items = await historyService.getLatestPackets(deviceId, count, decodeData, req.user);
+      res.json(items);
+    } catch (error) {
+      next(error);
+    }
+  },
+
   getDeviceHistory: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const deviceId = Number(req.params.id);

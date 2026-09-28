@@ -197,6 +197,16 @@ export function validateIncomingDevicePayload(payload: unknown): {
     parsedAiStatus = aiStatusNumber as IncomingDeviceDataPayload["aiStatus"];
   }
 
+  const rawConfidence = raw.confidence ?? raw.Confidence;
+  let parsedConfidence: IncomingDeviceDataPayload["confidence"];
+  if (rawConfidence !== undefined && rawConfidence !== null && rawConfidence !== "") {
+    const confidenceNumber = Number(rawConfidence);
+    if (!Number.isFinite(confidenceNumber)) {
+      return { valid: false, message: "confidence must be a finite number" };
+    }
+    parsedConfidence = confidenceNumber;
+  }
+
   const rawFrequencyBins =
     raw.frequencyBins ??
     raw.frequency_bins ??
@@ -259,7 +269,8 @@ export function validateIncomingDevicePayload(payload: unknown): {
       data: raw.data as number[][],
       frequencyBins: parsedFrequencyBins,
       intensityType: parsedIntensityType,
-      aiStatus: parsedAiStatus
+      aiStatus: parsedAiStatus,
+      confidence: parsedConfidence
     }
   };
 }

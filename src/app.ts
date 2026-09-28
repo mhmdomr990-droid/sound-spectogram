@@ -5,6 +5,8 @@ import compression from "compression";
 import helmet from "helmet";
 import deviceRoutes from "./routes/device.routes";
 import historyRoutes from "./routes/history.routes";
+import statisticsRoutes from "./routes/statistics.routes";
+import telemetryRoutes from "./routes/telemetry.routes";
 import userRoutes from "./routes/user.routes";
 import { errorHandler, notFoundMiddleware } from "./utils/error.middleware";
 
@@ -39,12 +41,16 @@ export function createApp() {
   });
 
   app.get("/dashboard", (_req, res) => {
-    res.render("dashboard");
+    res.render("dashboard", {
+      cartoApiKey: process.env.CARTO_API_KEY || ""
+    });
   });
 
   app.use("/api", userRoutes);
   app.use("/api", deviceRoutes);
   app.use("/api", historyRoutes);
+  app.use("/api", statisticsRoutes);
+  app.use("/api", telemetryRoutes);
 
   app.use(notFoundMiddleware);
   app.use(errorHandler);

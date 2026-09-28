@@ -19,6 +19,15 @@
     return;
   }
 
+  if (window.L) {
+    delete L.Icon.Default.prototype._getIconUrl;
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
+      iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
+      shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png"
+    });
+  }
+
   var selectedDeviceId = null;
   var selectedDeviceName = "";
   var selectedDeviceKey = "";
@@ -45,6 +54,22 @@
   var markerDragHasMoved = false;
   var skipMarkerRemovalClick = false;
   var panHasMoved = false;
+  var PROBE_AUTO_HIDE_MS = 4000;
+  var probeAutoHideTimerId = null;
+
+  function scheduleProbeAutoHide() {
+    if (probeAutoHideTimerId !== null) {
+      clearTimeout(probeAutoHideTimerId);
+    }
+    probeAutoHideTimerId = setTimeout(function () {
+      probeAutoHideTimerId = null;
+      probeTooltipEl.classList.add("hidden");
+    }, PROBE_AUTO_HIDE_MS);
+  }
+  var suppressNextProbeClick = false;
+  var pressStartedAtMs = 0;
+  var PAN_MOVE_THRESHOLD_PX = 5;
+  var CLICK_MAX_DURATION_MS = 400;
   var panStartClientX = 0;
   var panStartFromMs = 0;
   var panStartToMs = 0;
@@ -53,8 +78,18 @@
   var interactionEndTimer = null;
   var lastRenderMeta = null;
   var devicesCache = [];
+  var devicesStatusCache = [];
+  var liveDeviceStatusMap = {};
+  var deviceStatusStorageKey = "device-live-status-cache";
   var editingUserId = null;
   var editingDeviceId = null;
+  var editingDeviceForLocation = null;
+  var deviceLocationMap = null;
+  var deviceLocationMarker = null;
+  var devicesOverviewMapInstance = null;
+  var devicesOverviewLayerGroup = null;
+  var hasFitInitialOverviewBounds = false;
+  var lastKnownDeviceBounds = [];
   var lastPersistenceWarningAt = 0;
   var liveTraceEl = null;
   var expectingLiveRender = false;
@@ -81,20 +116,34 @@
   var LIVE_WINDOW_LABEL = "آخر 30 دقيقة";
   var MAX_LOAD_WINDOW_MS = 24 * 60 * 60 * 1000;
   var MAX_PACKETS_IN_MEMORY = 12000;
+  var MULTI_VIEW_PANEL_BUFFER_SIZE = 5;
+  var multiViewOpen = false;
+  var multiViewPanels = {};
+  var DEFAULT_LOCATION_LAT = 35.5;
+  var DEFAULT_LOCATION_LNG = 35.8;
 
   var topNav = document.getElementById("topNav");
   var dashboardLayoutEl = document.getElementById("dashboardLayout");
   var tabButtons = document.querySelectorAll(".tab-btn");
   var historyPanel = document.getElementById("historyPanel");
+  var mapPanel = document.getElementById("mapPanel");
+  var statisticsPanel = document.getElementById("statisticsPanel");
   var usersPanel = document.getElementById("usersPanel");
   var devicesPanel = document.getElementById("devicesPanel");
   var globalMessageEl = document.getElementById("globalMessage");
   var userBadgeEl = document.getElementById("userBadge");
   var socketStatusBadgeEl = document.getElementById("socketStatusBadge");
-  var rightPanelEl = document.getElementById("rightPanel");
+  var rightPanel = document.getElementById("rightPanel");
   var toggleRightPanelBtn = document.getElementById("toggleRightPanelBtn");
 
   var deviceListEl = document.getElementById("deviceList");
+  var multiViewBtn = document.getElementById("multiViewBtn");
+  var multiViewPickerModal = document.getElementById("multiViewPickerModal");
+  var multiViewDeviceOptions = document.getElementById("multiViewDeviceOptions");
+  var multiViewContinueBtn = document.getElementById("multiViewContinueBtn");
+  var multiViewCancelBtn = document.getElementById("multiViewCancelBtn");
+  var multiViewOverlay = document.getElementById("multiViewOverlay");
+  var multiViewGrid = document.getElementById("multiViewGrid");
   var selectedDeviceTitleEl = document.getElementById("selectedDeviceTitle");
   var historyInfoEl = document.getElementById("historyInfo");
   var historyTableBody = document.getElementById("historyTableBody");
@@ -114,6 +163,680 @@
   var clearMarkersBtn = document.getElementById("clearMarkersBtn");
   var panLeftBtn = document.getElementById("panLeftBtn");
   var panRightBtn = document.getElementById("panRightBtn");
+
+  async function loadDevicesWithStatus() {
+    if (!isAdmin) {
+      devicesStatusCache = [];
+      renderDevicesViews([]);
+      return;
+    }
+
+    try {
+      devicesStatusCache = await apiRequest("/api/devices/with-status");
+    } catch (error) {
+      devicesStatusCache = [];
+      setGlobalMessage(error instanceof Error ? error.message : "تعذر تحميل حالة الأجهزة", true);
+    }
+
+    liveDeviceStatusMap = readStoredLiveDeviceStatus();
+    var seededFromSnapshot = seedLiveDeviceStatusFromSnapshot(devicesStatusCache);
+    if (seededFromSnapshot) {
+      saveStoredLiveDeviceStatus(liveDeviceStatusMap);
+    }
+    renderDevicesViews(devicesStatusCache);
+  }
+
+  function createTerrainTileLayer() {
+    return L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+      maxZoom: 17,
+      attribution: "Map data: © OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)"
+    });
+  }
+
+  function createSatelliteTileLayer() {
+    var imagery = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      { maxZoom: 19, attribution: "Tiles © Esri" }
+    );
+    var labels = L.tileLayer(
+      "https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png?key=" + encodeURIComponent(window.cartoApiKey || ""),
+      {
+        maxZoom: 20,
+        subdomains: "abcd",
+        attribution: "Labels © CARTO, © OpenStreetMap contributors"
+      }
+    );
+    return L.layerGroup([imagery, labels]);
+  }
+
+  function normalizeDeviceStatusKey(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  function getDeviceStatusCandidates(device) {
+    if (!device || typeof device !== "object") {
+      return [];
+    }
+
+    var candidates = [];
+    if (device.device_id) {
+      candidates.push(device.device_id);
+    }
+    if (device.externalDeviceId) {
+      candidates.push(device.externalDeviceId);
+    }
+    if (device.name) {
+      candidates.push(device.name);
+    }
+    if (device.id) {
+      candidates.push(String(device.id));
+    }
+    if (device.key) {
+      candidates.push(device.key);
+    }
+    if (device.deviceKey) {
+      candidates.push(device.deviceKey);
+    }
+    if (device.identifier) {
+      candidates.push(device.identifier);
+    }
+    if (device.serial) {
+      candidates.push(device.serial);
+    }
+
+    return candidates;
+  }
+
+  function findLiveStatusInMapByCandidates(statusMap, candidates) {
+    if (!statusMap || typeof statusMap !== "object") {
+      return null;
+    }
+
+    var safeCandidates = Array.isArray(candidates) ? candidates : [];
+    for (var i = 0; i < safeCandidates.length; i += 1) {
+      var candidateKey = normalizeDeviceStatusKey(safeCandidates[i]);
+      if (candidateKey && statusMap[candidateKey]) {
+        return {
+          key: candidateKey,
+          value: statusMap[candidateKey]
+        };
+      }
+    }
+
+    var mapKeys = Object.keys(statusMap);
+    for (var j = 0; j < mapKeys.length; j += 1) {
+      var normalizedMapKey = normalizeDeviceStatusKey(mapKeys[j]);
+      var matched = safeCandidates.some(function (candidate) {
+        var normalizedCandidate = normalizeDeviceStatusKey(candidate);
+        return (
+          normalizedCandidate &&
+          (normalizedCandidate === normalizedMapKey ||
+            normalizedMapKey.indexOf(normalizedCandidate) !== -1 ||
+            normalizedCandidate.indexOf(normalizedMapKey) !== -1)
+        );
+      });
+
+      if (matched) {
+        return {
+          key: mapKeys[j],
+          value: statusMap[mapKeys[j]]
+        };
+      }
+    }
+
+    return null;
+  }
+
+  function getLiveStatusTimestampMs(entry) {
+    if (!entry || typeof entry !== "object") {
+      return NaN;
+    }
+
+    var recordedAt = normalizeAnyDateTimeString(entry.recordedAt || entry.timestamp || "");
+    if (recordedAt) {
+      var recordedAtMs = parseFlexibleTimeMs(recordedAt);
+      if (Number.isFinite(recordedAtMs)) {
+        return recordedAtMs;
+      }
+    }
+
+    var date = typeof entry.date === "string" ? entry.date.trim() : "";
+    var time = typeof entry.time === "string" ? entry.time.trim() : "";
+    if (date && time) {
+      return parseFlexibleTimeMs(date + "T" + time);
+    }
+
+    return NaN;
+  }
+
+  function buildLiveStatusFromDeviceSnapshot(item) {
+    if (!item || typeof item !== "object") {
+      return null;
+    }
+
+    var deviceKey = item.device_id || item.externalDeviceId || item.name || item.id;
+    if (!deviceKey) {
+      return null;
+    }
+
+    var hasTelemetryFields =
+      item.recordedAt ||
+      item.date ||
+      item.time ||
+      item.battery !== undefined ||
+      item.temperature !== undefined ||
+      item.uptime !== undefined ||
+      item.internet !== undefined ||
+      item.ping !== undefined ||
+      item.interface !== undefined;
+
+    if (!hasTelemetryFields) {
+      return null;
+    }
+
+    var normalizedRecordedAt = normalizeAnyDateTimeString(item.recordedAt || "");
+    if (!normalizedRecordedAt) {
+      var date = typeof item.date === "string" ? item.date.trim() : "";
+      var time = typeof item.time === "string" ? item.time.trim() : "";
+      if (date && time) {
+        normalizedRecordedAt = normalizeAnyDateTimeString(date + "T" + time);
+      }
+    }
+
+    var datePart = null;
+    var timePart = null;
+    if (normalizedRecordedAt) {
+      var matched = normalizedRecordedAt.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})$/);
+      if (matched) {
+        datePart = matched[1];
+        timePart = matched[2];
+      }
+    }
+
+    return {
+      device_id: String(deviceKey),
+      battery: item.battery,
+      temperature: item.temperature,
+      uptime: item.uptime,
+      internet: item.internet,
+      ping: item.ping,
+      interface: item.interface,
+      recordedAt: normalizedRecordedAt || null,
+      date: datePart || (typeof item.date === "string" && item.date.trim() ? item.date.trim() : null),
+      time: timePart || (typeof item.time === "string" && item.time.trim() ? item.time.trim() : null)
+    };
+  }
+
+  function seedLiveDeviceStatusFromSnapshot(devicesWithStatus) {
+    if (!Array.isArray(devicesWithStatus) || devicesWithStatus.length === 0) {
+      return false;
+    }
+
+    var mapUpdated = false;
+    var nextMap = Object.assign({}, liveDeviceStatusMap || {});
+
+    devicesWithStatus.forEach(function (item) {
+      var snapshotStatus = buildLiveStatusFromDeviceSnapshot(item);
+      if (!snapshotStatus) {
+        return;
+      }
+
+      var candidates = getDeviceStatusCandidates(item);
+      candidates.unshift(snapshotStatus.device_id);
+
+      var matchedEntry = findLiveStatusInMapByCandidates(nextMap, candidates);
+      if (!matchedEntry) {
+        var snapshotKey = normalizeDeviceStatusKey(snapshotStatus.device_id);
+        if (snapshotKey) {
+          nextMap[snapshotKey] = snapshotStatus;
+          mapUpdated = true;
+        }
+        return;
+      }
+
+      var existingTimeMs = getLiveStatusTimestampMs(matchedEntry.value);
+      var snapshotTimeMs = getLiveStatusTimestampMs(snapshotStatus);
+      var shouldReplace = false;
+
+      if (!Number.isFinite(existingTimeMs)) {
+        shouldReplace = Number.isFinite(snapshotTimeMs);
+      } else if (Number.isFinite(snapshotTimeMs) && snapshotTimeMs > existingTimeMs) {
+        shouldReplace = true;
+      }
+
+      if (shouldReplace) {
+        nextMap[matchedEntry.key] = snapshotStatus;
+        mapUpdated = true;
+      }
+    });
+
+    if (mapUpdated) {
+      liveDeviceStatusMap = nextMap;
+    }
+
+    return mapUpdated;
+  }
+
+  function readStoredLiveDeviceStatus() {
+    try {
+      var rawValue = localStorage.getItem(deviceStatusStorageKey);
+      if (!rawValue) {
+        return {};
+      }
+      var parsed = JSON.parse(rawValue);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (_error) {
+      return {};
+    }
+  }
+
+  function saveStoredLiveDeviceStatus(value) {
+    try {
+      localStorage.setItem(deviceStatusStorageKey, JSON.stringify(value));
+    } catch (_error) {
+      // ignore storage issues in private browsing or restricted contexts
+    }
+  }
+
+  function normalizeLiveDeviceStatusPayload(payload) {
+    var result = {};
+    if (!payload || typeof payload !== "object") {
+      return result;
+    }
+
+    if (Array.isArray(payload.devices)) {
+      payload.devices.forEach(function (item) {
+        if (!item || typeof item !== "object") {
+          return;
+        }
+        var key = normalizeDeviceStatusKey(item.device_id || item.id || item.deviceId || item.name || item.deviceName || item.key);
+        if (!key) {
+          return;
+        }
+        result[key] = item;
+      });
+      return result;
+    }
+
+    if (Array.isArray(payload.entries)) {
+      payload.entries.forEach(function (item) {
+        if (!item || typeof item !== "object") {
+          return;
+        }
+        var key = normalizeDeviceStatusKey(item.device_id || item.id || item.deviceId || item.name || item.deviceName || item.key);
+        if (!key) {
+          return;
+        }
+        result[key] = item;
+      });
+      return result;
+    }
+
+    if (Array.isArray(payload)) {
+      payload.forEach(function (item) {
+        if (!item || typeof item !== "object") {
+          return;
+        }
+        var key = normalizeDeviceStatusKey(item.device_id || item.id || item.deviceId || item.name || item.deviceName || item.key);
+        if (!key) {
+          return;
+        }
+        result[key] = item;
+      });
+      return result;
+    }
+
+    Object.keys(payload).forEach(function (key) {
+      var item = payload[key];
+      if (!item || typeof item !== "object") {
+        return;
+      }
+      result[normalizeDeviceStatusKey(key)] = item;
+    });
+
+    return result;
+  }
+
+  function getLiveDeviceStatusForCard(device, deviceIndex, totalDevices) {
+    if (!device || !liveDeviceStatusMap || typeof liveDeviceStatusMap !== "object") {
+      return null;
+    }
+
+    var matchedEntry = findLiveStatusInMapByCandidates(liveDeviceStatusMap, getDeviceStatusCandidates(device));
+    return matchedEntry ? matchedEntry.value : null;
+  }
+
+  function parseDeviceCoordinate(value) {
+    if (value === null || value === undefined || value === "") {
+      return null;
+    }
+
+    var parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function renderDevicesOverviewMap(devicesWithStatus) {
+    if (!topLevelDevicesMapContainer || !window.L) {
+      return;
+    }
+
+    if (!devicesOverviewMapInstance) {
+      devicesOverviewMapInstance = L.map(topLevelDevicesMapContainer, { attributionControl: false }).setView([
+        DEFAULT_LOCATION_LAT,
+        DEFAULT_LOCATION_LNG
+      ], 7);
+      var terrainLayer = createTerrainTileLayer();
+      var satelliteLayer = createSatelliteTileLayer();
+      terrainLayer.addTo(devicesOverviewMapInstance);
+      L.control.attribution({ prefix: false, position: "bottomright" }).addTo(devicesOverviewMapInstance);
+      L.control.scale({ position: "bottomleft", metric: true, imperial: false }).addTo(devicesOverviewMapInstance);
+      L.control.ruler({ position: "topleft" }).addTo(devicesOverviewMapInstance);
+      L.control.layers(
+        { "تضاريس": terrainLayer, "قمر صناعي": satelliteLayer },
+        null,
+        { position: "topright" }
+      ).addTo(devicesOverviewMapInstance);
+      devicesOverviewLayerGroup = L.layerGroup().addTo(devicesOverviewMapInstance);
+      devicesOverviewMapInstance.invalidateSize();
+    }
+
+    if (!devicesOverviewLayerGroup) {
+      devicesOverviewLayerGroup = L.layerGroup().addTo(devicesOverviewMapInstance);
+    }
+
+    devicesOverviewLayerGroup.clearLayers();
+
+    var list = Array.isArray(devicesWithStatus) ? devicesWithStatus : [];
+    var bounds = [];
+
+    list.forEach(function (item, index) {
+      var device = devicesCache.find(function (cached) {
+        return Number(cached.id) === Number(item.id);
+      }) || item;
+
+      var latitude = parseDeviceCoordinate(device.latitude);
+      var longitude = parseDeviceCoordinate(device.longitude);
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        return;
+      }
+
+      var liveStatus = getLiveDeviceStatusForCard(device, index, list.length);
+      var internetValue = liveStatus && typeof liveStatus.internet === "string" ? liveStatus.internet.trim().toUpperCase() : "";
+      var isOnline = internetValue === "UP";
+      var statusText = isOnline ? "متصل" : internetValue === "DOWN" ? "غير متصل" : "غير معروف";
+      var tooltipLines = ["<strong>" + (device.name || "جهاز") + "</strong>", "الحالة: " + statusText];
+      if (liveStatus && Number.isFinite(Number(liveStatus.ping))) {
+        tooltipLines.push("زمن الاستجابة: " + Number(liveStatus.ping).toFixed(1) + " ms");
+      }
+      if (liveStatus && Number.isFinite(Number(liveStatus.temperature))) {
+        tooltipLines.push("درجة الحرارة: " + Number(liveStatus.temperature).toFixed(1) + "°");
+      }
+      if (liveStatus && Number.isFinite(Number(liveStatus.battery))) {
+        tooltipLines.push("البطارية: " + Number(liveStatus.battery).toFixed(1) + "%");
+      }
+      if (liveStatus && liveStatus.uptime) {
+        tooltipLines.push("مدة التشغيل: " + liveStatus.uptime);
+      }
+      var tooltipHtml = tooltipLines.join("<br>");
+
+      var sensitivityCircles = isOnline
+        ? [
+            { radius: 5000, color: "#7f1d1d", fillColor: "#7f1d1d", fillOpacity: 0.35 },
+            { radius: 10000, color: "#b91c1c", fillColor: "#b91c1c", fillOpacity: 0.20 },
+            { radius: 15000, color: "#f87171", fillColor: "#f87171", fillOpacity: 0.13 }
+          ]
+        : [
+            { radius: 5000, color: "#6f1d1d", fillColor: "#6f1d1d", fillOpacity: 0.12 },
+            { radius: 10000, color: "#6f1d1d", fillColor: "#6f1d1d", fillOpacity: 0.08 },
+            { radius: 15000, color: "#6f1d1d", fillColor: "#6f1d1d", fillOpacity: 0.04 }
+          ];
+
+      sensitivityCircles.forEach(function (circleConfig) {
+        L.circle([latitude, longitude], {
+          radius: circleConfig.radius,
+          color: circleConfig.color,
+          fillColor: circleConfig.fillColor,
+          fillOpacity: circleConfig.fillOpacity,
+          weight: 1
+        }).addTo(devicesOverviewLayerGroup);
+      });
+
+      L.circleMarker([latitude, longitude], {
+        radius: 8,
+        color: "#ffffff",
+        weight: 1,
+        fillColor: isOnline ? "#21a366" : "#6f1d1d",
+        fillOpacity: 1
+      })
+        .bindTooltip(tooltipHtml, { sticky: true })
+        .bindPopup(tooltipHtml)
+        .addTo(devicesOverviewLayerGroup);
+
+      bounds.push([latitude, longitude]);
+    });
+
+    lastKnownDeviceBounds = bounds.slice();
+  }
+
+  function renderDevicesViews(devicesWithStatus) {
+    renderDevicesCards(devicesWithStatus);
+    renderDevicesOverviewMap(devicesWithStatus);
+  }
+
+  function renderDevicesCards(devicesWithStatus) {
+    if (!devicesCardsGrid) {
+      return;
+    }
+
+    devicesCardsGrid.innerHTML = "";
+
+    var list = Array.isArray(devicesWithStatus) ? devicesWithStatus : [];
+    if (!list.length) {
+      var emptyState = document.createElement("p");
+      emptyState.className = "history-info";
+      emptyState.textContent = "لا توجد أجهزة لعرضها";
+      devicesCardsGrid.appendChild(emptyState);
+      return;
+    }
+
+    var onlineCards = [];
+    var offlineCards = [];
+
+    list.forEach(function (item, index) {
+      var device = devicesCache.find(function (cached) {
+        return Number(cached.id) === Number(item.id);
+      }) || item;
+
+      function appendMetaLine(parent, label, value, valueClassName) {
+        var line = document.createElement("p");
+        line.className = "device-card-meta";
+        line.appendChild(document.createTextNode(label));
+        var valueSpan = document.createElement("span");
+        if (valueClassName) {
+          valueSpan.className = valueClassName;
+        }
+        valueSpan.textContent = value;
+        line.appendChild(valueSpan);
+        parent.appendChild(line);
+      }
+
+      var card = document.createElement("article");
+      card.className = "device-card";
+      card.dataset.deviceId = String(device.id);
+      card.dataset.deviceName = String(device.name || "");
+
+      var liveStatus = getLiveDeviceStatusForCard(device, index, list.length);
+      card.classList.remove("device-card--online", "device-card--offline");
+      if (liveStatus) {
+        var internetValue = typeof liveStatus.internet === "string" ? liveStatus.internet.trim().toLowerCase() : "";
+        if (internetValue) {
+          card.classList.toggle("device-card--online", internetValue === "up");
+          card.classList.toggle("device-card--offline", internetValue === "down");
+        } else if (liveStatus.status) {
+          var liveStatusText = String(liveStatus.status).trim().toLowerCase();
+          card.classList.toggle("device-card--online", liveStatusText === "online");
+          card.classList.toggle("device-card--offline", liveStatusText === "offline");
+        }
+      }
+
+      var titleRow = document.createElement("div");
+      titleRow.style.display = "flex";
+      titleRow.style.alignItems = "center";
+      titleRow.style.justifyContent = "space-between";
+      titleRow.style.gap = "8px";
+
+      var title = document.createElement("h3");
+      title.className = "device-card-title";
+      title.textContent = device.name;
+      titleRow.appendChild(title);
+      card.appendChild(titleRow);
+
+      var description = document.createElement("p");
+      description.className = "device-card-meta";
+      description.textContent = device.description || "بدون وصف";
+      card.appendChild(description);
+
+      var status = document.createElement("p");
+      status.className = "device-card-status";
+      status.appendChild(document.createTextNode("الحالة الأخيرة: "));
+      var statusValue = document.createElement("span");
+      statusValue.style.color = resolveAiStatusColorForCards(item.latestStatusAiStatus);
+      statusValue.textContent = formatDeviceCardStatus(item.latestStatusAiStatus, item.latestStatusConfidence);
+      status.appendChild(statusValue);
+      card.appendChild(status);
+
+      if (item.latestStatusTimestamp) {
+        var timestamp = document.createElement("p");
+        timestamp.className = "device-card-meta";
+        timestamp.textContent = "آخر تحديث: " + item.latestStatusTimestamp;
+        card.appendChild(timestamp);
+      }
+
+      var hasLiveTelemetry = false;
+      var liveMeta = document.createElement("div");
+
+      if (liveStatus) {
+        if (typeof liveStatus.internet === "string" && liveStatus.internet.trim()) {
+          appendMetaLine(liveMeta, "الشبكة: ", liveStatus.internet.trim().toUpperCase());
+          hasLiveTelemetry = true;
+        }
+
+        if (Number.isFinite(Number(liveStatus.battery))) {
+          appendMetaLine(liveMeta, "البطارية: ", Number(liveStatus.battery).toFixed(1) + "%");
+          hasLiveTelemetry = true;
+        }
+
+        if (Number.isFinite(Number(liveStatus.temperature))) {
+          var temperatureValue = Number(liveStatus.temperature);
+          appendMetaLine(
+            liveMeta,
+            "درجة الحرارة: ",
+            temperatureValue.toFixed(1) + "°",
+            temperatureValue > 70 ? "device-card-temp-warning" : ""
+          );
+          hasLiveTelemetry = true;
+        }
+
+        if (typeof liveStatus.uptime === "string" && liveStatus.uptime.trim()) {
+          appendMetaLine(liveMeta, "مدة التشغيل: ", liveStatus.uptime.trim());
+          hasLiveTelemetry = true;
+        }
+
+        if (Number.isFinite(Number(liveStatus.ping))) {
+          appendMetaLine(liveMeta, "زمن الاستجابة: ", Number(liveStatus.ping).toFixed(1) + " ms");
+          hasLiveTelemetry = true;
+        }
+
+        if (typeof liveStatus.interface === "string" && liveStatus.interface.trim()) {
+          appendMetaLine(liveMeta, "الواجهة: ", liveStatus.interface.trim());
+          hasLiveTelemetry = true;
+        }
+
+        if (typeof liveStatus.date === "string" && liveStatus.date.trim() && typeof liveStatus.time === "string" && liveStatus.time.trim()) {
+          appendMetaLine(liveMeta, "آخر نبضة من الجهاز: ", liveStatus.date.trim() + " " + liveStatus.time.trim());
+          hasLiveTelemetry = true;
+        }
+      }
+
+      if (hasLiveTelemetry) {
+        liveMeta.className = "device-card-live-meta";
+        card.appendChild(liveMeta);
+      }
+
+      if (isAdmin) {
+        var actions = document.createElement("div");
+        actions.className = "device-card-actions";
+
+        var editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "ghost-btn";
+        editBtn.textContent = "تعديل";
+        editBtn.addEventListener("click", function () {
+          startEditingDevice(device);
+        });
+
+        var locationBtn = document.createElement("button");
+        locationBtn.type = "button";
+        locationBtn.className = "ghost-btn";
+        locationBtn.textContent = "📍 الموقع";
+        locationBtn.addEventListener("click", function () {
+          openDeviceLocationModal(device);
+        });
+
+        var deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.className = "danger-btn";
+        deleteBtn.textContent = "حذف";
+        deleteBtn.addEventListener("click", async function () {
+          if (!window.confirm("هل تريد حذف الجهاز " + device.name + "؟")) {
+            return;
+          }
+          try {
+            await apiRequest("/api/devices/" + device.id, { method: "DELETE" });
+            if (Number(selectedDeviceId) === Number(device.id)) {
+              selectedDeviceId = null;
+              selectedDeviceName = "";
+              selectedDeviceKey = "";
+              currentPackets = [];
+            }
+            if (Number(editingDeviceId) === Number(device.id)) {
+              resetDeviceForm();
+              closeDeviceModal();
+            }
+            await loadDevices();
+            setGlobalMessage("تم حذف الجهاز بنجاح", false);
+          } catch (error) {
+            setGlobalMessage(error instanceof Error ? error.message : "فشل الحذف", true);
+          }
+        });
+
+        actions.appendChild(editBtn);
+        actions.appendChild(locationBtn);
+        actions.appendChild(deleteBtn);
+        card.appendChild(actions);
+      }
+
+      if (card.classList.contains("device-card--online")) {
+        onlineCards.push(card);
+      } else {
+        offlineCards.push(card);
+      }
+    });
+
+    onlineCards.forEach(function (card) {
+      devicesCardsGrid.appendChild(card);
+    });
+
+    if (onlineCards.length && offlineCards.length) {
+      var divider = document.createElement("hr");
+      divider.className = "devices-cards-divider";
+      devicesCardsGrid.appendChild(divider);
+    }
+
+    offlineCards.forEach(function (card) {
+      devicesCardsGrid.appendChild(card);
+    });
+  }
   var zoomInBtn = document.getElementById("zoomInBtn");
   var zoomOutBtn = document.getElementById("zoomOutBtn");
   var fitPacketsBtn = document.getElementById("fitPacketsBtn");
@@ -140,6 +863,7 @@
   var neighborhoodSizeSelect = document.getElementById("neighborhoodSizeSelect");
   var bucketAggregationSelect = document.getElementById("bucketAggregationSelect");
   var debugStatsEnabledInput = document.getElementById("debugStatsEnabledInput");
+  var logFrequencyViewToggle = document.getElementById("logFrequencyViewToggle");
   var applyNoiseBtn = document.getElementById("applyNoiseBtn");
 
   var usersTableBody = document.getElementById("usersTableBody");
@@ -154,17 +878,40 @@
   var userSaveBtn = document.getElementById("userSaveBtn");
   var userCancelBtn = document.getElementById("userCancelBtn");
   var userFormMessage = document.getElementById("userFormMessage");
+  var openUserModalBtn = document.getElementById("openUserModalBtn");
+  var refreshUsersPanelBtn = document.getElementById("refreshUsersPanelBtn");
+  var userModal = document.getElementById("userModal");
+  var userModalTitle = document.getElementById("userModalTitle");
+  var pendingDevicesTableBody = document.getElementById("pendingDevicesTableBody");
+  var pendingDevicesMessage = document.getElementById("pendingDevicesMessage");
+  var deviceChangeRequestsTableBody = document.getElementById("deviceChangeRequestsTableBody");
+  var deviceChangeRequestsMessage = document.getElementById("deviceChangeRequestsMessage");
 
-  var devicesTableBody = document.getElementById("devicesTableBody");
+  var devicesCardsGrid = document.getElementById("devicesCardsGrid");
+  var deviceSearchInput = document.getElementById("deviceSearchInput");
+  var exportDevicesBtn = document.getElementById("exportDevicesBtn");
+  var openDeviceModalBtn = document.getElementById("openDeviceModalBtn");
+  var deviceModal = document.getElementById("deviceModal");
+  var deviceModalTitle = document.getElementById("deviceModalTitle");
   var deviceForm = document.getElementById("deviceForm");
   var deviceIdInput = document.getElementById("deviceId");
   var deviceNameInput = document.getElementById("deviceName");
+  var deviceExternalDeviceIdInput = document.getElementById("deviceExternalDeviceId");
   var deviceDescriptionInput = document.getElementById("deviceDescription");
   var deviceMinFrequencyInput = document.getElementById("deviceMinFrequency");
   var deviceMaxFrequencyInput = document.getElementById("deviceMaxFrequency");
   var deviceSaveBtn = document.getElementById("deviceSaveBtn");
   var deviceCancelBtn = document.getElementById("deviceCancelBtn");
   var deviceFormMessage = document.getElementById("deviceFormMessage");
+  var deviceLocationModal = document.getElementById("deviceLocationModal");
+  var deviceLocationModalTitle = document.getElementById("deviceLocationModalTitle");
+  var deviceLocationSearchInput = document.getElementById("deviceLocationSearchInput");
+  var deviceLocationMapContainer = document.getElementById("deviceLocationMapContainer");
+  var deviceLocationMessage = document.getElementById("deviceLocationMessage");
+  var saveDeviceLocationBtn = document.getElementById("saveDeviceLocationBtn");
+  var cancelDeviceLocationBtn = document.getElementById("cancelDeviceLocationBtn");
+  var topLevelDevicesMapContainer = document.getElementById("topLevelDevicesMapContainer");
+  var toggleMapFullscreenBtn = document.getElementById("toggleMapFullscreenBtn");
 
   var logoutBtn = document.getElementById("logoutBtn");
 
@@ -172,17 +919,27 @@
     !topNav ||
     !dashboardLayoutEl ||
     !historyPanel ||
+    !mapPanel ||
+    !statisticsPanel ||
     !usersPanel ||
     !devicesPanel ||
+    !deviceSearchInput ||
+    !exportDevicesBtn ||
     !globalMessageEl ||
     !userBadgeEl ||
     !socketStatusBadgeEl ||
-    !rightPanelEl ||
+    !rightPanel ||
     !toggleRightPanelBtn ||
     !deviceListEl ||
+    !multiViewBtn ||
+    !multiViewPickerModal ||
+    !multiViewDeviceOptions ||
+    !multiViewContinueBtn ||
+    !multiViewCancelBtn ||
+    !multiViewOverlay ||
+    !multiViewGrid ||
     !selectedDeviceTitleEl ||
     !historyInfoEl ||
-    !historyTableBody ||
     !sideDeviceInfoEl ||
     !processingStatusEl ||
     !canvas ||
@@ -225,6 +982,7 @@
     !neighborhoodSizeSelect ||
     !bucketAggregationSelect ||
     !debugStatsEnabledInput ||
+    !logFrequencyViewToggle ||
     !applyNoiseBtn ||
     !usersTableBody ||
     !userForm ||
@@ -238,16 +996,37 @@
     !userSaveBtn ||
     !userCancelBtn ||
     !userFormMessage ||
-    !devicesTableBody ||
+    !openUserModalBtn ||
+    !refreshUsersPanelBtn ||
+    !userModal ||
+    !userModalTitle ||
+    !pendingDevicesTableBody ||
+    !pendingDevicesMessage ||
+    !deviceChangeRequestsTableBody ||
+    !deviceChangeRequestsMessage ||
+    !devicesCardsGrid ||
+    !openDeviceModalBtn ||
+    !deviceModal ||
+    !deviceModalTitle ||
     !deviceForm ||
     !deviceIdInput ||
     !deviceNameInput ||
+    !deviceExternalDeviceIdInput ||
     !deviceDescriptionInput ||
     !deviceMinFrequencyInput ||
     !deviceMaxFrequencyInput ||
     !deviceSaveBtn ||
     !deviceCancelBtn ||
     !deviceFormMessage ||
+    !deviceLocationModal ||
+    !deviceLocationModalTitle ||
+    !deviceLocationSearchInput ||
+    !deviceLocationMapContainer ||
+    !deviceLocationMessage ||
+    !saveDeviceLocationBtn ||
+    !cancelDeviceLocationBtn ||
+    !topLevelDevicesMapContainer ||
+    !toggleMapFullscreenBtn ||
     !logoutBtn
   ) {
     return;
@@ -278,7 +1057,7 @@
   }
 
   function setRightPanelCollapsed(collapsed) {
-    rightPanelEl.classList.toggle("collapsed", !!collapsed);
+    rightPanel.classList.toggle("collapsed", !!collapsed);
     toggleRightPanelBtn.textContent = collapsed ? "فتح القائمة" : "إغلاق القائمة";
     toggleRightPanelBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
   }
@@ -527,6 +1306,32 @@
   var activeNeighborhoodSize = 3;
   var activeBucketAggregation = "max";
   var activeDebugStatsEnabled = false;
+  var activeLogFrequencyView = false;
+  var logFrequencyViewStorageKey = "logFrequencyView";
+
+  function readStoredLogFrequencyView() {
+    try {
+      return localStorage.getItem(logFrequencyViewStorageKey) === "1";
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function saveStoredLogFrequencyView(value) {
+    try {
+      localStorage.setItem(logFrequencyViewStorageKey, value ? "1" : "0");
+    } catch (_error) {
+      // ignore storage failures
+    }
+  }
+
+  function applyLogFrequencyViewSettings() {
+    activeLogFrequencyView = parseBoolInput(logFrequencyViewToggle, false);
+    logFrequencyViewToggle.checked = activeLogFrequencyView;
+    saveStoredLogFrequencyView(activeLogFrequencyView);
+    scheduleRender({ skipTable: true });
+    setGlobalMessage(activeLogFrequencyView ? "تم تفعيل العرض اللوغاريتمي" : "تم تفعيل العرض الخطي", false);
+  }
 
   function parseBoolInput(input, fallback) {
     if (!(input instanceof HTMLInputElement)) {
@@ -1047,9 +1852,20 @@
     });
 
     historyPanel.classList.toggle("active", tabName === "history");
+    mapPanel.classList.toggle("active", tabName === "map");
+    statisticsPanel.classList.toggle("active", tabName === "statistics");
     usersPanel.classList.toggle("active", tabName === "users");
     devicesPanel.classList.toggle("active", tabName === "devices");
+    rightPanel.classList.toggle("right-panel--hidden", tabName !== "history");
     setGlobalMessage("", false);
+  }
+
+  function emitDashboardBridgeEvent(name, detail) {
+    if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") {
+      return;
+    }
+
+    window.dispatchEvent(new CustomEvent(name, { detail: detail || {} }));
   }
 
   topNav.addEventListener("click", function (event) {
@@ -1076,7 +1892,9 @@
     probeTooltipEl.classList.add("hidden");
     if (!currentPackets.length) {
       historyInfoEl.textContent = "لا توجد بيانات للجهاز المحدد.";
-      historyTableBody.innerHTML = "";
+      if (historyTableBody) {
+        historyTableBody.innerHTML = "";
+      }
       lastRenderMeta = null;
       renderedTimeMarkerHits = [];
       gapTooltipEl.classList.add("hidden");
@@ -1120,60 +1938,87 @@
     var minFrequency = null;
     var maxFrequency = null;
     var frequencyBins = null;
+    var effectivePacketBins = null;
     var intensityType = null;
-    for (var i = 0; i < visiblePackets.length; i += 1) {
-      var packet = visiblePackets[i];
-      if (!intensityType && typeof packet.intensityType === "string") {
-        intensityType = packet.intensityType;
-      }
-      var packetBins = getPacketFrequencyBins(packet);
-      if (packetBins && packetBins.length > 1) {
-        frequencyBins = packetBins;
-        minFrequency = packetBins[0];
-        maxFrequency = packetBins[packetBins.length - 1];
-        if (maxFrequency > minFrequency) {
+
+    var hasConfiguredDeviceRange =
+      Number.isFinite(selectedDeviceMinFrequency) &&
+      Number.isFinite(selectedDeviceMaxFrequency) &&
+      selectedDeviceMaxFrequency > selectedDeviceMinFrequency;
+
+    if (hasConfiguredDeviceRange) {
+      minFrequency = selectedDeviceMinFrequency;
+      maxFrequency = selectedDeviceMaxFrequency;
+      effectivePacketBins = null;
+    } else {
+      for (var i = 0; i < visiblePackets.length; i += 1) {
+        var packet = visiblePackets[i];
+        var packetBins = getPacketFrequencyBins(packet);
+        if (packetBins && packetBins.length > 1) {
+          frequencyBins = packetBins;
+          minFrequency = packetBins[0];
+          maxFrequency = packetBins[packetBins.length - 1];
+          if (maxFrequency > minFrequency) {
+            effectivePacketBins = frequencyBins;
+            break;
+          }
+        }
+
+        if (
+          Number.isFinite(packet.minFrequency) &&
+          Number.isFinite(packet.maxFrequency) &&
+          packet.maxFrequency > packet.minFrequency
+        ) {
+          minFrequency = packet.minFrequency;
+          maxFrequency = packet.maxFrequency;
+          break;
+        }
+        if (
+          Number.isFinite(packet.frequencyMin) &&
+          Number.isFinite(packet.frequencyMax) &&
+          packet.frequencyMax > packet.frequencyMin
+        ) {
+          minFrequency = packet.frequencyMin;
+          maxFrequency = packet.frequencyMax;
+          break;
+        }
+
+        var packetSampleRate = Number(packet.sampleRate || packet.sample_rate);
+        if (Number.isFinite(packetSampleRate) && packetSampleRate > 0) {
+          minFrequency = 0;
+          maxFrequency = packetSampleRate / 2;
           break;
         }
       }
 
       if (
-        Number.isFinite(packet.minFrequency) &&
-        Number.isFinite(packet.maxFrequency) &&
-        packet.maxFrequency > packet.minFrequency
+        (!Number.isFinite(minFrequency) || !Number.isFinite(maxFrequency) || maxFrequency <= minFrequency) &&
+        Number.isFinite(selectedDeviceMinFrequency) &&
+        Number.isFinite(selectedDeviceMaxFrequency) &&
+        selectedDeviceMaxFrequency > selectedDeviceMinFrequency
       ) {
-        minFrequency = packet.minFrequency;
-        maxFrequency = packet.maxFrequency;
-        break;
-      }
-      if (
-        Number.isFinite(packet.frequencyMin) &&
-        Number.isFinite(packet.frequencyMax) &&
-        packet.frequencyMax > packet.frequencyMin
-      ) {
-        minFrequency = packet.frequencyMin;
-        maxFrequency = packet.frequencyMax;
-        break;
+        minFrequency = selectedDeviceMinFrequency;
+        maxFrequency = selectedDeviceMaxFrequency;
       }
 
-      var packetSampleRate = Number(packet.sampleRate || packet.sample_rate);
-      if (Number.isFinite(packetSampleRate) && packetSampleRate > 0) {
-        minFrequency = 0;
-        maxFrequency = packetSampleRate / 2;
+      effectivePacketBins = frequencyBins;
+    }
+
+    for (var j = 0; j < visiblePackets.length; j += 1) {
+      if (typeof visiblePackets[j].intensityType === "string") {
+        intensityType = visiblePackets[j].intensityType;
         break;
       }
     }
 
-    if (
-      (!Number.isFinite(minFrequency) || !Number.isFinite(maxFrequency) || maxFrequency <= minFrequency) &&
-      Number.isFinite(selectedDeviceMinFrequency) &&
-      Number.isFinite(selectedDeviceMaxFrequency) &&
-      selectedDeviceMaxFrequency > selectedDeviceMinFrequency
-    ) {
-      minFrequency = selectedDeviceMinFrequency;
-      maxFrequency = selectedDeviceMaxFrequency;
-    }
+    var renderFn =
+      activeLogFrequencyView &&
+      window.LogSpectrogram &&
+      typeof window.LogSpectrogram.renderLogSpectrogram === "function"
+        ? window.LogSpectrogram.renderLogSpectrogram
+        : window.Spectrogram.renderSpectrogram;
 
-    var renderResult = window.Spectrogram.renderSpectrogram({
+    var renderOptionsPayload = {
       canvas: canvas,
       legendCanvas: legendCanvas,
       blocks: visiblePackets,
@@ -1197,12 +2042,31 @@
       debugStatsEnabled: activeDebugStatsEnabled,
       intensityType: intensityType,
       displayGainDb: activeDisplayGainDb,
-      frequencyBins: frequencyBins,
+      frequencyBins: effectivePacketBins,
       minFrequency: minFrequency,
       maxFrequency: maxFrequency,
       displayMinFrequency: displayFrequencyRange ? displayFrequencyRange.min : null,
       displayMaxFrequency: displayFrequencyRange ? displayFrequencyRange.max : null
-    });
+    };
+
+    var renderResult = renderFn(renderOptionsPayload);
+
+    var drawFrequencyAxisLabelsFn =
+      activeLogFrequencyView &&
+      window.LogFrequencyLabels &&
+      typeof window.LogFrequencyLabels.drawLogFrequencyAxisLabels === "function"
+        ? window.LogFrequencyLabels.drawLogFrequencyAxisLabels
+        : null;
+
+    if (drawFrequencyAxisLabelsFn && renderResult && renderResult.layout) {
+      var labelMinFrequency = displayFrequencyRange ? displayFrequencyRange.min : minFrequency;
+      var labelMaxFrequency = displayFrequencyRange ? displayFrequencyRange.max : maxFrequency;
+      if (Number.isFinite(labelMinFrequency) && Number.isFinite(labelMaxFrequency) && labelMaxFrequency > labelMinFrequency) {
+        var canvasContext = canvas.getContext("2d");
+        drawFrequencyAxisLabelsFn(canvasContext, labelMinFrequency, labelMaxFrequency, renderResult.layout);
+      }
+    }
+
     lastRenderMeta = renderResult || null;
     drawTimeMarkersOverlay();
 
@@ -1296,31 +2160,33 @@
         "%";
     }
 
-    historyTableBody.innerHTML = "";
-    visiblePackets.forEach(function (packet) {
-      var startLocal = formatLocalDateTime(packet.startTime || packet.start_time || packet.timestamp);
-      var endLocal = formatLocalDateTime(packet.endTime || packet.end_time || packet.timestamp);
-      var durationMin = Math.max(
-        0,
-        Math.round(
-          (getPacketEndMs(packet) - getPacketStartMs(packet)) / 60000
-        )
-      );
+    if (historyTableBody) {
+      historyTableBody.innerHTML = "";
+      visiblePackets.forEach(function (packet) {
+        var startLocal = formatLocalDateTime(packet.startTime || packet.start_time || packet.timestamp);
+        var endLocal = formatLocalDateTime(packet.endTime || packet.end_time || packet.timestamp);
+        var durationMin = Math.max(
+          0,
+          Math.round(
+            (getPacketEndMs(packet) - getPacketStartMs(packet)) / 60000
+          )
+        );
 
-      var tr = document.createElement("tr");
-      tr.innerHTML =
-        "<td>" +
-        (packet.id || "-") +
-        "</td><td>" +
-        startLocal +
-        "</td><td>" +
-        endLocal +
-        "</td><td>" +
-        durationMin +
-        " د" +
-        "</td>";
-      historyTableBody.appendChild(tr);
-    });
+        var tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" +
+          (packet.id || "-") +
+          "</td><td>" +
+          startLocal +
+          "</td><td>" +
+          endLocal +
+          "</td><td>" +
+          durationMin +
+          " د" +
+          "</td>";
+        historyTableBody.appendChild(tr);
+      });
+    }
   }
 
   function formatMarkerLabelTime(timeMs) {
@@ -1640,7 +2506,7 @@
 
     var dpr = window.devicePixelRatio || 1;
     var cssWidth = Math.max(480, Math.floor(canvas.clientWidth || 960));
-    var cssHeight = Math.max(320, Math.floor((canvas.clientWidth || 960) * 0.43));
+    var cssHeight = Math.max(420, Math.floor((canvas.clientWidth || 960) * 0.62));
     canvas.width = Math.floor(cssWidth * dpr);
     canvas.height = Math.floor(cssHeight * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1941,7 +2807,9 @@
     lastRenderMeta = null;
     gapTooltipEl.classList.add("hidden");
     historyInfoEl.textContent = "جاري تحميل بيانات الجهاز المحدد...";
-    historyTableBody.innerHTML = "";
+    if (historyTableBody) {
+      historyTableBody.innerHTML = "";
+    }
     setSpectrogramLoading(true);
 
     try {
@@ -2017,7 +2885,7 @@
 
     var latestPacket;
     try {
-      latestPacket = await apiRequest("/api/devices/" + selectedDeviceId + "/history/latest");
+      latestPacket = await fetchLatestPacketForDevice(selectedDeviceId);
     } catch (error) {
       var message = error instanceof Error ? error.message : "فشل تحميل آخر باكت";
       if (message === "No packets found for this device") {
@@ -2032,8 +2900,6 @@
       return;
     }
 
-    decodePacketMatrix(latestPacket);
-    normalizePacketTiming(latestPacket);
     var latestStartMs = getPacketStartMs(latestPacket);
     var latestEndMs = getPacketEndMs(latestPacket);
     if (!Number.isFinite(latestStartMs)) {
@@ -2064,6 +2930,933 @@
     setGlobalMessage("تم التركيز على آخر باكت.", false);
   }
 
+  // =========================
+  // Multi-View (up to 4 devices)
+  // =========================
+  function getDeviceById(deviceId) {
+    return devicesCache.find(function (device) {
+      return Number(device.id) === Number(deviceId);
+    });
+  }
+
+  function updateMultiViewPickerLimit() {
+    var checkboxes = multiViewDeviceOptions.querySelectorAll("input[type='checkbox']");
+    var checkedCount = 0;
+
+    checkboxes.forEach(function (checkbox) {
+      if (checkbox.checked) {
+        checkedCount += 1;
+      }
+    });
+
+    var lockFurtherSelection = checkedCount >= 4;
+    checkboxes.forEach(function (checkbox) {
+      checkbox.disabled = lockFurtherSelection && !checkbox.checked;
+    });
+  }
+
+  function getSelectedMultiViewDeviceIds() {
+    var selected = [];
+    var checkboxes = multiViewDeviceOptions.querySelectorAll("input[type='checkbox']");
+
+    checkboxes.forEach(function (checkbox) {
+      if (checkbox.checked) {
+        selected.push(Number(checkbox.value));
+      }
+    });
+
+    return selected.filter(function (value) {
+      return Number.isFinite(value) && value > 0;
+    });
+  }
+
+  function renderMultiViewPicker() {
+    multiViewDeviceOptions.innerHTML = "";
+
+    if (!Array.isArray(devicesCache) || devicesCache.length === 0) {
+      var empty = document.createElement("p");
+      empty.className = "history-info";
+      empty.textContent = "لا توجد أجهزة متاحة.";
+      empty.style.margin = "0";
+      multiViewDeviceOptions.appendChild(empty);
+      return;
+    }
+
+    devicesCache.forEach(function (device) {
+      var row = document.createElement("label");
+      row.style.display = "flex";
+      row.style.alignItems = "center";
+      row.style.gap = "8px";
+      row.style.padding = "8px 10px";
+      row.style.border = "1px solid #d8d8d0";
+      row.style.borderRadius = "8px";
+      row.style.background = "#fff";
+
+      var checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = String(device.id);
+      checkbox.addEventListener("change", updateMultiViewPickerLimit);
+
+      var text = document.createElement("span");
+      text.textContent = device.name;
+
+      row.appendChild(checkbox);
+      row.appendChild(text);
+      multiViewDeviceOptions.appendChild(row);
+    });
+
+    updateMultiViewPickerLimit();
+  }
+
+  function openMultiViewPicker() {
+    renderMultiViewPicker();
+    multiViewPickerModal.classList.remove("hidden");
+    multiViewPickerModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeMultiViewPicker() {
+    multiViewPickerModal.classList.add("hidden");
+    multiViewPickerModal.setAttribute("aria-hidden", "true");
+  }
+
+  function clearMultiViewPanels() {
+    Object.keys(multiViewPanels).forEach(function (panelKey) {
+      var panel = multiViewPanels[panelKey];
+      if (panel) {
+        if (panel.wheelRenderTimer) {
+          clearTimeout(panel.wheelRenderTimer);
+          panel.wheelRenderTimer = null;
+        }
+        panel.packetBuffer = [];
+        panel.lastPacket = null;
+        panel.fullViewWindow = null;
+        panel.viewWindow = null;
+      }
+      if (panel && typeof panel.cleanupInteractions === "function") {
+        panel.cleanupInteractions();
+      }
+    });
+
+    multiViewPanels = {};
+    multiViewGrid.innerHTML = "";
+  }
+
+  function getPacketTimeRange(packet) {
+    var fromMs = getPacketStartMs(packet);
+    var toMs = getPacketEndMs(packet);
+    if (!Number.isFinite(fromMs)) {
+      fromMs = getPacketTimestampMs(packet);
+    }
+    if (!Number.isFinite(toMs)) {
+      toMs = fromMs;
+    }
+    if (!Number.isFinite(fromMs)) {
+      return null;
+    }
+
+    if (!Number.isFinite(toMs) || toMs <= fromMs) {
+      toMs = fromMs + 1000;
+    }
+
+    return {
+      fromMs: fromMs,
+      toMs: toMs
+    };
+  }
+
+  function getMultiViewPanelPacketKey(panel, packet) {
+    if (!packet) {
+      return "";
+    }
+
+    var deviceId = Number(packet.deviceId);
+    if (!Number.isFinite(deviceId) && panel) {
+      deviceId = Number(panel.deviceId);
+    }
+
+    var startMs = getPacketStartMs(packet);
+    var endMs = getPacketEndMs(packet);
+    var timeMs = getPacketTimestampMs(packet);
+    if (!Number.isFinite(startMs)) {
+      startMs = timeMs;
+    }
+    if (!Number.isFinite(endMs)) {
+      endMs = startMs;
+    }
+    if (!Number.isFinite(deviceId) || !Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+      return "";
+    }
+
+    return String(deviceId) + "|" + String(startMs) + "|" + String(endMs);
+  }
+
+  function insertPacketIntoMultiViewBuffer(panel, packet) {
+    if (!panel || !packet) {
+      return;
+    }
+
+    if (!Array.isArray(panel.packetBuffer)) {
+      panel.packetBuffer = [];
+    }
+
+    normalizePacketTiming(packet);
+    var packetTime = getPacketStartMs(packet);
+    if (!Number.isFinite(packetTime)) {
+      return;
+    }
+
+    var packetKey = getMultiViewPanelPacketKey(panel, packet);
+    if (packetKey) {
+      for (var i = 0; i < panel.packetBuffer.length; i += 1) {
+        if (getMultiViewPanelPacketKey(panel, panel.packetBuffer[i]) === packetKey) {
+          panel.packetBuffer[i] = packet;
+          return;
+        }
+      }
+    }
+
+    var low = 0;
+    var high = panel.packetBuffer.length;
+    while (low < high) {
+      var mid = Math.floor((low + high) / 2);
+      var midTime = getPacketStartMs(panel.packetBuffer[mid]);
+      if (!Number.isFinite(midTime) || packetTime < midTime) {
+        high = mid;
+      } else {
+        low = mid + 1;
+      }
+    }
+
+    panel.packetBuffer.splice(low, 0, packet);
+    while (panel.packetBuffer.length > MULTI_VIEW_PANEL_BUFFER_SIZE) {
+      panel.packetBuffer.splice(0, panel.packetBuffer.length - MULTI_VIEW_PANEL_BUFFER_SIZE);
+    }
+  }
+
+  function getMultiViewBufferedPackets(panel, packet) {
+    var previewPanel = {
+      deviceId: panel ? panel.deviceId : null,
+      packetBuffer: panel && Array.isArray(panel.packetBuffer) ? panel.packetBuffer.slice() : []
+    };
+    insertPacketIntoMultiViewBuffer(previewPanel, packet);
+    return previewPanel.packetBuffer;
+  }
+
+  function getMultiViewFullWindowFromPackets(device, packets) {
+    if (!Array.isArray(packets) || !packets.length) {
+      return null;
+    }
+
+    var fromMs = NaN;
+    var toMs = NaN;
+    var minFrequency = NaN;
+    var maxFrequency = NaN;
+
+    for (var i = 0; i < packets.length; i += 1) {
+      var packet = packets[i];
+      var range = getPacketTimeRange(packet);
+      if (range) {
+        if (!Number.isFinite(fromMs) || range.fromMs < fromMs) {
+          fromMs = range.fromMs;
+        }
+        if (!Number.isFinite(toMs) || range.toMs > toMs) {
+          toMs = range.toMs;
+        }
+      }
+
+      var frequencyRange = resolvePacketFrequencyRange(device, packet, getPacketFrequencyBins(packet));
+      if (!Number.isFinite(minFrequency) || frequencyRange.min < minFrequency) {
+        minFrequency = frequencyRange.min;
+      }
+      if (!Number.isFinite(maxFrequency) || frequencyRange.max > maxFrequency) {
+        maxFrequency = frequencyRange.max;
+      }
+    }
+
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) {
+      return null;
+    }
+
+    return {
+      fromMs: fromMs,
+      toMs: toMs,
+      minFrequency: minFrequency,
+      maxFrequency: maxFrequency
+    };
+  }
+
+  function resolvePacketFrequencyRange(device, packet, frequencyBins) {
+    if (Array.isArray(frequencyBins) && frequencyBins.length > 1) {
+      var minBin = Number(frequencyBins[0]);
+      var maxBin = Number(frequencyBins[frequencyBins.length - 1]);
+      if (Number.isFinite(minBin) && Number.isFinite(maxBin) && maxBin > minBin) {
+        return { min: minBin, max: maxBin };
+      }
+    }
+
+    var packetMin = Number(packet && (packet.minFrequency || packet.frequencyMin));
+    var packetMax = Number(packet && (packet.maxFrequency || packet.frequencyMax));
+    if (Number.isFinite(packetMin) && Number.isFinite(packetMax) && packetMax > packetMin) {
+      return { min: packetMin, max: packetMax };
+    }
+
+    var deviceMin = Number(device && device.minFrequency);
+    var deviceMax = Number(device && device.maxFrequency);
+    if (Number.isFinite(deviceMin) && Number.isFinite(deviceMax) && deviceMax > deviceMin) {
+      return { min: deviceMin, max: deviceMax };
+    }
+
+    return { min: 30, max: 8000 };
+  }
+
+  function cloneMultiViewWindow(viewWindow) {
+    if (!viewWindow) {
+      return null;
+    }
+
+    return {
+      fromMs: Number(viewWindow.fromMs),
+      toMs: Number(viewWindow.toMs),
+      minFrequency: Number(viewWindow.minFrequency),
+      maxFrequency: Number(viewWindow.maxFrequency)
+    };
+  }
+
+  function clampWindowSegment(startValue, endValue, fullStart, fullEnd, minSpan) {
+    var fullSpan = fullEnd - fullStart;
+    if (!Number.isFinite(fullSpan) || fullSpan <= 0) {
+      return { start: fullStart, end: fullEnd };
+    }
+
+    var nextMinSpan = Number.isFinite(minSpan) ? Math.max(1e-6, minSpan) : 1e-6;
+    nextMinSpan = Math.min(fullSpan, nextMinSpan);
+
+    var start = Number(startValue);
+    var end = Number(endValue);
+    var span = end - start;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(span) || span <= 0) {
+      start = fullStart;
+      end = fullEnd;
+      span = fullSpan;
+    }
+
+    span = clamp(span, nextMinSpan, fullSpan);
+
+    var center = (start + end) / 2;
+    if (!Number.isFinite(center)) {
+      center = fullStart + fullSpan / 2;
+    }
+
+    start = center - span / 2;
+    end = center + span / 2;
+
+    if (start < fullStart) {
+      end += fullStart - start;
+      start = fullStart;
+    }
+    if (end > fullEnd) {
+      start -= end - fullEnd;
+      end = fullEnd;
+    }
+    if (start < fullStart) {
+      start = fullStart;
+    }
+    if (end > fullEnd) {
+      end = fullEnd;
+    }
+
+    return {
+      start: start,
+      end: end
+    };
+  }
+
+  function normalizeMultiViewWindow(fullWindow, nextWindow) {
+    if (!fullWindow) {
+      return null;
+    }
+
+    var timeMinSpan = Math.max(250, (fullWindow.toMs - fullWindow.fromMs) * 0.03);
+    var freqMinSpan = Math.max(1, (fullWindow.maxFrequency - fullWindow.minFrequency) * 0.03);
+    var timeRange = clampWindowSegment(nextWindow && nextWindow.fromMs, nextWindow && nextWindow.toMs, fullWindow.fromMs, fullWindow.toMs, timeMinSpan);
+    var freqRange = clampWindowSegment(
+      nextWindow && nextWindow.minFrequency,
+      nextWindow && nextWindow.maxFrequency,
+      fullWindow.minFrequency,
+      fullWindow.maxFrequency,
+      freqMinSpan
+    );
+
+    return {
+      fromMs: timeRange.start,
+      toMs: timeRange.end,
+      minFrequency: freqRange.start,
+      maxFrequency: freqRange.end
+    };
+  }
+
+  function isMultiViewWindowFull(viewWindow, fullWindow) {
+    if (!viewWindow || !fullWindow) {
+      return true;
+    }
+
+    return (
+      Math.abs(viewWindow.fromMs - fullWindow.fromMs) < 1e-6 &&
+      Math.abs(viewWindow.toMs - fullWindow.toMs) < 1e-6 &&
+      Math.abs(viewWindow.minFrequency - fullWindow.minFrequency) < 1e-6 &&
+      Math.abs(viewWindow.maxFrequency - fullWindow.maxFrequency) < 1e-6
+    );
+  }
+
+  function remapMultiViewWindow(previousViewWindow, previousFullWindow, nextFullWindow) {
+    if (!previousViewWindow || !previousFullWindow || !nextFullWindow) {
+      return cloneMultiViewWindow(nextFullWindow);
+    }
+
+    var prevTimeSpan = previousFullWindow.toMs - previousFullWindow.fromMs;
+    var prevFreqSpan = previousFullWindow.maxFrequency - previousFullWindow.minFrequency;
+    if (!Number.isFinite(prevTimeSpan) || prevTimeSpan <= 0 || !Number.isFinite(prevFreqSpan) || prevFreqSpan <= 0) {
+      return cloneMultiViewWindow(nextFullWindow);
+    }
+
+    var timeFromRatio = (previousViewWindow.fromMs - previousFullWindow.fromMs) / prevTimeSpan;
+    var timeToRatio = (previousViewWindow.toMs - previousFullWindow.fromMs) / prevTimeSpan;
+    var freqMinRatio = (previousViewWindow.minFrequency - previousFullWindow.minFrequency) / prevFreqSpan;
+    var freqMaxRatio = (previousViewWindow.maxFrequency - previousFullWindow.minFrequency) / prevFreqSpan;
+
+    if (!Number.isFinite(timeFromRatio)) {
+      timeFromRatio = 0;
+    }
+    if (!Number.isFinite(timeToRatio)) {
+      timeToRatio = 1;
+    }
+    if (!Number.isFinite(freqMinRatio)) {
+      freqMinRatio = 0;
+    }
+    if (!Number.isFinite(freqMaxRatio)) {
+      freqMaxRatio = 1;
+    }
+
+    timeFromRatio = clamp(timeFromRatio, 0, 1);
+    timeToRatio = clamp(timeToRatio, 0, 1);
+    freqMinRatio = clamp(freqMinRatio, 0, 1);
+    freqMaxRatio = clamp(freqMaxRatio, 0, 1);
+
+    if (timeToRatio <= timeFromRatio) {
+      timeFromRatio = 0;
+      timeToRatio = 1;
+    }
+    if (freqMaxRatio <= freqMinRatio) {
+      freqMinRatio = 0;
+      freqMaxRatio = 1;
+    }
+
+    var nextTimeSpan = nextFullWindow.toMs - nextFullWindow.fromMs;
+    var nextFreqSpan = nextFullWindow.maxFrequency - nextFullWindow.minFrequency;
+
+    return {
+      fromMs: nextFullWindow.fromMs + nextTimeSpan * timeFromRatio,
+      toMs: nextFullWindow.fromMs + nextTimeSpan * timeToRatio,
+      minFrequency: nextFullWindow.minFrequency + nextFreqSpan * freqMinRatio,
+      maxFrequency: nextFullWindow.minFrequency + nextFreqSpan * freqMaxRatio
+    };
+  }
+
+  function updateMultiViewPanelCursor(panel) {
+    if (!panel || !panel.canvas) {
+      return;
+    }
+
+    if (panel.dragState && panel.dragState.active) {
+      panel.canvas.style.cursor = "grabbing";
+      return;
+    }
+
+    panel.canvas.style.cursor = isMultiViewWindowFull(panel.viewWindow, panel.fullViewWindow) ? "crosshair" : "grab";
+  }
+
+  function syncMultiViewCanvasResolution(panel) {
+    if (!panel || !panel.canvas) {
+      return false;
+    }
+
+    var rect = typeof panel.canvas.getBoundingClientRect === "function" ? panel.canvas.getBoundingClientRect() : null;
+    var cssWidth = Math.max(1, Math.floor((rect && rect.width) || panel.canvas.clientWidth || 0));
+    var cssHeight = Math.max(1, Math.floor((rect && rect.height) || panel.canvas.clientHeight || 0));
+    if (!cssWidth || !cssHeight) {
+      return false;
+    }
+
+    var dpr = window.devicePixelRatio || 1;
+    var nextWidth = Math.max(1, Math.floor(cssWidth * dpr));
+    var nextHeight = Math.max(1, Math.floor(cssHeight * dpr));
+    if (panel.canvas.width === nextWidth && panel.canvas.height === nextHeight) {
+      return false;
+    }
+
+    panel.canvas.width = nextWidth;
+    panel.canvas.height = nextHeight;
+    return true;
+  }
+
+  function scheduleMultiViewSettledRender(panel) {
+    if (!panel) {
+      return;
+    }
+
+    if (panel.wheelRenderTimer) {
+      clearTimeout(panel.wheelRenderTimer);
+    }
+
+    panel.wheelRenderTimer = setTimeout(function () {
+      panel.wheelRenderTimer = null;
+      rerenderMultiViewPanel(panel, { fastMode: false });
+    }, 130);
+  }
+
+  function renderMultiViewPanel(panel, packet, options) {
+    if (!panel || !packet) {
+      return;
+    }
+
+    var renderOptions = options || {};
+
+    insertPacketIntoMultiViewBuffer(panel, packet);
+    if (!Array.isArray(panel.packetBuffer) || !panel.packetBuffer.length) {
+      return;
+    }
+
+    var fullWindow = getMultiViewFullWindowFromPackets(panel.device, panel.packetBuffer);
+    if (!fullWindow) {
+      return;
+    }
+
+    panel.fullViewWindow = fullWindow;
+
+    panel.viewWindow = normalizeMultiViewWindow(panel.fullViewWindow, panel.viewWindow || panel.fullViewWindow);
+    syncMultiViewCanvasResolution(panel);
+
+    var viewWindow = panel.viewWindow;
+    var hasDisplayFrequencyRange = !isMultiViewWindowFull(viewWindow, fullWindow);
+    var latestPacket = panel.packetBuffer[panel.packetBuffer.length - 1] || packet;
+    var intensityType = null;
+    var frequencyBins = null;
+
+    for (var i = 0; i < panel.packetBuffer.length; i += 1) {
+      var bufferedPacket = panel.packetBuffer[i];
+      if (!intensityType && typeof bufferedPacket.intensityType === "string") {
+        intensityType = bufferedPacket.intensityType;
+      }
+
+      var packetBins = getPacketFrequencyBins(bufferedPacket);
+      if (packetBins && packetBins.length > 1) {
+        frequencyBins = packetBins;
+        break;
+      }
+    }
+
+    window.Spectrogram.renderSpectrogram({
+      canvas: panel.canvas,
+      legendCanvas: null,
+      blocks: panel.packetBuffer,
+      from: formatNaiveDateTimeMs(viewWindow.fromMs, true),
+      to: formatNaiveDateTimeMs(viewWindow.toMs, true),
+      fastMode: !!renderOptions.fastMode,
+      assumeSorted: true,
+      intensityMode: activeIntensityMode,
+      dbMin: activeDbMin,
+      dbMax: activeDbMax,
+      percentileLow: activePercentileLow,
+      percentileHigh: activePercentileHigh,
+      compareView: activeCompareView,
+      noiseSuppressionEnabled: activeNoiseSuppressionEnabled,
+      noiseFloorPercentile: activeNoiseFloorPercentile,
+      noiseThreshold: activeNoiseThreshold,
+      isolatedPixelRemovalEnabled: activeIsolatedPixelRemovalEnabled,
+      minActiveNeighbors: activeMinActiveNeighbors,
+      neighborhoodSize: activeNeighborhoodSize,
+      bucketAggregation: activeBucketAggregation,
+      debugStatsEnabled: false,
+      intensityType: intensityType || latestPacket.intensityType,
+      displayGainDb: activeDisplayGainDb,
+      frequencyBins: frequencyBins,
+      minFrequency: fullWindow.minFrequency,
+      maxFrequency: fullWindow.maxFrequency,
+      displayMinFrequency: hasDisplayFrequencyRange ? viewWindow.minFrequency : null,
+      displayMaxFrequency: hasDisplayFrequencyRange ? viewWindow.maxFrequency : null
+    });
+
+    panel.lastPacket = latestPacket;
+    updateMultiViewPanelCursor(panel);
+  }
+
+  function rerenderMultiViewPanel(panel, options) {
+    if (!panel || !panel.lastPacket) {
+      return;
+    }
+
+    renderMultiViewPanel(panel, panel.lastPacket, options);
+  }
+
+  function resetMultiViewViewWindow(panel) {
+    if (!panel || !Array.isArray(panel.packetBuffer) || !panel.packetBuffer.length) {
+      return;
+    }
+
+    var nextFullWindow = getMultiViewFullWindowFromPackets(panel.device, panel.packetBuffer);
+    if (!nextFullWindow) {
+      return;
+    }
+
+    panel.fullViewWindow = nextFullWindow;
+    panel.viewWindow = cloneMultiViewWindow(nextFullWindow);
+    rerenderMultiViewPanel(panel);
+  }
+
+  function attachMultiViewMouseInteractions(panel) {
+    if (!panel || !panel.canvas) {
+      return function () {};
+    }
+
+    var onResize = function () {
+      if (!panel.lastPacket) {
+        syncMultiViewCanvasResolution(panel);
+        return;
+      }
+
+      if (syncMultiViewCanvasResolution(panel)) {
+        rerenderMultiViewPanel(panel, { fastMode: false });
+      }
+    };
+
+    var onWheel = function (event) {
+      if (!panel.lastPacket || !panel.fullViewWindow) {
+        return;
+      }
+
+      event.preventDefault();
+
+      var rect = panel.canvas.getBoundingClientRect();
+      var width = Math.max(1, rect.width || 1);
+      var timeAnchorFraction = clamp((event.clientX - rect.left) / width, 0, 1);
+      var fullWindow = panel.fullViewWindow;
+      var currentWindow = normalizeMultiViewWindow(fullWindow, panel.viewWindow || fullWindow);
+      var factor = Number(event.deltaY) < 0 ? 0.88 : 1 / 0.88;
+      var currentTimeSpan = currentWindow.toMs - currentWindow.fromMs;
+      var nextTimeSpan = currentTimeSpan * factor;
+      var anchorTimeMs = currentWindow.fromMs + currentTimeSpan * timeAnchorFraction;
+
+      panel.viewWindow = normalizeMultiViewWindow(fullWindow, {
+        fromMs: anchorTimeMs - nextTimeSpan * timeAnchorFraction,
+        toMs: anchorTimeMs + nextTimeSpan * (1 - timeAnchorFraction),
+        minFrequency: fullWindow.minFrequency,
+        maxFrequency: fullWindow.maxFrequency
+      });
+
+      rerenderMultiViewPanel(panel, { fastMode: true });
+      scheduleMultiViewSettledRender(panel);
+    };
+
+    var onMouseDown = function (event) {
+      if (event.button !== 0 || !panel.lastPacket || !panel.fullViewWindow) {
+        return;
+      }
+
+      panel.viewWindow = normalizeMultiViewWindow(panel.fullViewWindow, panel.viewWindow || panel.fullViewWindow);
+      if (isMultiViewWindowFull(panel.viewWindow, panel.fullViewWindow)) {
+        return;
+      }
+
+      panel.dragState.active = true;
+      panel.dragState.startX = event.clientX;
+      panel.dragState.startY = event.clientY;
+      panel.dragState.startWindow = cloneMultiViewWindow(panel.viewWindow);
+      updateMultiViewPanelCursor(panel);
+      event.preventDefault();
+    };
+
+    var onMouseMove = function (event) {
+      if (!panel.dragState.active || !panel.fullViewWindow || !panel.dragState.startWindow) {
+        return;
+      }
+
+      var rect = panel.canvas.getBoundingClientRect();
+      var width = Math.max(1, rect.width || 1);
+      var dx = event.clientX - panel.dragState.startX;
+      var startWindow = panel.dragState.startWindow;
+      var timeSpan = startWindow.toMs - startWindow.fromMs;
+      var timeShift = (-dx / width) * timeSpan;
+
+      panel.viewWindow = normalizeMultiViewWindow(panel.fullViewWindow, {
+        fromMs: startWindow.fromMs + timeShift,
+        toMs: startWindow.toMs + timeShift,
+        minFrequency: panel.fullViewWindow.minFrequency,
+        maxFrequency: panel.fullViewWindow.maxFrequency
+      });
+
+      rerenderMultiViewPanel(panel, { fastMode: true });
+    };
+
+    var stopDragging = function () {
+      if (!panel.dragState.active) {
+        return;
+      }
+
+      panel.dragState.active = false;
+      panel.dragState.startWindow = null;
+      updateMultiViewPanelCursor(panel);
+      rerenderMultiViewPanel(panel, { fastMode: false });
+    };
+
+    var onDoubleClick = function (event) {
+      if (!panel.fullViewWindow) {
+        return;
+      }
+
+      event.preventDefault();
+      resetMultiViewViewWindow(panel);
+    };
+
+    panel.canvas.addEventListener("wheel", onWheel, { passive: false });
+    panel.canvas.addEventListener("mousedown", onMouseDown);
+    panel.canvas.addEventListener("dblclick", onDoubleClick);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", stopDragging);
+    window.addEventListener("blur", stopDragging);
+    window.addEventListener("resize", onResize);
+
+    updateMultiViewPanelCursor(panel);
+
+    return function cleanup() {
+      panel.canvas.removeEventListener("wheel", onWheel);
+      panel.canvas.removeEventListener("mousedown", onMouseDown);
+      panel.canvas.removeEventListener("dblclick", onDoubleClick);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", stopDragging);
+      window.removeEventListener("blur", stopDragging);
+      window.removeEventListener("resize", onResize);
+    };
+  }
+
+  function renderMultiViewPacket(deviceId, packet, options) {
+    if (!multiViewOpen) {
+      return;
+    }
+
+    var panel = multiViewPanels[String(deviceId)];
+    if (!panel || !packet || typeof packet !== "object") {
+      return;
+    }
+
+    decodePacketMatrix(packet);
+    normalizePacketTiming(packet);
+    var range = getPacketTimeRange(packet);
+    if (!range) {
+      return;
+    }
+
+    var device = panel.device || getDeviceById(deviceId);
+    var nextBufferedPackets = getMultiViewBufferedPackets(panel, packet);
+    var nextFullWindow = getMultiViewFullWindowFromPackets(device, nextBufferedPackets);
+    if (!nextFullWindow) {
+      return;
+    }
+    var previousFullWindow = cloneMultiViewWindow(panel.fullViewWindow);
+    var previousViewWindow = cloneMultiViewWindow(panel.viewWindow);
+
+    panel.fullViewWindow = nextFullWindow;
+    if (options && options.preserveViewWindow && previousViewWindow) {
+      panel.viewWindow = normalizeMultiViewWindow(nextFullWindow, previousViewWindow);
+    } else if (!previousFullWindow || !previousViewWindow || isMultiViewWindowFull(previousViewWindow, previousFullWindow)) {
+      panel.viewWindow = cloneMultiViewWindow(nextFullWindow);
+    } else {
+      panel.viewWindow = normalizeMultiViewWindow(
+        nextFullWindow,
+        remapMultiViewWindow(previousViewWindow, previousFullWindow, nextFullWindow)
+      );
+    }
+
+    renderMultiViewPanel(panel, packet);
+  }
+
+  async function fetchLatestPacketForDevice(deviceId) {
+    var latestPacket = await apiRequest("/api/devices/" + deviceId + "/history/latest");
+    if (!latestPacket || typeof latestPacket !== "object") {
+      return null;
+    }
+    decodePacketMatrix(latestPacket);
+    normalizePacketTiming(latestPacket);
+    return latestPacket;
+  }
+
+  async function fetchLatestPacketsForDevice(deviceId, count) {
+    var latestPackets = await apiRequest(
+      "/api/devices/" + deviceId + "/history/latest-batch?count=" + encodeURIComponent(String(count))
+    );
+    if (!Array.isArray(latestPackets)) {
+      return [];
+    }
+
+    return latestPackets
+      .filter(function (packet) {
+        return packet && typeof packet === "object";
+      })
+      .map(function (packet) {
+        decodePacketMatrix(packet);
+        normalizePacketTiming(packet);
+        return packet;
+      });
+  }
+
+  async function seedMultiViewPanels(deviceIds) {
+    var tasks = deviceIds.map(async function (deviceId) {
+      try {
+        var latestPackets = await fetchLatestPacketsForDevice(deviceId, MULTI_VIEW_PANEL_BUFFER_SIZE);
+        for (var i = 0; i < latestPackets.length; i += 1) {
+          // Intentionally render in order so existing window-fit logic expands to full seeded span.
+          await Promise.resolve(renderMultiViewPacket(deviceId, latestPackets[i]));
+        }
+      } catch (_error) {
+        // Ignore devices that do not have packets yet.
+      }
+    });
+
+    await Promise.all(tasks);
+  }
+
+  function buildMultiViewPanel(device) {
+    var wrapper = document.createElement("div");
+    wrapper.style.border = "1px solid rgba(255,255,255,0.18)";
+    wrapper.style.background = "#0b101a";
+    wrapper.style.padding = "0";
+    wrapper.style.minHeight = "0";
+    wrapper.style.minWidth = "0";
+    wrapper.style.position = "relative";
+    wrapper.style.overflow = "hidden";
+
+    var canvasWrap = document.createElement("div");
+    canvasWrap.style.height = "100%";
+    canvasWrap.style.width = "100%";
+    canvasWrap.style.overflow = "hidden";
+    canvasWrap.style.position = "relative";
+    canvasWrap.style.minHeight = "0";
+    canvasWrap.style.minWidth = "0";
+
+    var title = document.createElement("span");
+    title.textContent = device.name;
+    title.style.color = "#eaf1ff";
+    title.style.fontSize = "11px";
+    title.style.fontWeight = "600";
+    title.style.position = "absolute";
+    title.style.top = "4px";
+    title.style.left = "4px";
+    title.style.zIndex = "2";
+    title.style.padding = "2px 6px";
+    title.style.borderRadius = "4px";
+    title.style.background = "rgba(3, 8, 16, 0.52)";
+    title.style.pointerEvents = "none";
+    title.style.userSelect = "none";
+
+    var canvasEl = document.createElement("canvas");
+    canvasEl.width = 960;
+    canvasEl.height = 420;
+    canvasEl.style.width = "100%";
+    canvasEl.style.height = "100%";
+    canvasEl.style.background = "#090b15";
+    canvasEl.style.display = "block";
+
+    canvasWrap.appendChild(canvasEl);
+    canvasWrap.appendChild(title);
+    wrapper.appendChild(canvasWrap);
+
+    return {
+      wrapper: wrapper,
+      canvas: canvasEl,
+      canvasWrap: canvasWrap,
+      title: title
+    };
+  }
+
+  async function openMultiViewOverlay(deviceIds) {
+    clearMultiViewPanels();
+
+    var selectedDevices = deviceIds
+      .map(getDeviceById)
+      .filter(function (device) {
+        return !!device;
+      })
+      .slice(0, 4);
+
+    if (!selectedDevices.length) {
+      setGlobalMessage("اختر جهازًا واحدًا على الأقل للعرض المتعدد", true);
+      return;
+    }
+
+    var columns = selectedDevices.length === 1 ? 1 : 2;
+    multiViewGrid.style.gridTemplateColumns = "repeat(" + columns + ", minmax(0, 1fr))";
+    multiViewGrid.style.gridAutoRows = "minmax(0, 1fr)";
+    multiViewGrid.style.width = "100vw";
+    multiViewGrid.style.height = "100vh";
+    multiViewGrid.style.gap = "1px";
+
+    selectedDevices.forEach(function (device) {
+      var panel = buildMultiViewPanel(device);
+      var panelState = {
+        device: device,
+        deviceId: device.id,
+        canvas: panel.canvas,
+        canvasWrap: panel.canvasWrap,
+        title: panel.title,
+        packetBuffer: [],
+        lastPacket: null,
+        fullViewWindow: null,
+        viewWindow: null,
+        dragState: {
+          active: false,
+          startX: 0,
+          startY: 0,
+          startWindow: null
+        },
+        wheelRenderTimer: null,
+        cleanupInteractions: null
+      };
+      panelState.cleanupInteractions = attachMultiViewMouseInteractions(panelState);
+      multiViewPanels[String(device.id)] = panelState;
+      multiViewGrid.appendChild(panel.wrapper);
+      syncMultiViewCanvasResolution(panelState);
+    });
+
+    multiViewOpen = true;
+    multiViewOverlay.classList.remove("hidden");
+    multiViewOverlay.setAttribute("aria-hidden", "false");
+
+    await seedMultiViewPanels(
+      selectedDevices.map(function (device) {
+        return Number(device.id);
+      })
+    );
+  }
+
+  function closeMultiViewOverlay() {
+    multiViewOpen = false;
+    multiViewOverlay.classList.add("hidden");
+    multiViewOverlay.setAttribute("aria-hidden", "true");
+    clearMultiViewPanels();
+  }
+
+  function handleMultiViewLivePayload(payload) {
+    if (!multiViewOpen || !payload) {
+      return;
+    }
+
+    var deviceId = Number(payload.deviceId);
+    if (!Number.isFinite(deviceId) || !multiViewPanels[String(deviceId)]) {
+      return;
+    }
+
+    renderMultiViewPacket(deviceId, payload);
+  }
+
   async function selectDevice(device) {
     selectedDeviceId = device.id;
     selectedDeviceName = device.name;
@@ -2083,6 +3876,10 @@
         ? selectedDeviceMinFrequency + " Hz -> " + selectedDeviceMaxFrequency + " Hz"
         : "غير مضبوط");
     setActiveDevice(device.id);
+    emitDashboardBridgeEvent("dashboard:device-selected", {
+      deviceId: Number(device.id),
+      device: device
+    });
     await loadDeviceHistory(device.id, null, null, {
       liveWindowMs: DEFAULT_LIVE_WINDOW_MS,
       modeLabel: "latest30m"
@@ -2102,7 +3899,13 @@
   async function loadDevices() {
     devicesCache = await apiRequest("/api/devices");
     renderDeviceSidebar();
-    renderDevicesTable();
+    emitDashboardBridgeEvent("dashboard:devices-loaded", {
+      devices: devicesCache.slice(),
+      selectedDeviceId: selectedDeviceId
+    });
+    if (isAdmin) {
+      await loadDevicesWithStatus();
+    }
     renderUserDeviceOptions();
 
     if (devicesCache.length > 0) {
@@ -2119,7 +3922,9 @@
     } else {
       selectedDeviceTitleEl.textContent = "لا توجد أجهزة";
       historyInfoEl.textContent = "قم بإنشاء أجهزة عبر الـAPI بصلاحية مدير.";
-      historyTableBody.innerHTML = "";
+      if (historyTableBody) {
+        historyTableBody.innerHTML = "";
+      }
       sideDeviceInfoEl.textContent = "لا يوجد جهاز محدد.";
     }
   }
@@ -2152,7 +3957,197 @@
     updateUserDeviceAssignmentVisibility();
     clearUserDeviceSelections();
     userSaveBtn.textContent = "إضافة مستخدم";
+    userModalTitle.textContent = "إضافة مستخدم";
     userFormMessage.textContent = "";
+  }
+
+  function openUserModal() {
+    userModal.classList.remove("hidden");
+    userModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeUserModal() {
+    userModal.classList.add("hidden");
+    userModal.setAttribute("aria-hidden", "true");
+  }
+
+  function hasResettableMobileDeviceBinding(userEntry) {
+    var mobileDeviceId = typeof userEntry.mobileDeviceId === "string" ? userEntry.mobileDeviceId.trim() : "";
+    if (!mobileDeviceId) {
+      return false;
+    }
+
+    var status = typeof userEntry.mobileDeviceStatus === "string" ? userEntry.mobileDeviceStatus.trim().toLowerCase() : "";
+    return status === "approved";
+  }
+
+  async function loadPendingDeviceRequests() {
+    if (!isAdmin || !pendingDevicesTableBody || !pendingDevicesMessage) {
+      return;
+    }
+
+    try {
+      var pendingUsers = await apiRequest("/api/users/pending-devices");
+      pendingDevicesTableBody.innerHTML = "";
+
+      if (!Array.isArray(pendingUsers) || pendingUsers.length === 0) {
+        pendingDevicesMessage.textContent = "لا توجد طلبات أجهزة بانتظار الموافقة.";
+        return;
+      }
+
+      pendingDevicesMessage.textContent = "";
+      pendingUsers.forEach(function (entry) {
+        var tr = document.createElement("tr");
+
+        var idCell = document.createElement("td");
+        idCell.textContent = String(entry.id || "-");
+        tr.appendChild(idCell);
+
+        var nameCell = document.createElement("td");
+        nameCell.textContent = entry.name || "-";
+        tr.appendChild(nameCell);
+
+        var usernameCell = document.createElement("td");
+        usernameCell.textContent = entry.username || "-";
+        tr.appendChild(usernameCell);
+
+        var deviceIdCell = document.createElement("td");
+        deviceIdCell.textContent = entry.mobileDeviceId || "-";
+        tr.appendChild(deviceIdCell);
+
+        var firstSeenCell = document.createElement("td");
+        firstSeenCell.textContent = entry.mobileDeviceFirstSeenAt ? formatLocalDateTime(entry.mobileDeviceFirstSeenAt) : "-";
+        tr.appendChild(firstSeenCell);
+
+        var actionCell = document.createElement("td");
+        actionCell.className = "action-buttons";
+        var approveBtn = document.createElement("button");
+        approveBtn.type = "button";
+        approveBtn.className = "ghost-btn";
+        approveBtn.textContent = "موافقة";
+        approveBtn.addEventListener("click", async function () {
+          try {
+            await apiRequest("/api/users/" + entry.id + "/approve-device", { method: "POST" });
+            await loadUsersPanelData();
+            setGlobalMessage("تمت الموافقة على جهاز الموبايل", false);
+          } catch (error) {
+            setGlobalMessage(error instanceof Error ? error.message : "فشل اعتماد الجهاز", true);
+          }
+        });
+
+        var rejectBtn = document.createElement("button");
+        rejectBtn.type = "button";
+        rejectBtn.className = "danger-btn";
+        rejectBtn.textContent = "رفض";
+        rejectBtn.addEventListener("click", async function () {
+          if (!window.confirm("هل تريد رفض طلب جهاز الموبايل للمستخدم " + entry.username + "؟")) {
+            return;
+          }
+
+          try {
+            await apiRequest("/api/users/" + entry.id + "/reset-device", { method: "POST" });
+            await loadUsersPanelData();
+            setGlobalMessage("تم رفض طلب جهاز الموبايل", false);
+          } catch (error) {
+            setGlobalMessage(error instanceof Error ? error.message : "فشل رفض الطلب", true);
+          }
+        });
+
+        actionCell.appendChild(approveBtn);
+        actionCell.appendChild(rejectBtn);
+        tr.appendChild(actionCell);
+        pendingDevicesTableBody.appendChild(tr);
+      });
+    } catch (error) {
+      pendingDevicesTableBody.innerHTML = "";
+      pendingDevicesMessage.textContent = "تعذر تحميل طلبات أجهزة الموبايل.";
+      setGlobalMessage(error instanceof Error ? error.message : "فشل تحميل طلبات الأجهزة", true);
+    }
+  }
+
+  async function loadDeviceChangeRequests() {
+    if (!isAdmin || !deviceChangeRequestsTableBody || !deviceChangeRequestsMessage) {
+      return;
+    }
+
+    try {
+      var changeRequests = await apiRequest("/api/users/device-change-requests");
+      deviceChangeRequestsTableBody.innerHTML = "";
+
+      if (!Array.isArray(changeRequests) || changeRequests.length === 0) {
+        deviceChangeRequestsMessage.textContent = "لا توجد طلبات تغيير جهاز حالياً.";
+        return;
+      }
+
+      deviceChangeRequestsMessage.textContent = "";
+      changeRequests.forEach(function (entry) {
+        var tr = document.createElement("tr");
+
+        var userCell = document.createElement("td");
+        userCell.textContent = (entry.name || "-") + " (" + (entry.username || "-") + ")";
+        tr.appendChild(userCell);
+
+        var currentDeviceCell = document.createElement("td");
+        currentDeviceCell.textContent = entry.mobileDeviceId || "-";
+        tr.appendChild(currentDeviceCell);
+
+        var requestedDeviceCell = document.createElement("td");
+        requestedDeviceCell.textContent = entry.mobileDeviceChangeRequestId || "-";
+        tr.appendChild(requestedDeviceCell);
+
+        var requestedAtCell = document.createElement("td");
+        requestedAtCell.textContent = entry.mobileDeviceChangeRequestedAt ? formatLocalDateTime(entry.mobileDeviceChangeRequestedAt) : "-";
+        tr.appendChild(requestedAtCell);
+
+        var actionCell = document.createElement("td");
+        actionCell.className = "action-buttons";
+
+        var approveBtn = document.createElement("button");
+        approveBtn.type = "button";
+        approveBtn.className = "ghost-btn";
+        approveBtn.textContent = "اعتماد التغيير";
+        approveBtn.addEventListener("click", async function () {
+          try {
+            await apiRequest("/api/users/" + entry.id + "/approve-device-change", { method: "POST" });
+            await loadUsersPanelData();
+            setGlobalMessage("تم اعتماد تغيير الجهاز", false);
+          } catch (error) {
+            setGlobalMessage(error instanceof Error ? error.message : "فشل اعتماد تغيير الجهاز", true);
+          }
+        });
+
+        var rejectBtn = document.createElement("button");
+        rejectBtn.type = "button";
+        rejectBtn.className = "danger-btn";
+        rejectBtn.textContent = "رفض";
+        rejectBtn.addEventListener("click", async function () {
+          try {
+            await apiRequest("/api/users/" + entry.id + "/reject-device-change", { method: "POST" });
+            await loadUsersPanelData();
+            setGlobalMessage("تم رفض طلب تغيير الجهاز", false);
+          } catch (error) {
+            setGlobalMessage(error instanceof Error ? error.message : "فشل رفض طلب تغيير الجهاز", true);
+          }
+        });
+
+        actionCell.appendChild(approveBtn);
+        actionCell.appendChild(rejectBtn);
+        tr.appendChild(actionCell);
+        deviceChangeRequestsTableBody.appendChild(tr);
+      });
+    } catch (error) {
+      deviceChangeRequestsTableBody.innerHTML = "";
+      deviceChangeRequestsMessage.textContent = "تعذر تحميل طلبات تغيير الجهاز.";
+      setGlobalMessage(error instanceof Error ? error.message : "فشل تحميل طلبات تغيير الجهاز", true);
+    }
+  }
+
+  async function loadUsersPanelData() {
+    if (!isAdmin) {
+      return;
+    }
+
+    await Promise.all([loadUsers(), loadPendingDeviceRequests(), loadDeviceChangeRequests()]);
   }
 
   function clearUserDeviceSelections() {
@@ -2233,11 +4228,169 @@
     editingDeviceId = null;
     deviceIdInput.value = "";
     deviceNameInput.value = "";
+    deviceExternalDeviceIdInput.value = "";
     deviceDescriptionInput.value = "";
     deviceMinFrequencyInput.value = "";
     deviceMaxFrequencyInput.value = "";
     deviceSaveBtn.textContent = "إضافة جهاز";
+    deviceModalTitle.textContent = "إضافة جهاز";
     deviceFormMessage.textContent = "";
+  }
+
+  function openDeviceModal() {
+    deviceModal.classList.remove("hidden");
+    deviceModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeDeviceModal() {
+    deviceModal.classList.add("hidden");
+    deviceModal.setAttribute("aria-hidden", "true");
+  }
+
+  function openDeviceLocationModalOverlay() {
+    deviceLocationModal.classList.remove("hidden");
+    deviceLocationModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeDeviceLocationModalOverlay() {
+    deviceLocationModal.classList.add("hidden");
+    deviceLocationModal.setAttribute("aria-hidden", "true");
+  }
+
+  function clearDeviceLocationMessage() {
+    deviceLocationMessage.textContent = "";
+    deviceLocationMessage.style.color = "";
+  }
+
+  function setDeviceLocationMessage(message, isError) {
+    deviceLocationMessage.textContent = message || "";
+    deviceLocationMessage.style.color = isError ? "#8a1c18" : "#1f6f53";
+  }
+
+  function setDeviceLocationMarker(lat, lng) {
+    if (!deviceLocationMap || !window.L) {
+      return;
+    }
+
+    if (deviceLocationMarker) {
+      deviceLocationMap.removeLayer(deviceLocationMarker);
+      deviceLocationMarker = null;
+    }
+
+    deviceLocationMarker = L.marker([lat, lng], { draggable: true }).addTo(deviceLocationMap);
+  }
+
+  function openDeviceLocationModal(device) {
+    if (!device || !window.L) {
+      setGlobalMessage("تعذر تحميل خريطة الموقع", true);
+      return;
+    }
+
+    editingDeviceForLocation = device;
+    deviceLocationModalTitle.textContent = "تحديد موقع الجهاز: " + (device.name || "-");
+    deviceLocationSearchInput.value = "";
+    clearDeviceLocationMessage();
+    openDeviceLocationModalOverlay();
+
+    if (deviceLocationMap) {
+      deviceLocationMap.remove();
+      deviceLocationMap = null;
+      deviceLocationMarker = null;
+    }
+
+    var latitude = parseDeviceCoordinate(device.latitude);
+    var longitude = parseDeviceCoordinate(device.longitude);
+    var hasSavedLocation = Number.isFinite(latitude) && Number.isFinite(longitude);
+
+    // Default center is around Syria and can be adjusted based on deployment region.
+    var initialLat = hasSavedLocation ? latitude : DEFAULT_LOCATION_LAT;
+    var initialLng = hasSavedLocation ? longitude : DEFAULT_LOCATION_LNG;
+    var initialZoom = hasSavedLocation ? 13 : 7;
+
+    deviceLocationMap = L.map(deviceLocationMapContainer, { attributionControl: false }).setView(
+      [initialLat, initialLng],
+      initialZoom
+    );
+    var terrainLayer = createTerrainTileLayer();
+    var satelliteLayer = createSatelliteTileLayer();
+    terrainLayer.addTo(deviceLocationMap);
+    L.control.attribution({ prefix: false, position: "bottomright" }).addTo(deviceLocationMap);
+    L.control.layers(
+      { "تضاريس": terrainLayer, "قمر صناعي": satelliteLayer },
+      null,
+      { position: "topright" }
+    ).addTo(deviceLocationMap);
+    setTimeout(function () {
+      if (deviceLocationMap) {
+        deviceLocationMap.invalidateSize();
+      }
+    }, 0);
+
+    if (hasSavedLocation) {
+      setDeviceLocationMarker(latitude, longitude);
+    }
+
+    deviceLocationMap.on("click", function (event) {
+      setDeviceLocationMarker(event.latlng.lat, event.latlng.lng);
+      clearDeviceLocationMessage();
+    });
+  }
+
+  function resolveAiStatusLabelForCards(statusValue) {
+    var normalized = Number(statusValue);
+    if (normalized === 2) {
+      return "لا يوجد هدف";
+    }
+    if (normalized === 1) {
+      return "هدف مكتشف";
+    }
+    if (normalized === 0) {
+      return "هدف محتمل";
+    }
+    return "غير محدد";
+  }
+
+  // Keep these colors identical to resolveAiStatusColor in spectrogram.js.
+  function resolveAiStatusColorForCards(statusValue) {
+    var normalized = Number(statusValue);
+    if (normalized === 2) {
+      return "#21a366";
+    }
+    if (normalized === 1) {
+      return "#d13438";
+    }
+    if (normalized === 0) {
+      return "#f59e0b";
+    }
+    return "#000000";
+  }
+
+  function formatDeviceCardStatus(statusValue, confidenceValue) {
+    if (statusValue === null || statusValue === undefined) {
+      return "لا توجد بيانات بعد";
+    }
+
+    var label = resolveAiStatusLabelForCards(statusValue);
+    var confidence = Number(confidenceValue);
+    if (Number.isFinite(confidence)) {
+      return label + " (" + confidence + "%)";
+    }
+
+    return label;
+  }
+
+  function startEditingDevice(device) {
+    editingDeviceId = device.id;
+    deviceIdInput.value = String(device.id);
+    deviceNameInput.value = device.name;
+    deviceExternalDeviceIdInput.value = device.externalDeviceId || "";
+    deviceDescriptionInput.value = device.description || "";
+    deviceMinFrequencyInput.value = Number.isFinite(device.minFrequency) ? String(device.minFrequency) : "";
+    deviceMaxFrequencyInput.value = Number.isFinite(device.maxFrequency) ? String(device.maxFrequency) : "";
+    deviceSaveBtn.textContent = "تحديث جهاز";
+    deviceModalTitle.textContent = "تعديل جهاز";
+    deviceFormMessage.textContent = "تعديل الجهاز رقم " + device.id;
+    openDeviceModal();
   }
 
   async function loadUsers() {
@@ -2298,7 +4451,9 @@
               });
             }
             userSaveBtn.textContent = "تحديث مستخدم";
+            userModalTitle.textContent = "تعديل المستخدم";
             userFormMessage.textContent = "تعديل المستخدم رقم " + u.id;
+            openUserModal();
           });
 
           var deleteBtn = document.createElement("button");
@@ -2311,15 +4466,37 @@
             }
             try {
               await apiRequest("/api/users/" + u.id, { method: "DELETE" });
+              closeUserModal();
               if (Number(editingUserId) === Number(u.id)) {
                 resetUserForm();
               }
-              await loadUsers();
+              await loadUsersPanelData();
               setGlobalMessage("تم حذف المستخدم بنجاح", false);
             } catch (error) {
               setGlobalMessage(error instanceof Error ? error.message : "فشل الحذف", true);
             }
           });
+
+          if (hasResettableMobileDeviceBinding(u)) {
+            var resetDeviceBtn = document.createElement("button");
+            resetDeviceBtn.type = "button";
+            resetDeviceBtn.className = "ghost-btn";
+            resetDeviceBtn.textContent = "إلغاء ربط الجهاز";
+            resetDeviceBtn.addEventListener("click", async function () {
+              if (!window.confirm("هل تريد إلغاء ربط جهاز الموبايل للمستخدم " + u.username + "؟")) {
+                return;
+              }
+
+              try {
+                await apiRequest("/api/users/" + u.id + "/reset-device", { method: "POST" });
+                await loadUsersPanelData();
+                setGlobalMessage("تم إلغاء ربط جهاز الموبايل", false);
+              } catch (error) {
+                setGlobalMessage(error instanceof Error ? error.message : "فشل إلغاء الربط", true);
+              }
+            });
+            actionTd.appendChild(resetDeviceBtn);
+          }
 
           actionTd.appendChild(editBtn);
           actionTd.appendChild(deleteBtn);
@@ -2332,78 +4509,6 @@
       usersTableBody.innerHTML = "";
       setGlobalMessage(error instanceof Error ? error.message : "فشل تحميل المستخدمين", true);
     }
-  }
-
-  function renderDevicesTable() {
-    devicesTableBody.innerHTML = "";
-
-    devicesCache.forEach(function (device) {
-      var tr = document.createElement("tr");
-      tr.innerHTML =
-        "<td>" +
-        device.id +
-        "</td><td>" +
-        device.name +
-        "</td><td>" +
-        (device.description || "") +
-        "</td><td>" +
-        (Number.isFinite(device.minFrequency) && Number.isFinite(device.maxFrequency)
-          ? device.minFrequency + " - " + device.maxFrequency + " Hz"
-          : "-") +
-        "</td>";
-
-      if (isAdmin) {
-        var actionTd = document.createElement("td");
-        actionTd.className = "action-buttons";
-
-        var editBtn = document.createElement("button");
-        editBtn.type = "button";
-        editBtn.className = "ghost-btn";
-          editBtn.textContent = "تعديل";
-        editBtn.addEventListener("click", function () {
-          editingDeviceId = device.id;
-          deviceIdInput.value = String(device.id);
-          deviceNameInput.value = device.name;
-          deviceDescriptionInput.value = device.description || "";
-          deviceMinFrequencyInput.value = Number.isFinite(device.minFrequency) ? String(device.minFrequency) : "";
-          deviceMaxFrequencyInput.value = Number.isFinite(device.maxFrequency) ? String(device.maxFrequency) : "";
-          deviceSaveBtn.textContent = "تحديث جهاز";
-          deviceFormMessage.textContent = "تعديل الجهاز رقم " + device.id;
-        });
-
-        var deleteBtn = document.createElement("button");
-        deleteBtn.type = "button";
-        deleteBtn.className = "danger-btn";
-        deleteBtn.textContent = "حذف";
-        deleteBtn.addEventListener("click", async function () {
-          if (!window.confirm("هل تريد حذف الجهاز " + device.name + "؟")) {
-            return;
-          }
-          try {
-            await apiRequest("/api/devices/" + device.id, { method: "DELETE" });
-            if (Number(selectedDeviceId) === Number(device.id)) {
-              selectedDeviceId = null;
-              selectedDeviceName = "";
-              selectedDeviceKey = "";
-              currentPackets = [];
-            }
-            if (Number(editingDeviceId) === Number(device.id)) {
-              resetDeviceForm();
-            }
-            await loadDevices();
-            setGlobalMessage("تم حذف الجهاز بنجاح", false);
-          } catch (error) {
-            setGlobalMessage(error instanceof Error ? error.message : "فشل الحذف", true);
-          }
-        });
-
-        actionTd.appendChild(editBtn);
-        actionTd.appendChild(deleteBtn);
-        tr.appendChild(actionTd);
-      }
-
-      devicesTableBody.appendChild(tr);
-    });
   }
 
   userForm.addEventListener("submit", async function (event) {
@@ -2448,21 +4553,239 @@
         setGlobalMessage("تم إنشاء المستخدم بنجاح", false);
       }
 
+      closeUserModal();
       resetUserForm();
-      await loadUsers();
+      await loadUsersPanelData();
     } catch (error) {
       setGlobalMessage(error instanceof Error ? error.message : "فشل حفظ المستخدم", true);
     }
   });
 
   userCancelBtn.addEventListener("click", function () {
+    closeUserModal();
     resetUserForm();
+  });
+
+  openUserModalBtn.addEventListener("click", function () {
+    resetUserForm();
+    userModalTitle.textContent = "إضافة مستخدم";
+    openUserModal();
+  });
+
+  refreshUsersPanelBtn.addEventListener("click", function () {
+    loadUsersPanelData().catch(function (error) {
+      setGlobalMessage(error instanceof Error ? error.message : "تعذر تحديث بيانات المستخدمين", true);
+    });
+  });
+
+  userModal.addEventListener("click", function (event) {
+    if (event.target === userModal) {
+      closeUserModal();
+      resetUserForm();
+    }
   });
 
   userRoleInput.addEventListener("change", function () {
     updateUserDeviceAssignmentVisibility();
     if (userRoleInput.value !== "emp") {
       clearUserDeviceSelections();
+    }
+  });
+
+  function applyDeviceSearchFilter() {
+    if (!devicesCardsGrid || !deviceSearchInput) {
+      return;
+    }
+
+    var query = (deviceSearchInput.value || "").trim().toLowerCase();
+    var cards = devicesCardsGrid.querySelectorAll(".device-card");
+    cards.forEach(function (card) {
+      var deviceName = (card.dataset && card.dataset.deviceName ? card.dataset.deviceName : "").toLowerCase();
+      var isMatch = !query || deviceName.indexOf(query) !== -1;
+      card.style.display = isMatch ? "" : "none";
+    });
+  }
+
+  if (deviceSearchInput) {
+    deviceSearchInput.addEventListener("input", applyDeviceSearchFilter);
+  }
+
+  if (exportDevicesBtn) {
+    exportDevicesBtn.addEventListener("click", function () {
+      if (typeof XLSX === "undefined") {
+        setGlobalMessage("مكتبة Excel غير متاحة في المتصفح", true);
+        return;
+      }
+
+      if (!devicesCardsGrid) {
+        return;
+      }
+
+      var cards = Array.prototype.slice.call(devicesCardsGrid.querySelectorAll(".device-card"));
+      var visibleCards = cards.filter(function (card) {
+        return card.style.display !== "none";
+      });
+
+      var rows = visibleCards.map(function (card) {
+        var deviceId = Number(card.dataset.deviceId || 0);
+        var device = devicesStatusCache.find(function (item) {
+          return Number(item.id) === Number(deviceId);
+        });
+        var liveStatus = device ? getLiveDeviceStatusForCard(device) : null;
+
+        var internetValue = liveStatus && typeof liveStatus.internet === "string" ? liveStatus.internet.trim().toUpperCase() : "";
+        var stateText = "لا توجد بيانات";
+        if (internetValue === "UP") {
+          stateText = "متصل";
+        } else if (internetValue === "DOWN") {
+          stateText = "غير متصل";
+        }
+
+        var dateValue = liveStatus && typeof liveStatus.date === "string" ? liveStatus.date.trim() : "";
+        var timeValue = liveStatus && typeof liveStatus.time === "string" ? liveStatus.time.trim() : "";
+        var lastUpdateText = "-";
+        if (dateValue && timeValue) {
+          lastUpdateText = dateValue + " " + timeValue;
+        } else if (device && device.latestStatusTimestamp) {
+          lastUpdateText = device.latestStatusTimestamp;
+        }
+
+        var batteryText = "-";
+        if (liveStatus && Number.isFinite(Number(liveStatus.battery))) {
+          batteryText = Number(liveStatus.battery).toFixed(1) + "%";
+        }
+
+        var temperatureText = "-";
+        if (liveStatus && Number.isFinite(Number(liveStatus.temperature))) {
+          temperatureText = Number(liveStatus.temperature).toFixed(1) + "°";
+        }
+
+        var pingText = "-";
+        if (liveStatus && Number.isFinite(Number(liveStatus.ping))) {
+          pingText = Number(liveStatus.ping).toFixed(1) + " ms";
+        }
+
+        var uptimeText = "-";
+        if (liveStatus && typeof liveStatus.uptime === "string" && liveStatus.uptime.trim()) {
+          uptimeText = liveStatus.uptime.trim();
+        }
+
+        return {
+          الاسم: device ? device.name : card.dataset.deviceName || "-",
+          الحالة: stateText,
+          "آخر تحديث": lastUpdateText,
+          البطارية: batteryText,
+          الحرارة: temperatureText,
+          Ping: pingText,
+          "مدة التشغيل": uptimeText
+        };
+      });
+
+      var wb = XLSX.utils.book_new();
+      var ws = XLSX.utils.json_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, ws, "الأجهزة");
+      XLSX.writeFile(wb, "devices-" + formatDateOnly(new Date()) + ".xlsx");
+    });
+  }
+
+  openDeviceModalBtn.addEventListener("click", function () {
+    resetDeviceForm();
+    openDeviceModal();
+  });
+
+  deviceModal.addEventListener("click", function (event) {
+    if (event.target === deviceModal) {
+      closeDeviceModal();
+      resetDeviceForm();
+    }
+  });
+
+  deviceLocationModal.addEventListener("click", function (event) {
+    if (event.target === deviceLocationModal) {
+      closeDeviceLocationModalOverlay();
+      editingDeviceForLocation = null;
+    }
+  });
+
+  cancelDeviceLocationBtn.addEventListener("click", function () {
+    closeDeviceLocationModalOverlay();
+    clearDeviceLocationMessage();
+    editingDeviceForLocation = null;
+  });
+
+  deviceLocationSearchInput.addEventListener("keypress", async function (event) {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    if (!deviceLocationMap) {
+      return;
+    }
+
+    var query = String(deviceLocationSearchInput.value || "").trim();
+    if (!query) {
+      setDeviceLocationMessage("أدخل اسم مكان للبحث", true);
+      return;
+    }
+
+    try {
+      setDeviceLocationMessage("جاري البحث...", false);
+      var response = await fetch(
+        "https://nominatim.openstreetmap.org/search?format=json&q=" + encodeURIComponent(query)
+      );
+      var results = await response.json();
+      if (!Array.isArray(results) || !results.length) {
+        setDeviceLocationMessage("لم يتم العثور على نتائج", true);
+        return;
+      }
+
+      var lat = Number(results[0].lat);
+      var lon = Number(results[0].lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        setDeviceLocationMessage("نتيجة الموقع غير صالحة", true);
+        return;
+      }
+
+      deviceLocationMap.setView([lat, lon], 13);
+      setDeviceLocationMessage("تم نقل الخريطة، اضغط على النقطة المطلوبة للحفظ", false);
+    } catch (_error) {
+      setDeviceLocationMessage("فشل البحث عن المكان", true);
+    }
+  });
+
+  saveDeviceLocationBtn.addEventListener("click", async function () {
+    if (!editingDeviceForLocation) {
+      setDeviceLocationMessage("تعذر تحديد الجهاز المطلوب", true);
+      return;
+    }
+
+    if (!deviceLocationMarker) {
+      setDeviceLocationMessage("اختر موقعاً على الخريطة أولاً", true);
+      return;
+    }
+
+    var markerLatLng = deviceLocationMarker.getLatLng();
+    var lat = Number(markerLatLng.lat);
+    var lng = Number(markerLatLng.lng);
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      setDeviceLocationMessage("إحداثيات الموقع غير صالحة", true);
+      return;
+    }
+
+    try {
+      await apiRequest("/api/devices/" + editingDeviceForLocation.id, {
+        method: "PUT",
+        body: JSON.stringify({ latitude: lat, longitude: lng })
+      });
+      closeDeviceLocationModalOverlay();
+      editingDeviceForLocation = null;
+      clearDeviceLocationMessage();
+      await loadDevices();
+      setGlobalMessage("تم حفظ موقع الجهاز بنجاح", false);
+    } catch (error) {
+      setDeviceLocationMessage(error instanceof Error ? error.message : "فشل حفظ الموقع", true);
     }
   });
 
@@ -2475,6 +4798,7 @@
 
     var payload = {
       name: deviceNameInput.value.trim(),
+      externalDeviceId: deviceExternalDeviceIdInput.value.trim() || null,
       description: deviceDescriptionInput.value.trim(),
       minFrequency: parseOptionalNumberInput(deviceMinFrequencyInput.value),
       maxFrequency: parseOptionalNumberInput(deviceMaxFrequencyInput.value)
@@ -2505,6 +4829,7 @@
       }
 
       resetDeviceForm();
+      closeDeviceModal();
       await loadDevices();
     } catch (error) {
       setGlobalMessage(error instanceof Error ? error.message : "فشل حفظ الجهاز", true);
@@ -2513,6 +4838,7 @@
 
   deviceCancelBtn.addEventListener("click", function () {
     resetDeviceForm();
+    closeDeviceModal();
   });
 
   historyRangeForm.addEventListener("submit", async function (event) {
@@ -2586,6 +4912,46 @@
       await loadLatestPacketOnly();
     } catch (error) {
       setGlobalMessage(error instanceof Error ? error.message : "فشل تحميل آخر باكت", true);
+    }
+  });
+
+  multiViewBtn.addEventListener("click", function () {
+    openMultiViewPicker();
+  });
+
+  multiViewCancelBtn.addEventListener("click", function () {
+    closeMultiViewPicker();
+  });
+
+  multiViewContinueBtn.addEventListener("click", async function () {
+    var selectedIds = getSelectedMultiViewDeviceIds();
+    if (!selectedIds.length) {
+      setGlobalMessage("اختر جهازًا واحدًا على الأقل", true);
+      return;
+    }
+
+    closeMultiViewPicker();
+    await openMultiViewOverlay(selectedIds);
+  });
+
+  multiViewPickerModal.addEventListener("click", function (event) {
+    if (event.target === multiViewPickerModal) {
+      closeMultiViewPicker();
+    }
+  });
+
+  window.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape") {
+      return;
+    }
+
+    if (!multiViewOverlay.classList.contains("hidden")) {
+      closeMultiViewOverlay();
+      return;
+    }
+
+    if (!multiViewPickerModal.classList.contains("hidden")) {
+      closeMultiViewPicker();
     }
   });
 
@@ -2689,12 +5055,19 @@
     });
   });
 
+  logFrequencyViewToggle.addEventListener("change", function () {
+    applyLogFrequencyViewSettings();
+  });
+
   canvas.style.cursor = "grab";
 
   canvas.addEventListener("mousedown", function (event) {
     if (event.button !== 0) {
       return;
     }
+
+    suppressNextProbeClick = false;
+    pressStartedAtMs = Date.now();
 
     var markerHit = findMarkerHitAtCanvasPoint(event);
     if (markerHit && markerHit.markerIndex >= 0 && markerHit.markerIndex < timeMarkers.length) {
@@ -2769,7 +5142,7 @@
     var canvasWidth = Math.max(1, canvas.clientWidth || 1);
     var dx = event.clientX - panStartClientX;
 
-    if (!panHasMoved && Math.abs(dx) >= 3) {
+    if (!panHasMoved && Math.abs(dx) >= PAN_MOVE_THRESHOLD_PX) {
       panHasMoved = true;
       liveManualBrowseActive = true;
     }
@@ -2796,10 +5169,15 @@
     if (!isPanning) {
       return;
     }
+    var didPan = panHasMoved;
+    var heldTooLong = pressStartedAtMs > 0 && Date.now() - pressStartedAtMs > CLICK_MAX_DURATION_MS;
+    suppressNextProbeClick = didPan || heldTooLong;
     isPanning = false;
     panHasMoved = false;
     canvas.style.cursor = "grab";
-    scheduleRender({ skipTable: false });
+    if (didPan) {
+      scheduleRender({ skipTable: false });
+    }
   });
 
   canvas.addEventListener(
@@ -3049,6 +5427,30 @@
     var timeMs = lastRenderMeta.fromMs + xFrac * (lastRenderMeta.toMs - lastRenderMeta.fromMs);
     var rowIndex = Math.round((1 - yFrac) * Math.max(0, lastRenderMeta.binCount - 1));
 
+    if (
+      activeLogFrequencyView &&
+      window.LogSpectrogram &&
+      typeof window.LogSpectrogram.getLastRenderInfo === "function" &&
+      typeof window.LogSpectrogram.positionToFrequency === "function"
+    ) {
+      var logInfo = window.LogSpectrogram.getLastRenderInfo();
+      if (
+        logInfo &&
+        Number.isFinite(logInfo.viewMinHz) &&
+        Number.isFinite(logInfo.viewMaxHz) &&
+        logInfo.viewMaxHz > logInfo.viewMinHz
+      ) {
+        var positionFromLow = logInfo.lowAtTop ? yFrac : 1 - yFrac;
+        var probeHz = window.LogSpectrogram.positionToFrequency(positionFromLow);
+        if (Number.isFinite(probeHz)) {
+          var hzRatio = (probeHz - logInfo.viewMinHz) / (logInfo.viewMaxHz - logInfo.viewMinHz);
+          rowIndex = Math.round(
+            Math.min(1, Math.max(0, hzRatio)) * Math.max(0, lastRenderMeta.binCount - 1)
+          );
+        }
+      }
+    }
+
     var sample = findProbeSample(timeMs, rowIndex);
     if (!sample) {
       return null;
@@ -3127,6 +5529,11 @@
   });
 
   canvas.addEventListener("click", function (event) {
+    if (suppressNextProbeClick) {
+      suppressNextProbeClick = false;
+      return;
+    }
+
     if (isPanning) {
       return;
     }
@@ -3151,6 +5558,7 @@
     probeTooltipEl.style.left = event.clientX + 14 + "px";
     probeTooltipEl.style.top = event.clientY + 14 + "px";
     probeTooltipEl.classList.remove("hidden");
+    scheduleProbeAutoHide();
   });
 
   function setupSocket() {
@@ -3183,6 +5591,60 @@
       markHeartbeat();
     });
 
+    socket.on("devices_status", function (payload) {
+      var normalizedPayload = normalizeLiveDeviceStatusPayload(payload);
+      if (!Object.keys(normalizedPayload).length) {
+        return;
+      }
+
+      liveDeviceStatusMap = Object.assign({}, liveDeviceStatusMap, normalizedPayload);
+      saveStoredLiveDeviceStatus(liveDeviceStatusMap);
+      if (devicesCardsGrid) {
+        renderDevicesViews(devicesStatusCache);
+      }
+    });
+
+    socket.on("ping", function (entries) {
+      // TEMP DEBUG
+      console.log("[ping] raw entries received:", entries);
+      if (!Array.isArray(entries)) {
+        return;
+      }
+
+      var changed = false;
+      entries.forEach(function (entry) {
+        if (!entry) {
+          return;
+        }
+        var key = normalizeDeviceStatusKey(entry.device_id || entry.deviceId);
+        if (!key) {
+          return;
+        }
+        var existing = liveDeviceStatusMap[key] || {};
+        // TEMP DEBUG
+        console.log("[ping] device=" + key, "existing before merge:", existing);
+        var mergedResult = Object.assign({}, existing, {
+          internet: entry.status,
+          ping: entry.ping,
+          date: entry.date || existing.date,
+          time: entry.time || existing.time
+        });
+        // TEMP DEBUG
+        console.log("[ping] device=" + key, "merged result:", mergedResult);
+        liveDeviceStatusMap[key] = mergedResult;
+        changed = true;
+      });
+
+      if (!changed) {
+        return;
+      }
+
+      saveStoredLiveDeviceStatus(liveDeviceStatusMap);
+      if (devicesCardsGrid) {
+        renderDevicesViews(devicesStatusCache);
+      }
+    });
+
     var heartbeatTimer = setInterval(function () {
       if (!socket.connected) {
         setSocketStatus(false, "جاري إعادة المحاولة");
@@ -3197,6 +5659,7 @@
     }, 15000);
 
     socket.on("device:data", function (payload) {
+      handleMultiViewLivePayload(payload);
       markLiveTrace("socket-received");
 
       if (!payloadMatchesSelectedDevice(payload)) {
@@ -3264,6 +5727,21 @@
     window.location.href = "/login";
   });
 
+  window.DashboardBridge = {
+    apiRequest: apiRequest,
+    getDevices: function () {
+      return devicesCache.slice();
+    },
+    getSelectedDeviceId: function () {
+      return selectedDeviceId;
+    },
+    getCurrentUser: function () {
+      return user;
+    },
+    activateTab: activateTab,
+    setGlobalMessage: setGlobalMessage
+  };
+
   activateTab("history");
   resetUserForm();
   resetDeviceForm();
@@ -3288,7 +5766,7 @@
   });
 
   if (isAdmin) {
-    loadUsers().catch(function (error) {
+    loadUsersPanelData().catch(function (error) {
       setGlobalMessage(error instanceof Error ? error.message : "Failed to load users", true);
     });
   }
@@ -3308,7 +5786,7 @@
   }
 
   toggleRightPanelBtn.addEventListener("click", function () {
-    var willCollapse = !rightPanelEl.classList.contains("collapsed");
+    var willCollapse = !rightPanel.classList.contains("collapsed");
     setRightPanelCollapsed(willCollapse);
     scheduleRender({ skipTable: false });
     window.setTimeout(function () {
@@ -3318,6 +5796,51 @@
 
   window.addEventListener("resize", function () {
     scheduleRender({ skipTable: false });
+  });
+
+  toggleMapFullscreenBtn.addEventListener("click", function () {
+    var container = document.getElementById("topLevelDevicesMapContainer");
+    if (!container) {
+      return;
+    }
+    if (!document.fullscreenElement) {
+      container.requestFullscreen().catch(function () {});
+    } else {
+      document.exitFullscreen();
+    }
+  });
+
+  document.addEventListener("fullscreenchange", function () {
+    if (devicesOverviewMapInstance) {
+      devicesOverviewMapInstance.invalidateSize();
+    }
+  });
+
+  var mapPanelObserver = new MutationObserver(function (mutations) {
+    mutations.forEach(function (mutation) {
+      if (
+        mutation.type === "attributes" &&
+        mutation.attributeName === "class" &&
+        mapPanel.classList.contains("active") &&
+        devicesOverviewMapInstance
+      ) {
+        devicesOverviewMapInstance.invalidateSize();
+        if (!hasFitInitialOverviewBounds) {
+          if (lastKnownDeviceBounds.length > 0) {
+            devicesOverviewMapInstance.fitBounds(L.latLngBounds(lastKnownDeviceBounds), { padding: [40, 40] });
+          } else {
+            var syriaBounds = L.latLngBounds([[32.0, 35.5], [37.5, 42.5]]);
+            devicesOverviewMapInstance.fitBounds(syriaBounds);
+          }
+          hasFitInitialOverviewBounds = true;
+        }
+      }
+    });
+  });
+
+  mapPanelObserver.observe(mapPanel, {
+    attributes: true,
+    attributeFilter: ["class"]
   });
 
   window.Spectrogram.configure({
@@ -3359,6 +5882,8 @@
   neighborhoodSizeSelect.value = String(activeNeighborhoodSize);
   bucketAggregationSelect.value = activeBucketAggregation;
   debugStatsEnabledInput.checked = activeDebugStatsEnabled;
+  activeLogFrequencyView = readStoredLogFrequencyView();
+  logFrequencyViewToggle.checked = activeLogFrequencyView;
   updateIntensityControlsState();
   applyNoiseSettings();
   updateFollowLiveButtonState();

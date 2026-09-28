@@ -1443,8 +1443,11 @@
     if (!ctx || binCount <= 0) {
       if (ctx) {
         var dpr = window.devicePixelRatio || 1;
-        var cssWidth = Math.max(480, Math.floor(canvas.clientWidth || 960));
-        var cssHeight = Math.max(320, Math.floor((canvas.clientWidth || 960) * 0.43));
+        var emptyRect = typeof canvas.getBoundingClientRect === "function" ? canvas.getBoundingClientRect() : null;
+        var emptyClientWidth = Math.floor((emptyRect && emptyRect.width) || canvas.clientWidth || 960);
+        var emptyClientHeight = Math.floor((emptyRect && emptyRect.height) || canvas.clientHeight || 0);
+        var cssWidth = Math.max(480, emptyClientWidth);
+        var cssHeight = Math.max(420, emptyClientHeight || Math.floor((canvas.clientWidth || 960) * 0.62));
         canvas.width = Math.floor(cssWidth * dpr);
         canvas.height = Math.floor(cssHeight * dpr);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1466,8 +1469,11 @@
     }
 
     var dpr = window.devicePixelRatio || 1;
-    var cssWidth = Math.max(480, Math.floor(canvas.clientWidth || 960));
-    var cssHeight = Math.max(320, Math.floor((canvas.clientWidth || 960) * 0.43));
+    var canvasRect = typeof canvas.getBoundingClientRect === "function" ? canvas.getBoundingClientRect() : null;
+    var measuredCssWidth = Math.floor((canvasRect && canvasRect.width) || canvas.clientWidth || 960);
+    var measuredCssHeight = Math.floor((canvasRect && canvasRect.height) || canvas.clientHeight || 0);
+    var cssWidth = Math.max(480, measuredCssWidth);
+    var cssHeight = Math.max(420, measuredCssHeight || Math.floor((canvas.clientWidth || 960) * 0.62));
     canvas.width = Math.floor(cssWidth * dpr);
     canvas.height = Math.floor(cssHeight * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1573,7 +1579,7 @@
       if (normalized === 0) {
         return "#f59e0b";
       }
-      return "#8a94a6";
+      return "#000000";
     }
 
     function resolveAiStatusLabel(statusValue) {
@@ -1999,11 +2005,16 @@
       }
 
       var rawStatusValue = statusBlock.aiStatus ?? statusBlock.ai_status;
+      var statusLabel = resolveAiStatusLabel(rawStatusValue);
+      var rawConfidence = statusBlock.confidence ?? statusBlock.Confidence;
+      if (Number.isFinite(Number(rawConfidence))) {
+        statusLabel = statusLabel + " (" + Number(rawConfidence) + "%)";
+      }
       aiStatusBlocks.push({
         start: clippedStart,
         end: clippedEnd,
         color: resolveAiStatusColor(rawStatusValue),
-        label: resolveAiStatusLabel(rawStatusValue)
+        label: statusLabel
       });
     }
 

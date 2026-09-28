@@ -33,17 +33,93 @@ function parseDeviceIds(value: unknown): number[] | undefined {
 export const userController = {
   login: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { username, password } = req.body as {
+      const { username, password, deviceId: rawDeviceId } = req.body as {
         username?: string;
         password?: string;
+        deviceId?: unknown;
       };
 
       if (!username || !password) {
         throw new HttpError(400, "username and password are required");
       }
 
-      const result = await userService.authenticateUser(username, password);
+      const deviceId = typeof rawDeviceId === "string" ? rawDeviceId.trim() : "";
+      const result = await userService.authenticateUser(username, password, deviceId || undefined);
       res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getPendingDevices: async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const rows = await userService.getPendingMobileDeviceRequests();
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getDeviceChangeRequests: async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const rows = await userService.getMobileDeviceChangeRequests();
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  approveDevice: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const id = Number(req.params.id);
+      if (!isPositiveInteger(id)) {
+        throw new HttpError(400, "id must be a positive integer");
+      }
+
+      await userService.approvePendingMobileDevice(id);
+      res.json({ message: "تمت الموافقة على جهاز الموبايل" });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  resetDevice: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const id = Number(req.params.id);
+      if (!isPositiveInteger(id)) {
+        throw new HttpError(400, "id must be a positive integer");
+      }
+
+      await userService.resetMobileDeviceBinding(id);
+      res.json({ message: "تم إلغاء ربط جهاز الموبايل" });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  approveDeviceChange: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const id = Number(req.params.id);
+      if (!isPositiveInteger(id)) {
+        throw new HttpError(400, "id must be a positive integer");
+      }
+
+      await userService.approveMobileDeviceChange(id);
+      res.json({ message: "تم اعتماد تغيير الجهاز" });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  rejectDeviceChange: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const id = Number(req.params.id);
+      if (!isPositiveInteger(id)) {
+        throw new HttpError(400, "id must be a positive integer");
+      }
+
+      await userService.rejectMobileDeviceChange(id);
+      res.json({ message: "تم رفض طلب تغيير الجهاز" });
     } catch (error) {
       next(error);
     }

@@ -48,4 +48,7 @@ export class DeviceHistory {
 
   @Column({ type: "tinyint", nullable: true })
   aiStatus!: AiStatus | null;
+
+  @Column({ type: "decimal", precision: 5, scale: 2, nullable: true })
+  confidence!: number | null;
 }
