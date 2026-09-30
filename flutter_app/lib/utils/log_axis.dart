@@ -204,61 +204,83 @@ Uint8List warpSpectrogramVertical(
   }
 
   final out = Uint8List(rgba.length);
-  final sampleRows = <int>[];
+  // Per-pixel luma, computed ONCE for the whole image (was: recomputed for
+  // every sample of every destination row — up to 13x per pixel).
+  final luma = Int32List(w * h);
+  for (var i = 0, o = 0; i < luma.length; i++, o += 4) {
+    luma[i] = 299 * rgba[o] + 587 * rgba[o + 1] + 114 * rgba[o + 2];
+  }
+  // Fixed-size sample buffer (max 12 even samples + 2 edges + center) — avoids
+  // List<int> allocations/`contains` scans per row.
+  final sampleBuf = Int32List(15);
+  final srcBaseBuf = Int32List(15);
 
   for (var y = 0; y < h; y++) {
     final ya = mapRow(y.toDouble());
     final yb = mapRow((y + 1).toDouble());
     final yc = mapRow(y + 0.5);
 
-    sampleRows.clear();
     final lo = ya < yb ? ya : yb;
     final hi = ya < yb ? yb : ya;
     final startRow = lo.floor().clamp(0, h - 1);
     final endRow = hi.ceil().clamp(0, h - 1);
+    var n = 0;
     if (endRow - startRow <= 12) {
       // Cover every source row the destination row maps onto, so the peak
       // (brightest row) is never skipped.
       for (var r = startRow; r <= endRow; r++) {
-        if (!sampleRows.contains(r)) sampleRows.add(r);
+        var dup = false;
+        for (var k = 0; k < n; k++) {
+          if (sampleBuf[k] == r) { dup = true; break; }
+        }
+        if (!dup) sampleBuf[n++] = r;
       }
     } else {
       // Wide spans: the shader's 12 evenly spaced samples + both edges.
-      if (!sampleRows.contains(startRow)) sampleRows.add(startRow);
-      if (!sampleRows.contains(endRow)) sampleRows.add(endRow);
-      final centerRow = yc.round().clamp(0, h - 1);
-      if (!sampleRows.contains(centerRow)) sampleRows.add(centerRow);
+      void add(int r) {
+        for (var k = 0; k < n; k++) {
+          if (sampleBuf[k] == r) return;
+        }
+        sampleBuf[n++] = r;
+      }
+
+      add(startRow);
+      add(endRow);
+      add(yc.round().clamp(0, h - 1));
       for (var i = 0; i < 12; i++) {
         final f = (i + 0.5) / 12.0;
-        final row = (lo + (hi - lo) * f).round().clamp(0, h - 1);
-        if (!sampleRows.contains(row)) sampleRows.add(row);
+        add((lo + (hi - lo) * f).round().clamp(0, h - 1));
       }
     }
 
     final destRowBase = y * w * 4;
-    if (sampleRows.length == 1) {
+    if (n == 1) {
       // Expansion region: direct row copy.
-      final srcBase = sampleRows.first * w * 4;
+      final srcBase = sampleBuf[0] * w * 4;
       out.setRange(destRowBase, destRowBase + w * 4, rgba, srcBase);
       continue;
     }
 
+    for (var s = 0; s < n; s++) {
+      srcBaseBuf[s] = sampleBuf[s] * w;
+    }
     for (var x = 0; x < w; x++) {
       var bestLuma = -1;
-      var bestOff = sampleRows.first * w * 4 + x * 4;
-      for (var s = 0; s < sampleRows.length; s++) {
-        final off = sampleRows[s] * w * 4 + x * 4;
-        final luma = 299 * rgba[off] + 587 * rgba[off + 1] + 114 * rgba[off + 2];
-        if (luma > bestLuma) {
-          bestLuma = luma;
-          bestOff = off;
+      var bestIdx = srcBaseBuf[0] + x;
+      for (var s = 0; s < n; s++) {
+        final idx = srcBaseBuf[s] + x;
+        final l = luma[idx];
+        if (l > bestLuma) {
+          bestLuma = l;
+          bestIdx = idx;
         }
       }
+      final src = bestIdx * 4;
       final dst = destRowBase + x * 4;
-      out[dst] = rgba[bestOff];
-      out[dst + 1] = rgba[bestOff + 1];
-      out[dst + 2] = rgba[bestOff + 2];
-      out[dst + 3] = rgba[bestOff + 3];
+      out[dst] = rgba[src];
+      out[dst + 1] = rgba[src + 1];
+      out[dst + 2] = rgba[src + 2];
+      out[dst + 3] = rgba[src + 3];
     }
   }
 

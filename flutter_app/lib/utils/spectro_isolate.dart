@@ -5,6 +5,31 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'spectro.dart';
+import 'log_axis.dart';
+
+/// Gain LUT + optional log-axis warp, executed on the render isolate so the
+/// main (UI) thread never freezes while the view image is rebuilt.
+/// Carries the raw intensity plane; the LUT is built on the UI side (cheap,
+/// 256 entries) and shipped here to keep the color mapping logic in one place.
+class WarpRequest {
+  final Uint8List intensity;
+  final int width;
+  final int height;
+  final Uint8List gainLut; // 256 * 4 RGBA entries
+  final bool logView;
+  final double maxFreq;
+  final double focusHz;
+
+  const WarpRequest({
+    required this.intensity,
+    required this.width,
+    required this.height,
+    required this.gainLut,
+    required this.logView,
+    required this.maxFreq,
+    required this.focusHz,
+  });
+}
 
 class RenderRequest {
   final List<List<num>> matrix;
@@ -219,8 +244,8 @@ void _isolateEntry(SendPort mainSendPort) {
   mainSendPort.send(port.sendPort);
 
   port.listen((message) {
-    final req = message[0] as RenderRequest;
     final replyTo = message[1] as SendPort;
+    final req = message[0] as RenderRequest;
 
     try {
       final List<List<num>> matrix;
@@ -268,11 +293,105 @@ void _isolateEntry(SendPort mainSendPort) {
   });
 }
 
+/// Same math as the UI-side path (spectrogram_canvas): apply the 256-entry
+/// gain LUT to the intensity plane, then peak-warp for the log view.
+Uint8List _applyLutAndWarp(WarpRequest req) {
+  final w = req.width;
+  final h = req.height;
+  final intensity = req.intensity;
+  if (w <= 0 || h <= 0 || intensity.length < w * h) {
+    return Uint8List(0);
+  }
+  final lutWords = Uint32List.view(req.gainLut.buffer, 0, 256);
+  final rgba = Uint8List(w * h * 4);
+  final outWords = Uint32List.view(rgba.buffer, 0, w * h);
+  for (var i = 0; i < w * h; i++) {
+    outWords[i] = lutWords[intensity[i]];
+  }
+  if (!req.logView) return rgba;
+  return warpSpectrogramVertical(
+    rgba,
+    w,
+    h,
+    buildLogAxis(0, req.maxFreq, req.focusHz),
+  );
+}
+
 /// Singleton persistent isolate worker — reused across all renders.
 final _SpectroIsolateWorker _worker = _SpectroIsolateWorker();
 
+// ---------------------------------------------------------------------------
+// Dedicated warp isolate — kept separate from the render worker so view
+// toggles never queue behind multi-second full renders.
+// ---------------------------------------------------------------------------
+
+class _WarpIsolateWorker {
+  Isolate? _isolate;
+  SendPort? _sendPort;
+  ReceivePort? _receivePort;
+  bool _initialized = false;
+
+  Future<void> _ensureInitialized() async {
+    if (_initialized && _isolate != null) return;
+
+    _receivePort = ReceivePort();
+    _isolate = await Isolate.spawn(
+      _warpIsolateEntry,
+      _receivePort!.sendPort,
+      debugName: 'spectro-warp',
+    );
+    _sendPort = await _receivePort!.first as SendPort;
+    _initialized = true;
+  }
+
+  Future<Uint8List> warp(WarpRequest req) async {
+    await _ensureInitialized();
+
+    final resultPort = ReceivePort();
+    _sendPort!.send([req, resultPort.sendPort]);
+
+    final result = await resultPort.first;
+    resultPort.close();
+
+    if (result is String) {
+      throw StateError('Isolate warp failed: $result');
+    }
+    return result as Uint8List;
+  }
+
+  void dispose() {
+    _isolate?.kill(priority: Isolate.immediate);
+    _isolate = null;
+    _receivePort?.close();
+    _sendPort = null;
+    _initialized = false;
+  }
+}
+
+void _warpIsolateEntry(SendPort mainSendPort) {
+  final port = ReceivePort();
+  mainSendPort.send(port.sendPort);
+  port.listen((message) {
+    final req = message[0] as WarpRequest;
+    final replyTo = message[1] as SendPort;
+    try {
+      replyTo.send(_applyLutAndWarp(req));
+    } catch (e) {
+      replyTo.send(e.toString());
+    }
+  });
+}
+
+final _WarpIsolateWorker _warpWorker = _WarpIsolateWorker();
+
 Future<RenderResult> renderSpectrogramIsolate(RenderRequest req) async {
   return _worker.render(req);
+}
+
+/// Applies the gain LUT (+ log-axis warp) on the dedicated warp isolate and
+/// returns the raw RGBA bytes for `decodeImageFromPixels`.
+Future<Uint8List> warpSpectrogramIsolate(WarpRequest req) {
+  return _warpWorker.warp(req);
 }
 
 Future<ui.Image> rgbaToUiImage(Uint8List rgba, int width, int height) async {

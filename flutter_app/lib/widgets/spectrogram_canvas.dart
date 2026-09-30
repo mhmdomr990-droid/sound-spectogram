@@ -369,6 +369,39 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   double _gainLutGainDb = double.nan;
   double _gainLutGamma = double.nan;
 
+  // --- View-image cache: one decoded image per axis mode (linear / log) so a
+  // repeat toggle swaps images instantly (no LUT, no warp, no decode).
+  // All entries are keyed by the intensity buffer identity + gain + gamma;
+  // focus/maxFreq additionally key the log entry.
+  ui.Image? _viewLinear;
+  ui.Image? _viewLog;
+  Object? _viewIntensity;
+  double _viewGainDb = double.nan;
+  double _viewGamma = double.nan;
+  double _viewFocus = double.nan;
+  double _viewMaxFreq = double.nan;
+
+  bool _isViewCached(ui.Image img) =>
+      identical(img, _viewLinear) || identical(img, _viewLog);
+
+  void _disposeImg(ui.Image? img) {
+    if (img == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try { img.dispose(); } catch (_) {}
+    });
+  }
+
+  void _invalidateViewCache() {
+    final lin = _viewLinear;
+    final lg = _viewLog;
+    _viewLinear = null;
+    _viewLog = null;
+    // Never dispose the image currently on screen — its caller swaps it out
+    // and disposes it after the next frame.
+    if (!identical(lin, _image)) _disposeImg(lin);
+    if (!identical(lg, _image)) _disposeImg(lg);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -427,6 +460,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _render();
       return;
     }
+    final sw = Stopwatch()..start();
     final gainDb = widget.gainNotifier?.value ?? widget.gainDb;
     final image = await _applyGainAndBuildImage(gainDb);
     if (!mounted) return;
@@ -450,43 +484,122 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       );
     }
     setState(() {});
-    if (oldImage != null && oldImage != image) {
+    // ignore: avoid_print
+    print('[TIMING] applied+setState total=${sw.elapsedMilliseconds}ms');
+    if (oldImage != null && oldImage != image && !_isViewCached(oldImage)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         try { oldImage.dispose(); } catch (_) {}
       });
     }
   }
 
-  Future<ui.Image> _applyGainAndBuildImage(double gainDb) async {
+  Future<ui.Image> _applyGainAndBuildImage(double gainDb, {bool? logOverride}) async {
     final intensity = _cachedIntensity;
     if (intensity == null || _cachedIntensityWidth <= 0 || _cachedIntensityHeight <= 0) {
       return _image!;
     }
+    final sw = Stopwatch()..start();
     final w = _cachedIntensityWidth;
     final h = _cachedIntensityHeight;
-    _buildGainLut(gainDb, _cachedGamma);
-    final lut = _gainLut!;
-    final rgba = Uint8List(w * h * 4);
-    for (var i = 0; i < w * h; i++) {
-      final src = intensity[i] * 4;
-      final dst = i * 4;
-      rgba[dst]     = lut[src];
-      rgba[dst + 1] = lut[src + 1];
-      rgba[dst + 2] = lut[src + 2];
-      rgba[dst + 3] = 0xFF;
+    final gamma = _cachedGamma;
+    final log = logOverride ?? widget.logFrequencyView;
+    final focus = widget.focusHz;
+    final maxFreq = _effectiveMaxFreq();
+
+    // Key the caches by the data they were derived from.
+    if (!identical(_viewIntensity, intensity) ||
+        _viewGainDb != gainDb ||
+        _viewGamma != gamma) {
+      _invalidateViewCache();
+      _viewIntensity = intensity;
+      _viewGainDb = gainDb;
+      _viewGamma = gamma;
+      _viewFocus = double.nan;
+      _viewMaxFreq = double.nan;
     }
-    var bytes = rgba;
-    if (widget.logFrequencyView) {
-      // Peak-preserving vertical re-map (web GL shader port). Only runs when
-      // the view is toggled / gain or axis settings change — never per frame.
-      bytes = warpSpectrogramVertical(
-        rgba,
-        w,
-        h,
-        buildLogAxis(0, _effectiveMaxFreq(), widget.focusHz),
-      );
+
+    // Warm cache: axis toggle needs no work at all.
+    if (!log && _viewLinear != null) {
+      // ignore: avoid_print
+      print('[TIMING] cache HIT linear');
+      return _viewLinear!;
     }
-    return rgbaToUiImage(bytes, w, h);
+    if (log && _viewLog != null && _viewFocus == focus && _viewMaxFreq == maxFreq) {
+      // ignore: avoid_print
+      print('[TIMING] cache HIT log');
+      return _viewLog!;
+    }
+
+    // Cold path: LUT + warp run on the render isolate so this (UI) thread
+    // never freezes — the switch/snackbar/labels repaint instantly.
+    _buildGainLut(gainDb, gamma);
+    final lutMs = sw.elapsedMicroseconds;
+    final bytes = await warpSpectrogramIsolate(WarpRequest(
+      intensity: intensity,
+      width: w,
+      height: h,
+      gainLut: _gainLut!,
+      logView: log,
+      maxFreq: maxFreq,
+      focusHz: focus,
+    ));
+    final warpMs = sw.elapsedMicroseconds - lutMs;
+    final stale = !mounted || !identical(_cachedIntensity, intensity);
+    final t0 = sw.elapsedMicroseconds;
+    final img = await rgbaToUiImage(bytes, w, h);
+    final d1 = sw.elapsedMicroseconds - t0;
+    // ignore: avoid_print
+    print('[TIMING] lut=${lutMs / 1000}ms warp+ipc=${warpMs / 1000}ms '
+        'decode=${d1 / 1000}ms total=${sw.elapsedMilliseconds}ms');
+    // Data changed while we were building: don't publish into the cache (it
+    // is keyed by the old intensity), just hand the image back.
+    if (stale) return img;
+
+    // Publish into the per-view cache (dispose any superseded entry).
+    if (log) {
+      final old = _viewLog;
+      _viewLog = img;
+      _viewFocus = focus;
+      _viewMaxFreq = maxFreq;
+      if (old != null && !identical(old, img) && !identical(old, _image)) {
+        _disposeImg(old);
+      }
+    } else {
+      final old = _viewLinear;
+      _viewLinear = img;
+      if (old != null && !identical(old, img) && !identical(old, _image)) {
+        _disposeImg(old);
+      }
+    }
+    // Pre-build the opposite view off the critical path so the very first
+    // toggle after a data/gain change is a cache hit too.
+    _prewarmAlternate(gainDb, intensity, gamma, focus, maxFreq, log);
+    return img;
+  }
+
+  bool _prewarmRunning = false;
+
+  Future<void> _prewarmAlternate(double gainDb, Object intensity, double gamma,
+      double focus, double maxFreq, bool builtLog) async {
+    if (_prewarmRunning || !mounted) return;
+    // Only useful while the keys we built for are still current.
+    if (!identical(_cachedIntensity, intensity) ||
+        _viewGainDb != gainDb ||
+        _viewGamma != gamma) {
+      return;
+    }
+    final altLog = !builtLog;
+    if (altLog) {
+      if (_viewLog != null && _viewFocus == focus && _viewMaxFreq == maxFreq) return;
+    } else if (_viewLinear != null) {
+      return;
+    }
+    _prewarmRunning = true;
+    try {
+      await _applyGainAndBuildImage(gainDb, logOverride: altLog);
+    } finally {
+      _prewarmRunning = false;
+    }
   }
 
   void _buildGainLut(double gainDb, double gammaValue) {
@@ -666,7 +779,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _imageOwned = true;
       _image = image;
       setState(() {});
-      if (oldImage != null && oldImage != image) {
+      if (oldImage != null && oldImage != image && !_isViewCached(oldImage)) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           try { oldImage.dispose(); } catch (_) {}
         });
@@ -682,7 +795,17 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   void dispose() {
     _renderDebounce?.cancel();
     _jobId++;
-    if (_imageOwned) _image?.dispose();
+    final lin = _viewLinear;
+    final lg = _viewLog;
+    final img = _image;
+    if (lin != null) lin.dispose();
+    if (lg != null && !identical(lg, lin)) lg.dispose();
+    _viewLinear = null;
+    _viewLog = null;
+    if (_imageOwned && img != null &&
+        !identical(img, lin) && !identical(img, lg)) {
+      img.dispose();
+    }
     super.dispose();
   }
 
