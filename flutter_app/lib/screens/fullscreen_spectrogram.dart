@@ -7,6 +7,7 @@ import 'package:get/get.dart';
 
 import '../models/device_history.dart';
 import '../models/marker.dart';
+import '../utils/log_axis.dart';
 import '../widgets/spectrogram_canvas.dart';
 
 class FullscreenResult {
@@ -36,6 +37,8 @@ class FullscreenSpectrogram extends StatefulWidget {
   final double seedGamma;
   final List<MarkerData> markers;
   final double? maxFrequency;
+  final bool logFrequencyView;
+  final double focusHz;
 
   const FullscreenSpectrogram({
     super.key,
@@ -55,6 +58,8 @@ class FullscreenSpectrogram extends StatefulWidget {
     this.seedGamma = 1.0,
     this.markers = const [],
     this.maxFrequency,
+    this.logFrequencyView = false,
+    this.focusHz = kLogDefaultFocusHz,
   });
 
   @override
@@ -139,6 +144,8 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                     showStatusBar: true,
                     compactStatusBar: true,
                     maxFrequency: widget.maxFrequency,
+                    logFrequencyView: widget.logFrequencyView,
+                    focusHz: widget.focusHz,
                     markers: _markers,
                     onMarkerAdd: (timeMs) => setState(() => _markers = [..._markers, MarkerData(timeMs: timeMs)]),
                     onMarkerRemove: (index) => setState(() {

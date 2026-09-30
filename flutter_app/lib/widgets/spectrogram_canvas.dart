@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../models/device_history.dart';
 import '../models/marker.dart';
+import '../utils/log_axis.dart';
 import '../utils/spectro_isolate.dart';
 
 const List<List<double>> kColorMapMagma = [
@@ -120,6 +121,14 @@ class SpectrogramCanvas extends StatefulWidget {
   /// frequencyBins in histories, then device maxFrequency, then 250.
   final double? maxFrequency;
 
+  /// Web-parity log/focus frequency view: linear 0..focus over 75% of the
+  /// plot height, logarithmic above it. When false the classic linear view
+  /// (unchanged) is used.
+  final bool logFrequencyView;
+
+  /// Focus frequency (Hz) used when [logFrequencyView] is enabled.
+  final double focusHz;
+
   const SpectrogramCanvas({
     super.key,
     this.matrix = const [],
@@ -159,6 +168,8 @@ class SpectrogramCanvas extends StatefulWidget {
       this.onMarkerRemove,
       this.onMarkerMove,
       this.maxFrequency,
+      this.logFrequencyView = false,
+      this.focusHz = kLogDefaultFocusHz,
   });
 
   @override
@@ -215,10 +226,14 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     return 250.0;
   }
 
+  /// Plot left inset: widened in log mode so "N Hz" labels fit
+  /// (web keeps p.left = 66 with fontSize 12).
+  double get _pLeft => widget.logFrequencyView ? 58.0 : 40.0;
+
   int? _markerLineHitTest(Offset position) {
     final w = _layoutSize.width;
     if (w <= 0 || _image == null) return null;
-    final pLeft = 40.0;
+    final pLeft = _pLeft;
     final pRight = 6.0;
     final plotW = w - pLeft - pRight;
     if (plotW <= 0) return null;
@@ -250,7 +265,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
 
     final w = _layoutSize.width;
     if (w <= 0 || _image == null) return null;
-    final pLeft = 40.0;
+    final pLeft = _pLeft;
     final pRight = 6.0;
     final pTop = 4.0;
     final plotW = w - pLeft - pRight;
@@ -312,7 +327,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int? _timeMsFromPosition(Offset position) {
     final w = _layoutSize.width;
     if (w <= 0 || _image == null) return null;
-    final pLeft = 40.0;
+    final pLeft = _pLeft;
     final pRight = 6.0;
     final plotW = w - pLeft - pRight;
     if (plotW <= 0) return null;
@@ -391,6 +406,18 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     if (gainChanged && _cachedIntensity != null && _cachedIntensityWidth > 0 && _cachedIntensityHeight > 0) {
       _onGainChanged();
     }
+    final logChanged = oldWidget.logFrequencyView != widget.logFrequencyView ||
+        oldWidget.focusHz != widget.focusHz;
+    if (logChanged &&
+        _cachedIntensity != null &&
+        _cachedIntensityWidth > 0 &&
+        _cachedIntensityHeight > 0) {
+      // Re-warp the cached intensity image for the new axis settings
+      // (no isolate round-trip needed — same path as a gain change). Runs
+      // unconditionally: in live mode `dataChanged` is always true and a
+      // debounced full `_render` would be superseded before finishing.
+      _onGainChanged();
+    }
   }
 
   void applyGain() => _onGainChanged();
@@ -448,7 +475,18 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       rgba[dst + 2] = lut[src + 2];
       rgba[dst + 3] = 0xFF;
     }
-    return rgbaToUiImage(rgba, w, h);
+    var bytes = rgba;
+    if (widget.logFrequencyView) {
+      // Peak-preserving vertical re-map (web GL shader port). Only runs when
+      // the view is toggled / gain or axis settings change — never per frame.
+      bytes = warpSpectrogramVertical(
+        rgba,
+        w,
+        h,
+        buildLogAxis(0, _effectiveMaxFreq(), widget.focusHz),
+      );
+    }
+    return rgbaToUiImage(bytes, w, h);
   }
 
   void _buildGainLut(double gainDb, double gammaValue) {
@@ -879,6 +917,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                     markers: List<MarkerData>.from(widget.markers),
                     maxFrequency: _effectiveMaxFreq(),
                     freqGuideY: _freqGuideY,
+                    logAxis: widget.logFrequencyView
+                        ? buildLogAxis(0, _effectiveMaxFreq(), widget.focusHz)
+                        : null,
                   ),
                 ),
               ),
@@ -922,6 +963,10 @@ class _SpectroPainter extends CustomPainter {
   final double maxFrequency;
   final double? freqGuideY;
 
+  /// Non-null in log/focus frequency view — drives grid lines, frequency
+  /// labels and the long-press guide frequency.
+  final LogAxis? logAxis;
+
   _SpectroPainter(this.image,
       {this.background = const Color(0xFF111026),
       this.frequencyLabels,
@@ -938,9 +983,12 @@ class _SpectroPainter extends CustomPainter {
       this.compactStatusBar = false,
       this.markers = const [],
       this.maxFrequency = 250.0,
-      this.freqGuideY});
+      this.freqGuideY,
+      this.logAxis});
 
-  static const double _leftInset = 40;
+  static const double _leftInsetBase = 40;
+  static const double _leftInsetLog = 58;
+  double get _leftInset => logAxis != null ? _leftInsetLog : _leftInsetBase;
   static const double _rightInset = 6;
   static const double _topInset = 4;
   double get _bottomInset => showStatusBar ? (compactStatusBar ? 50.0 : 68.0) : 36.0;
@@ -971,10 +1019,19 @@ class _SpectroPainter extends CustomPainter {
     textDirection: TextDirection.rtl,
   )..layout();
   static final Map<int, TextPainter> _freqLabelCache = {};
+  static final Map<int, TextPainter> _freqHzLabelCache = {};
   static final Map<String, TextPainter> _gapTextCache = {};
   static TextPainter _getFreqLabelPainter(int hz) {
     return _freqLabelCache.putIfAbsent(hz, () => TextPainter(
       text: TextSpan(text: '$hz', style: const TextStyle(color: _textColor, fontSize: 10)),
+      textDirection: TextDirection.ltr,
+    )..layout());
+  }
+
+  /// "N Hz" labels used by the log frequency view (web format).
+  static TextPainter _getFreqHzLabelPainter(int hz) {
+    return _freqHzLabelCache.putIfAbsent(hz, () => TextPainter(
+      text: TextSpan(text: '$hz Hz', style: const TextStyle(color: _textColor, fontSize: 10)),
       textDirection: TextDirection.ltr,
     )..layout());
   }
@@ -1144,8 +1201,19 @@ class _SpectroPainter extends CustomPainter {
       final x = pLeft + (plotW * i / _xTicks).roundToDouble();
       canvas.drawLine(Offset(x, pTop), Offset(x, pTop + plotH), gridPaint);
     }
+    final axis = logAxis;
     for (var i = 0; i <= _yTicks; i++) {
-      final y = pTop + (plotH * i / _yTicks).roundToDouble();
+      final double y;
+      if (axis != null) {
+        // Grid lines are drawn at linear-frequency positions and then warped
+        // by the shader on the web — same as placing them at the warped
+        // position of each linear fifth.
+        final freqFromBottom = maxFrequency * (1.0 - i / _yTicks);
+        final pos = frequencyToPosition(axis, freqFromBottom);
+        y = pTop + plotH * (1.0 - pos);
+      } else {
+        y = pTop + (plotH * i / _yTicks).roundToDouble();
+      }
       canvas.drawLine(Offset(pLeft, y), Offset(pLeft + plotW, y), gridPaint);
     }
 
@@ -1171,18 +1239,65 @@ class _SpectroPainter extends CustomPainter {
       tp.paint(canvas, Offset(x - tp.width / 2, pTop + plotH + 6));
     }
 
-    // 6) Frequency (y) axis labels — 0 to 250 Hz.
-    for (var i = 0; i <= _yTicks; i++) {
-      final hz = ((_yTicks - i) * maxFrequency / _yTicks).round();
-      final y = pTop + plotH * i / _yTicks;
-      final fp = _getFreqLabelPainter(hz);
-      fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
+    // 6) Frequency (y) axis labels — classic linear view: 0 to maxFrequency.
+    //    Log view: candidate values placed at warped positions (web parity).
+    if (axis != null) {
+      final minHz = axis.minHz;
+      final maxHz = axis.maxHz;
+      final values = <double>[minHz];
+      for (final candidate in kLogLabelCandidates) {
+        if (candidate > minHz && candidate < maxHz) values.add(candidate);
+      }
+      values.add(maxHz);
+
+      final positioned = <List<double>>[]; // [value, y]
+      for (final v in values) {
+        final pos = frequencyToPosition(axis, v);
+        positioned.add([v, pTop + plotH * (1.0 - pos)]);
+      }
+
+      // Drop labels closer than 14px to the previous one, but always keep
+      // the maximum-frequency label (web MIN_LABEL_GAP_PX behaviour).
+      final kept = <List<double>>[];
+      for (var k = 0; k < positioned.length; k++) {
+        final item = positioned[k];
+        final isLast = k == positioned.length - 1;
+        if (kept.isNotEmpty &&
+            (kept.last[1] - item[1]).abs() < 14.0) {
+          if (isLast) kept[kept.length - 1] = item;
+          continue;
+        }
+        kept.add(item);
+      }
+
+      for (final item in kept) {
+        final hz = item[0].round();
+        final y = item[1];
+        // Short tick at the plot edge (web drawLogFrequencyAxisLabels).
+        canvas.drawLine(Offset(pLeft - 4, y), Offset(pLeft, y), _axisPaint);
+        final fp = _getFreqHzLabelPainter(hz);
+        fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
+      }
+    } else {
+      for (var i = 0; i <= _yTicks; i++) {
+        final hz = ((_yTicks - i) * maxFrequency / _yTicks).round();
+        final y = pTop + plotH * i / _yTicks;
+        final fp = _getFreqLabelPainter(hz);
+        fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
+      }
     }
 
     // 6b) Long-press frequency guide (dashed horizontal line + Hz label).
     final guideY = freqGuideY;
     if (guideY != null && guideY >= pTop && guideY <= pTop + plotH) {
-      final hz = maxFrequency * (1.0 - (guideY - pTop) / plotH);
+      final double hz;
+      if (axis != null) {
+        // Inverse of the warped axis so the guide reports the true frequency.
+        final posFromLow = 1.0 - (guideY - pTop) / plotH;
+        hz = positionToFrequency(axis, posFromLow);
+      } else {
+        hz = maxFrequency * (1.0 - (guideY - pTop) / plotH);
+      }
       final guidePaint = Paint()
         ..color = const Color(0xFF00E676)
         ..strokeWidth = 1.2;
@@ -1347,6 +1462,8 @@ class _SpectroPainter extends CustomPainter {
         !identical(oldDelegate.coverageIntervals, coverageIntervals) ||
         !identical(oldDelegate.histories, histories) ||
         !listEquals(oldDelegate.markers, markers) ||
-        oldDelegate.freqGuideY != freqGuideY;
+        oldDelegate.freqGuideY != freqGuideY ||
+        oldDelegate.maxFrequency != maxFrequency ||
+        oldDelegate.logAxis != logAxis;
   }
 }

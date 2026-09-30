@@ -13,6 +13,7 @@ import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/notification_service.dart';
 import '../services/socket_service.dart';
+import '../utils/log_axis.dart';
 import '../widgets/spectrogram_canvas.dart';
 import 'auth_controller.dart';
 
@@ -49,6 +50,13 @@ class DashboardController extends GetxController {
   final requestEndTime = RxnString();
   final deviceStatusMap = <String, DeviceStatusInfo>{}.obs;
 
+  // Log/focus frequency view (web parity: keys `logFrequencyView` /
+  // `logFocusHz`, default = classic linear view).
+  final logFrequencyView = false.obs;
+  final focusHz = kLogDefaultFocusHz.obs;
+  static const _logViewStorageKey = 'logFrequencyView';
+  static const _focusStorageKey = 'logFocusHz';
+
   final canvasKey = GlobalKey<SpectrogramCanvasState>();
 
   StreamSubscription<DeviceHistory>? _dataSub;
@@ -69,6 +77,7 @@ class DashboardController extends GetxController {
   void onInit() {
     super.onInit();
     _loadDeviceStatus();
+    _loadLogFrequencySettings();
     _bindSocket();
     _loadDevices();
     _telemetryTimer = Timer.periodic(const Duration(seconds: 60), (_) => _fetchLatestTelemetry());
@@ -266,6 +275,47 @@ class DashboardController extends GetxController {
         );
       }
       deviceStatusMap.refresh();
+    } catch (_) {}
+  }
+
+  Future<void> _loadLogFrequencySettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      logFrequencyView.value = prefs.getString(_logViewStorageKey) == '1';
+      final stored = double.tryParse(prefs.getString(_focusStorageKey) ?? '');
+      if (stored != null && stored.isFinite && stored > 0) {
+        focusHz.value = stored;
+      }
+    } catch (_) {}
+  }
+
+  /// Toggle the log/focus frequency view (web parity: message + persistence).
+  Future<void> setLogFrequencyView(bool enabled) async {
+    logFrequencyView.value = enabled;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_logViewStorageKey, enabled ? '1' : '0');
+    } catch (_) {}
+    Get.rawSnackbar(
+      message: enabled ? 'تم تفعيل العرض اللوغاريتمي' : 'تم تفعيل العرض الخطي',
+      duration: const Duration(seconds: 2),
+      snackPosition: SnackPosition.BOTTOM,
+      backgroundColor: const Color(0xE61A1A2E),
+      borderRadius: 8,
+      margin: const EdgeInsets.all(10),
+      snackStyle: SnackStyle.FLOATING,
+    );
+  }
+
+  /// Set the focus frequency (Hz). Non-positive/invalid values fall back to
+  /// the web default (200 Hz).
+  Future<void> setFocusHz(double value) async {
+    final safe = (value.isFinite && value > 0) ? value : kLogDefaultFocusHz;
+    if (focusHz.value == safe) return;
+    focusHz.value = safe;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_focusStorageKey, '$safe');
     } catch (_) {}
   }
 
