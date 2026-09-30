@@ -312,6 +312,9 @@ class DashboardScreen extends StatelessWidget {
     if (result != null) {
       c.updateGain(result.gainDb);
       c.markers.value = result.markers;
+      if (result.logFrequencyView != c.logFrequencyView.value) {
+        c.setLogFrequencyView(result.logFrequencyView);
+      }
       c.canvasKey.currentState?.forceRender();
     }
   }

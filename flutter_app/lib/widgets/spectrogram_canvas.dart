@@ -226,8 +226,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     return 250.0;
   }
 
-  /// Plot left inset: widened in log mode so "N Hz" labels fit
-  /// (web keeps p.left = 66 with fontSize 12).
+  /// Plot left inset: wider in log mode (kept as-is; labels are numbers only).
   double get _pLeft => widget.logFrequencyView ? 58.0 : 40.0;
 
   int? _markerLineHitTest(Offset position) {
@@ -1142,7 +1141,6 @@ class _SpectroPainter extends CustomPainter {
     textDirection: TextDirection.rtl,
   )..layout();
   static final Map<int, TextPainter> _freqLabelCache = {};
-  static final Map<int, TextPainter> _freqHzLabelCache = {};
   static final Map<String, TextPainter> _gapTextCache = {};
   static TextPainter _getFreqLabelPainter(int hz) {
     return _freqLabelCache.putIfAbsent(hz, () => TextPainter(
@@ -1151,13 +1149,6 @@ class _SpectroPainter extends CustomPainter {
     )..layout());
   }
 
-  /// "N Hz" labels used by the log frequency view (web format).
-  static TextPainter _getFreqHzLabelPainter(int hz) {
-    return _freqHzLabelCache.putIfAbsent(hz, () => TextPainter(
-      text: TextSpan(text: '$hz Hz', style: const TextStyle(color: _textColor, fontSize: 10)),
-      textDirection: TextDirection.ltr,
-    )..layout());
-  }
   static TextPainter _getGapTextPainter(int gapMin) {
     return _gapTextCache.putIfAbsent('$gapMin', () => TextPainter(
       text: TextSpan(text: 'لا توجد بيانات $gapMin د', style: const TextStyle(color: Color(0xF2E1F4FF), fontSize: 11)),
@@ -1398,7 +1389,7 @@ class _SpectroPainter extends CustomPainter {
         final y = item[1];
         // Short tick at the plot edge (web drawLogFrequencyAxisLabels).
         canvas.drawLine(Offset(pLeft - 4, y), Offset(pLeft, y), _axisPaint);
-        final fp = _getFreqHzLabelPainter(hz);
+        final fp = _getFreqLabelPainter(hz);
         fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
       }
     } else {

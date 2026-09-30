@@ -13,10 +13,12 @@ import '../widgets/spectrogram_canvas.dart';
 class FullscreenResult {
   final double gainDb;
   final List<MarkerData> markers;
+  final bool logFrequencyView;
 
   const FullscreenResult({
     required this.gainDb,
     required this.markers,
+    required this.logFrequencyView,
   });
 }
 
@@ -70,6 +72,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
   late double _gainDb;
   late final ValueNotifier<double> _gainNotifier;
   late List<MarkerData> _markers;
+  late bool _logFrequencyView;
   bool _controlsVisible = true;
   final _canvasKey = GlobalKey<SpectrogramCanvasState>();
 
@@ -79,6 +82,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
     _gainDb = widget.gainDb;
     _gainNotifier = ValueNotifier<double>(_gainDb);
     _markers = List<MarkerData>.from(widget.markers);
+    _logFrequencyView = widget.logFrequencyView;
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
@@ -101,6 +105,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
     Navigator.of(context).pop(FullscreenResult(
       gainDb: _gainDb,
       markers: _markers,
+      logFrequencyView: _logFrequencyView,
     ));
   }
 
@@ -144,7 +149,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                     showStatusBar: true,
                     compactStatusBar: true,
                     maxFrequency: widget.maxFrequency,
-                    logFrequencyView: widget.logFrequencyView,
+                    logFrequencyView: _logFrequencyView,
                     focusHz: widget.focusHz,
                     markers: _markers,
                     onMarkerAdd: (timeMs) => setState(() => _markers = [..._markers, MarkerData(timeMs: timeMs)]),
@@ -236,6 +241,31 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                           ),
                                         ),
                                        ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 1),
+                            Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF111111),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                              child: Row(
+                                children: [
+                                  Switch(
+                                    value: _logFrequencyView,
+                                    onChanged: (v) => setState(() => _logFrequencyView = v),
+                                    activeThumbColor: Theme.of(context).colorScheme.primary,
+                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Expanded(
+                                    child: Text(
+                                      'عرض لوغاريتمي',
+                                      style: TextStyle(color: Colors.white70, fontSize: 9),
                                     ),
                                   ),
                                 ],
