@@ -197,6 +197,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
 
   void forceRender() {
     if (!mounted) return;
+    // ignore: avoid_print
+    print('[DbgRx] forceRender window=${widget.requestStartTime} -> ${widget.requestEndTime}');
     _renderDebounce?.cancel();
     _render();
   }
@@ -454,6 +456,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         oldWidget.requestStartTime != widget.requestStartTime ||
         oldWidget.requestEndTime != widget.requestEndTime;
     if (dataChanged) {
+      // ignore: avoid_print
+      print('[DbgRx] didUpdateWidget dataChanged '
+          '${oldWidget.requestStartTime} -> ${widget.requestStartTime} | '
+          '${oldWidget.requestEndTime} -> ${widget.requestEndTime}');
       _cachedMatrix = null;
       _matrixCacheKey = null;
       _cachedCoverageIntervals = null;
@@ -915,6 +921,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       return;
     }
 
+    // ignore: avoid_print
+    print('[DbgRx] _render#$id START window=${widget.requestStartTime} -> ${widget.requestEndTime} '
+        'hist=${histories.length} emptyBlocks=${histories.where((e) => e.data.isEmpty).length}');
+    final sw = Stopwatch()..start();
     try {
       final result = await renderSpectrogramIsolate(
         RenderRequest(
@@ -937,14 +947,22 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
           requestEndTime: widget.requestEndTime,
         ),
       );
-      if (!mounted || id != _jobId) return;
+      if (!mounted || id != _jobId) {
+        // ignore: avoid_print
+        print('[DbgRx] _render#$id SUPERSEDED after isolate (${sw.elapsedMilliseconds}ms)');
+        return;
+      }
       _cachedIntensity = result.intensity;
       _cachedIntensityWidth = result.width;
       _cachedIntensityHeight = result.height;
       _cachedGamma = result.gamma;
       final gainDb = widget.gainNotifier?.value ?? widget.gainDb;
       final image = await _applyGainAndBuildImage(gainDb);
-      if (!mounted || id != _jobId) return;
+      if (!mounted || id != _jobId) {
+        // ignore: avoid_print
+        print('[DbgRx] _render#$id SUPERSEDED after gain (${sw.elapsedMilliseconds}ms)');
+        return;
+      }
       seedSnapshot = CanvasSeedSnapshot(
         image: image,
         cachedCombined: null,
@@ -967,6 +985,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _imageOwned = true;
       _image = image;
       setState(() {});
+      // ignore: avoid_print
+      print('[DbgRx] _render#$id DONE ${sw.elapsedMilliseconds}ms img=${result.width}x${result.height}');
       if (oldImage != null && oldImage != image && !_isViewCached(oldImage)) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           try { oldImage.dispose(); } catch (_) {}

@@ -120,17 +120,27 @@ class DashboardController extends GetxController {
       if (!followLiveActive.value || selected.value == null) return;
       if (h.deviceId != selected.value!.id) return;
       final key = '${h.deviceId}|${h.startTime}|${h.endTime}';
-      if (_historyKeys.contains(key)) return;
+      if (_historyKeys.contains(key)) {
+        // ignore: avoid_print
+        print('[DbgRx] ${_dbgTs()} socket DROP key-dup $key rows=${h.data.length}');
+        return;
+      }
       if (loadingHistory.value) {
         _historyKeys.add(key);
         _pendingLivePackets.add(h);
+        // ignore: avoid_print
+        print('[DbgRx] ${_dbgTs()} socket BUFFERED (loading) $key rows=${h.data.length}');
         return;
       }
       _historyKeys.add(key);
       if (h.data.isEmpty) {
+        // ignore: avoid_print
+        print('[DbgRx] ${_dbgTs()} socket EMPTY->fetchNarrow $key');
         _fetchAndInsertPacket(h);
         return;
       }
+      // ignore: avoid_print
+      print('[DbgRx] ${_dbgTs()} socket INSERT $key rows=${h.data.length}');
       insertPacketLive(h);
     });
     _deviceStatusSub = socket.onDeviceStatus.listen((entries) {
@@ -319,6 +329,13 @@ class DashboardController extends GetxController {
     } catch (_) {}
   }
 
+  static String _dbgTs() {
+    final n = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    String three(int v) => v.toString().padLeft(3, '0');
+    return '${two(n.hour)}:${two(n.minute)}:${two(n.second)}.${three(n.millisecond)}';
+  }
+
   void insertPacketLive(DeviceHistory h) {
     histories.add(h);
     histories.sort((a, b) {
@@ -339,6 +356,11 @@ class DashboardController extends GetxController {
     requestStartTime.value = adjustedStart.toIso8601String();
     requestEndTime.value = anchor.toIso8601String();
     liveDataNotifier.value = (List.unmodifiable(histories), requestStartTime.value, requestEndTime.value);
+    // ignore: avoid_print
+    print('[DbgRx] ${_dbgTs()} insertPacketLive added=${h.startTime}->${h.endTime} '
+        'rows=${h.data.length} histCount=${histories.length} '
+        'emptyBlocks=${histories.where((e) => e.data.isEmpty).length} '
+        'window=${requestStartTime.value} -> ${requestEndTime.value}');
     canvasKey.currentState?.forceRender();
   }
 
@@ -491,6 +513,10 @@ class DashboardController extends GetxController {
     try {
       final result = await api.fetchHistory(device.id, from: from, to: to);
       histories.value = result;
+      // ignore: avoid_print
+      print('[DbgRx] ${_dbgTs()} setFollowLive items=${result.length} '
+          'emptyBlocks=${result.where((e) => e.data.isEmpty).length} '
+          'last=${result.isNotEmpty ? "${result.last.startTime}->${result.last.endTime} rows=${result.last.data.length}" : "-"}');
       _historyKeys
         ..clear()
         ..addAll(result.map((e) => '${e.deviceId}|${e.startTime}|${e.endTime}'));
@@ -532,6 +558,10 @@ class DashboardController extends GetxController {
       final end = DateTime.tryParse(h.endTime ?? '');
       if (start == null || end == null) return;
       final result = await api.fetchHistory(device.id, from: start, to: end);
+      // ignore: avoid_print
+      print('[DbgRx] ${_dbgTs()} fetchNarrow ${h.startTime}->${h.endTime} '
+          'items=${result.length} itemRows=${result.map((r) => r.data.length).toList()} '
+          'lastIsEmpty=${result.isNotEmpty && result.last.data.isEmpty}');
       final match = result.where((r) =>
         r.startTime == h.startTime && r.endTime == h.endTime && r.data.isNotEmpty
       ).toList();
@@ -539,8 +569,13 @@ class DashboardController extends GetxController {
         _historyKeys.remove('${h.deviceId}|${h.startTime}|${h.endTime}');
         _historyKeys.add('${match.first.deviceId}|${match.first.startTime}|${match.first.endTime}');
         insertPacketLive(match.first);
+      } else {
+        // ignore: avoid_print
+        print('[DbgRx] ${_dbgTs()} fetchNarrow NO-MATCH (key stays) ${h.startTime}->${h.endTime}');
       }
-    } on Exception catch (_) {
+    } on Exception catch (e) {
+      // ignore: avoid_print
+      print('[DbgRx] ${_dbgTs()} fetchNarrow FAILED ${h.startTime}->${h.endTime} $e');
     }
   }
 
@@ -587,15 +622,28 @@ class DashboardController extends GetxController {
       final from = now.subtract(Duration(minutes: liveWindowMinutes.value));
       final result = await api.fetchHistory(device.id, from: from, to: now);
       if (!followLiveActive.value) return;
+      var inserted = 0;
+      var emptyFetched = 0;
+      var skipped = 0;
       for (final h in result) {
         final key = '${h.deviceId}|${h.startTime}|${h.endTime}';
-        if (_historyKeys.contains(key)) continue;
+        if (_historyKeys.contains(key)) {
+          skipped++;
+          continue;
+        }
         _historyKeys.add(key);
         if (h.data.isEmpty) {
+          emptyFetched++;
           _fetchAndInsertPacket(h);
           continue;
         }
+        inserted++;
         insertPacketLive(h);
+      }
+      if (inserted > 0 || emptyFetched > 0) {
+        // ignore: avoid_print
+        print('[DbgRx] ${_dbgTs()} poll items=${result.length} inserted=$inserted '
+            'empty->fetch=$emptyFetched skippedDup=$skipped');
       }
     } on Exception {
       // Ignore polling errors silently

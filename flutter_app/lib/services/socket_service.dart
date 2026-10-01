@@ -194,14 +194,28 @@ class SocketService {
     }
     try {
       final history = DeviceHistory.fromJson(map);
+      if (kDebugMode) {
+        final raw = map['data'];
+        print('[DbgRx] ${_dbgTs()} socket device:data dev=${map['deviceId']} '
+            '${map['startTime']}->${map['endTime']} dataType=${raw.runtimeType}'
+            '${raw is String ? '(len=${raw.length})' : ''} '
+            'decodedRows=${history.data.length} conf=${map['confidence']}');
+      }
       if (history.data.isEmpty && kDebugMode) {
-        print('[Socket] packet ${history.startTime}-${history.endTime} has EMPTY data matrix');
+        print('[DbgRx] ${_dbgTs()} packet ${history.startTime}-${history.endTime} has EMPTY data matrix');
       }
       return history;
     } catch (e) {
-      if (kDebugMode) print('[Socket] payload parse FAILED: $e | keys: ${map.keys.toList()}');
+      if (kDebugMode) print('[DbgRx] ${_dbgTs()} payload parse FAILED: $e | keys: ${map.keys.toList()}');
       return null;
     }
+  }
+
+  static String _dbgTs() {
+    final n = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    String three(int v) => v.toString().padLeft(3, '0');
+    return '${two(n.hour)}:${two(n.minute)}:${two(n.second)}.${three(n.millisecond)}';
   }
 
   Future<Map<String, dynamic>?> emitCheckAiStatus({

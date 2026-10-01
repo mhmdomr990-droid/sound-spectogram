@@ -256,12 +256,14 @@ void _isolateEntry(SendPort mainSendPort) {
     final req = message[0] as RenderRequest;
 
     try {
+      final sw = Stopwatch()..start();
       final List<List<num>> matrix;
       if (req.hasHistories) {
         matrix = buildMatrixFromHistories(req.histories, req.requestStartTime, req.requestEndTime);
       } else {
         matrix = req.matrix;
       }
+      final matrixMs = sw.elapsedMilliseconds;
 
       final int w;
       final int h;
@@ -294,6 +296,10 @@ void _isolateEntry(SendPort mainSendPort) {
         endTimeIso: req.endTimeIso,
         backgroundColor: req.backgroundColor,
       );
+      // ignore: avoid_print
+      print('[DbgRx] iso render matrix=${matrixMs}ms rgba=${sw.elapsedMilliseconds - matrixMs}ms '
+          'total=${sw.elapsedMilliseconds}ms dims=${result.width}x${result.height} '
+          'srcMatrix=${matrix.isNotEmpty ? matrix.first.length : 0}x${matrix.length}');
       replyTo.send(RenderResult(result.rgba, result.width, result.height, intensity: result.intensity, gamma: result.gamma));
     } catch (e) {
       replyTo.send(e.toString());
