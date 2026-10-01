@@ -247,6 +247,47 @@ select:focus-visible {
   padding: 10px 8px;
 }
 
+.canvas-context-menu {
+  position: fixed;
+  z-index: 1003;
+  min-width: 200px;
+  padding: 6px;
+  background: var(--panel, #141a2a);
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.canvas-context-menu-item {
+  display: block;
+  width: 100%;
+  text-align: right;
+  padding: 9px 12px;
+  font-size: 13.5px;
+  font-family: inherit;
+  color: var(--ink, #e6e9f2);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.canvas-context-menu-item:hover,
+.canvas-context-menu-item:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  outline: none;
+}
+
+.canvas-context-menu-item + .canvas-context-menu-item {
+  margin-top: 4px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line, rgba(255, 255, 255, 0.12));
+}
+
 .right-panel h3 {
   margin-top: 0;
   margin-bottom: 8px;

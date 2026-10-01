@@ -16,6 +16,12 @@
   var FOCUS_STORAGE_KEY = "logFocusHz";
   // Set to true ONLY if your normal linear view shows LOW frequencies at the TOP of the plot.
   var LOW_FREQUENCY_AT_TOP = false;
+  // Where the axis COMPRESSES several source rows into one output pixel, the result is a blend of
+  // the average and the strongest sample: 0 = pure average (cleanest background, dimmer thin
+  // lines), 1 = strongest sample only (keeps every thin line at full brightness, but makes the
+  // noise floor brighter and grainier). 0.5 is a balanced default. Where the axis EXPANDS
+  // (footprint <= 1 source pixel) plain smooth sampling is used, exactly like the linear view.
+  var PEAK_WEIGHT = 0.5;
 
   var LOG_WEBGL_RENDERER = {
     supported: null,
@@ -40,9 +46,8 @@
   ].join("\n");
 
   // v_uv.y = 0 is the TOP of the image, 1 is the BOTTOM.
-  // Where the axis compresses many source rows into one output pixel, the shader keeps the
-  // brightest (peak) sample, matching the app's existing max column aggregation, so real
-  // signals are never averaged away by the compression.
+  // Where the axis compresses many source rows into one output pixel, the shader blends the
+  // average with the brightest (peak) sample (see PEAK_WEIGHT), so real signals are not lost.
   var FRAGMENT_SOURCE = [
     "#ifdef GL_FRAGMENT_PRECISION_HIGH",
     "precision highp float;",
@@ -57,6 +62,7 @@
     "uniform float u_topLinear;",
     "uniform float u_lowAtTop;",
     "uniform float u_pixelV;",
+    "uniform float u_peakWeight;",
     "uniform vec4 u_plotUv;",
     "varying vec2 v_uv;",
     "float srcFromLowAt(float d) {",
@@ -88,18 +94,28 @@
     "  float halfDy = 0.5 * u_pixelV;",
     "  float ya = mapY(v_uv.y - halfDy);",
     "  float yb = mapY(v_uv.y + halfDy);",
-    "  vec4 best = texture2D(u_source, vec2(v_uv.x, mapY(v_uv.y)));",
-    "  float bestLuma = luma(best);",
+    "  vec4 center = texture2D(u_source, vec2(v_uv.x, mapY(v_uv.y)));",
+    "  float footprintPx = abs(yb - ya) / u_pixelV;",
+    "  if (footprintPx <= 1.0) {",
+    "    gl_FragColor = center;",
+    "    return;",
+    "  }",
+    "  vec4 best = center;",
+    "  float bestLuma = luma(center);",
+    "  vec4 sum = vec4(0.0);",
     "  for (int i = 0; i < 12; i++) {",
     "    float f = (float(i) + 0.5) / 12.0;",
     "    vec4 c = texture2D(u_source, vec2(v_uv.x, mix(ya, yb, f)));",
+    "    sum += c;",
     "    float l = luma(c);",
     "    if (l > bestLuma) {",
     "      bestLuma = l;",
     "      best = c;",
     "    }",
     "  }",
-    "  gl_FragColor = best;",
+    "  vec4 pooled = mix(sum / 12.0, best, u_peakWeight);",
+    "  float w = smoothstep(1.0, 2.0, footprintPx);",
+    "  gl_FragColor = mix(center, pooled, w);",
     "}"
   ].join("\n");
 
@@ -405,6 +421,7 @@
         topLinear: gl.getUniformLocation(program, "u_topLinear"),
         lowAtTop: gl.getUniformLocation(program, "u_lowAtTop"),
         pixelV: gl.getUniformLocation(program, "u_pixelV"),
+        peakWeight: gl.getUniformLocation(program, "u_peakWeight"),
         plotUv: gl.getUniformLocation(program, "u_plotUv")
       };
     }
@@ -510,6 +527,7 @@
     gl.uniform1f(loc.topLinear, axis.topLinear ? 1 : 0);
     gl.uniform1f(loc.lowAtTop, axis.lowAtTop ? 1 : 0);
     gl.uniform1f(loc.pixelV, 1 / height);
+    gl.uniform1f(loc.peakWeight, PEAK_WEIGHT);
     gl.uniform4f(loc.plotUv, plotLeftUv, plotTopUv, plotRightUv, plotBottomUv);
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);

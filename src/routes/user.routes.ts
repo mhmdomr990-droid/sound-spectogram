@@ -1,11 +1,20 @@
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { userController } from "../controllers/user.controller";
 import { UserRole } from "../entities/User";
 import { authMiddleware, requireRole } from "../utils/auth.middleware";
 
 const router = Router();
 
-router.post("/auth/login", userController.login);
+const loginLimiter = rateLimit({
+	windowMs: 15 * 60 * 1000,
+	max: 10,
+	message: { message: "Too many login attempts, please try again later." },
+	standardHeaders: true,
+	legacyHeaders: false
+});
+
+router.post("/auth/login", loginLimiter, userController.login);
 
 router.get("/users", authMiddleware, requireRole(UserRole.ADMIN), userController.getUsers);
 router.post("/users", authMiddleware, requireRole(UserRole.ADMIN), userController.createUser);

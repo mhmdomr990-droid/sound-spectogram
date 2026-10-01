@@ -54,22 +54,6 @@
   var markerDragHasMoved = false;
   var skipMarkerRemovalClick = false;
   var panHasMoved = false;
-  var PROBE_AUTO_HIDE_MS = 4000;
-  var probeAutoHideTimerId = null;
-
-  function scheduleProbeAutoHide() {
-    if (probeAutoHideTimerId !== null) {
-      clearTimeout(probeAutoHideTimerId);
-    }
-    probeAutoHideTimerId = setTimeout(function () {
-      probeAutoHideTimerId = null;
-      probeTooltipEl.classList.add("hidden");
-    }, PROBE_AUTO_HIDE_MS);
-  }
-  var suppressNextProbeClick = false;
-  var pressStartedAtMs = 0;
-  var PAN_MOVE_THRESHOLD_PX = 5;
-  var CLICK_MAX_DURATION_MS = 400;
   var panStartClientX = 0;
   var panStartFromMs = 0;
   var panStartToMs = 0;
@@ -150,6 +134,44 @@
   var sideDeviceInfoEl = document.getElementById("sideDeviceInfo");
   var processingStatusEl = document.getElementById("processingStatus");
   var canvas = document.getElementById("spectrogramCanvas");
+  var markersOverlayCanvas = null;
+  var markersOverlayCtx = null;
+
+  function ensureMarkersOverlayCanvas() {
+    if (markersOverlayCanvas) {
+      return markersOverlayCanvas;
+    }
+    if (!canvas || !canvas.parentElement) {
+      return null;
+    }
+    markersOverlayCanvas = document.createElement("canvas");
+    markersOverlayCanvas.setAttribute("aria-hidden", "true");
+    markersOverlayCanvas.style.position = "absolute";
+    markersOverlayCanvas.style.left = "0";
+    markersOverlayCanvas.style.top = "0";
+    markersOverlayCanvas.style.pointerEvents = "none";
+    markersOverlayCanvas.style.zIndex = "2";
+    canvas.parentElement.appendChild(markersOverlayCanvas);
+    markersOverlayCtx = markersOverlayCanvas.getContext("2d");
+    return markersOverlayCanvas;
+  }
+
+  function syncMarkersOverlayGeometry() {
+    var overlay = ensureMarkersOverlayCanvas();
+    if (!overlay) {
+      return null;
+    }
+    var rect = canvas.getBoundingClientRect();
+    overlay.style.left = canvas.offsetLeft + "px";
+    overlay.style.top = canvas.offsetTop + "px";
+    overlay.style.width = rect.width + "px";
+    overlay.style.height = rect.height + "px";
+    if (overlay.width !== canvas.width || overlay.height !== canvas.height) {
+      overlay.width = canvas.width;
+      overlay.height = canvas.height;
+    }
+    return { scaleX: overlay.width / Math.max(1, rect.width), scaleY: overlay.height / Math.max(1, rect.height) };
+  }
   var spectrogramLoaderEl = document.getElementById("spectrogramLoader");
   var legendCanvas = document.getElementById("spectrogramLegend");
   var gapTooltipEl = document.getElementById("gapTooltip");
@@ -1896,9 +1918,13 @@
         historyTableBody.innerHTML = "";
       }
       lastRenderMeta = null;
+      if (window.HarmonicCursor) {
+        window.HarmonicCursor.redraw();
+      }
       renderedTimeMarkerHits = [];
       gapTooltipEl.classList.add("hidden");
       clearSpectrogramCanvas("لا توجد بيانات للجهاز المحدد.");
+      drawTimeMarkersOverlay();
       return;
     }
 
@@ -1929,6 +1955,7 @@
       renderedTimeMarkerHits = [];
       gapTooltipEl.classList.add("hidden");
       clearSpectrogramCanvas("لا توجد بيانات للجهاز المحدد.");
+      drawTimeMarkersOverlay();
       return;
     }
 
@@ -2068,6 +2095,9 @@
     }
 
     lastRenderMeta = renderResult || null;
+    if (window.HarmonicCursor) {
+      window.HarmonicCursor.redraw();
+    }
     drawTimeMarkersOverlay();
 
     if (renderResult) {
@@ -2195,6 +2225,15 @@
 
   function drawTimeMarkersOverlay() {
     renderedTimeMarkerHits = [];
+    var scale = syncMarkersOverlayGeometry();
+    if (!scale || !markersOverlayCtx) {
+      return;
+    }
+    var ctx = markersOverlayCtx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, markersOverlayCanvas.width, markersOverlayCanvas.height);
+    ctx.setTransform(scale.scaleX, 0, 0, scale.scaleY, 0, 0);
+
     if (!lastRenderMeta || !lastRenderMeta.layout) {
       return;
     }
@@ -2206,11 +2245,6 @@
     var layout = lastRenderMeta.layout;
     var range = lastRenderMeta.toMs - lastRenderMeta.fromMs;
     if (!Number.isFinite(range) || range <= 0) {
-      return;
-    }
-
-    var ctx = canvas.getContext("2d");
-    if (!ctx) {
       return;
     }
 
@@ -2341,7 +2375,7 @@
 
     if (hit.markerIndex >= 0 && hit.markerIndex < timeMarkers.length) {
       timeMarkers.splice(hit.markerIndex, 1);
-      scheduleRender({ skipTable: true });
+      drawTimeMarkersOverlay();
       return true;
     }
 
@@ -2372,7 +2406,7 @@
     var xFrac = (x - layout.plotLeft) / Math.max(1e-9, layout.plotRight - layout.plotLeft);
     var timeMs = lastRenderMeta.fromMs + xFrac * span;
     timeMarkers.push({ timeMs: timeMs });
-    scheduleRender({ skipTable: true });
+    drawTimeMarkersOverlay();
     return true;
   }
 
@@ -2630,6 +2664,7 @@
     }
 
     liveManualBrowseActive = true;
+    liveFollowEnabled = false;
     var padding = Math.max(60 * 1000, Math.round((maxEnd - minStart) * 0.04));
     viewportFromMs = minStart - padding;
     viewportToMs = maxEnd + padding;
@@ -2645,6 +2680,7 @@
     }
 
     liveManualBrowseActive = true;
+    liveFollowEnabled = false;
     var panRatio = Number.isFinite(ratio) && ratio > 0 ? ratio : 0.2;
     var shift = Math.max(30 * 1000, Math.round(span * panRatio));
     viewportFromMs += direction * shift;
@@ -2698,6 +2734,7 @@
     }
 
     liveManualBrowseActive = true;
+    liveFollowEnabled = false;
     var anchor = clamp(anchorFraction, 0, 1);
     var anchorTime = viewportFromMs + span * anchor;
     var newSpan = Math.round(span * factor);
@@ -4959,14 +4996,17 @@
     resetViewport();
   });
 
-  clearMarkersBtn.addEventListener("click", function () {
+  function clearAllTimeMarkers() {
     if (!timeMarkers.length) {
       return;
     }
-
     timeMarkers = [];
     renderedTimeMarkerHits = [];
-    scheduleRender({ skipTable: true });
+    drawTimeMarkersOverlay();
+  }
+
+  clearMarkersBtn.addEventListener("click", function () {
+    clearAllTimeMarkers();
   });
 
   bindHoldAction(panLeftBtn, function () {
@@ -5059,15 +5099,24 @@
     applyLogFrequencyViewSettings();
   });
 
+  if (window.HarmonicCursor) {
+    window.HarmonicCursor.init({
+      canvas: canvas,
+      getMeta: function () {
+        return lastRenderMeta;
+      },
+      isLogView: function () {
+        return activeLogFrequencyView;
+      }
+    });
+  }
+
   canvas.style.cursor = "grab";
 
   canvas.addEventListener("mousedown", function (event) {
     if (event.button !== 0) {
       return;
     }
-
-    suppressNextProbeClick = false;
-    pressStartedAtMs = Date.now();
 
     var markerHit = findMarkerHitAtCanvasPoint(event);
     if (markerHit && markerHit.markerIndex >= 0 && markerHit.markerIndex < timeMarkers.length) {
@@ -5126,7 +5175,7 @@
         markerDragHasMoved = true;
       }
 
-      scheduleRender({ skipTable: true });
+      drawTimeMarkersOverlay();
       return;
     }
 
@@ -5142,9 +5191,10 @@
     var canvasWidth = Math.max(1, canvas.clientWidth || 1);
     var dx = event.clientX - panStartClientX;
 
-    if (!panHasMoved && Math.abs(dx) >= PAN_MOVE_THRESHOLD_PX) {
+    if (!panHasMoved && Math.abs(dx) >= 3) {
       panHasMoved = true;
       liveManualBrowseActive = true;
+      liveFollowEnabled = false;
     }
 
     var shiftMs = Math.round((-dx / canvasWidth) * span);
@@ -5162,7 +5212,6 @@
       skipMarkerRemovalClick = markerDragHasMoved;
       markerDragHasMoved = false;
       canvas.style.cursor = "grab";
-      scheduleRender({ skipTable: false });
       return;
     }
 
@@ -5170,8 +5219,6 @@
       return;
     }
     var didPan = panHasMoved;
-    var heldTooLong = pressStartedAtMs > 0 && Date.now() - pressStartedAtMs > CLICK_MAX_DURATION_MS;
-    suppressNextProbeClick = didPan || heldTooLong;
     isPanning = false;
     panHasMoved = false;
     canvas.style.cursor = "grab";
@@ -5211,18 +5258,69 @@
     { passive: false }
   );
 
-  canvas.addEventListener("dblclick", function (event) {
-    if (event.button !== 0) {
-      event.preventDefault();
-      return;
+  var canvasContextMenuEl = null;
+
+  function closeCanvasContextMenu() {
+    if (canvasContextMenuEl && canvasContextMenuEl.parentElement) {
+      canvasContextMenuEl.parentElement.removeChild(canvasContextMenuEl);
     }
-    addTimeMarkerFromEvent(event);
-    event.preventDefault();
-  });
+    canvasContextMenuEl = null;
+    document.removeEventListener("click", closeCanvasContextMenu, true);
+    document.removeEventListener("keydown", handleCanvasContextMenuEscape, true);
+  }
+
+  function handleCanvasContextMenuEscape(event) {
+    if (event.key === "Escape") {
+      closeCanvasContextMenu();
+    }
+  }
+
+  function addCanvasContextMenuItem(menuEl, label, onSelect) {
+    var item = document.createElement("button");
+    item.type = "button";
+    item.className = "canvas-context-menu-item";
+    item.textContent = label;
+    item.addEventListener("click", function (clickEvent) {
+      clickEvent.stopPropagation();
+      closeCanvasContextMenu();
+      onSelect();
+    });
+    menuEl.appendChild(item);
+  }
 
   canvas.addEventListener("contextmenu", function (event) {
-    // Disable right-click zoom interaction on the canvas.
     event.preventDefault();
+    closeCanvasContextMenu();
+
+    var menu = document.createElement("div");
+    menu.className = "canvas-context-menu";
+    menu.style.left = event.clientX + "px";
+    menu.style.top = event.clientY + "px";
+
+    addCanvasContextMenuItem(menu, "إنشاء علامة هنا", function () {
+      addTimeMarkerFromEvent(event);
+    });
+
+    addCanvasContextMenuItem(menu, "إزالة كل العلامات", function () {
+      clearAllTimeMarkers();
+    });
+
+    if (window.HarmonicCursor) {
+      var cursorLabel = window.HarmonicCursor.isActive()
+        ? "إيقاف مؤشر التوافقيات"
+        : "تفعيل مؤشر التوافقيات";
+      addCanvasContextMenuItem(menu, cursorLabel, function () {
+        window.HarmonicCursor.setActive(!window.HarmonicCursor.isActive());
+      });
+    }
+
+    document.body.appendChild(menu);
+    canvasContextMenuEl = menu;
+
+    window.setTimeout(function () {
+      document.addEventListener("click", closeCanvasContextMenu, true);
+      document.addEventListener("keydown", handleCanvasContextMenuEscape, true);
+    }, 0);
   });
 
   window.addEventListener("keydown", function (event) {
@@ -5529,11 +5627,6 @@
   });
 
   canvas.addEventListener("click", function (event) {
-    if (suppressNextProbeClick) {
-      suppressNextProbeClick = false;
-      return;
-    }
-
     if (isPanning) {
       return;
     }
@@ -5543,22 +5636,7 @@
       return;
     }
 
-    if (removeTimeMarkerAtCanvasPoint(event)) {
-      probeTooltipEl.classList.add("hidden");
-      return;
-    }
-
-    var info = buildProbeInfo(event);
-    if (!info) {
-      probeTooltipEl.classList.add("hidden");
-      return;
-    }
-
-    probeTooltipEl.innerHTML = formatProbeTooltip(info);
-    probeTooltipEl.style.left = event.clientX + 14 + "px";
-    probeTooltipEl.style.top = event.clientY + 14 + "px";
-    probeTooltipEl.classList.remove("hidden");
-    scheduleProbeAutoHide();
+    removeTimeMarkerAtCanvasPoint(event);
   });
 
   function setupSocket() {
@@ -5788,7 +5866,6 @@
   toggleRightPanelBtn.addEventListener("click", function () {
     var willCollapse = !rightPanel.classList.contains("collapsed");
     setRightPanelCollapsed(willCollapse);
-    scheduleRender({ skipTable: false });
     window.setTimeout(function () {
       scheduleRender({ skipTable: false });
     }, 240);

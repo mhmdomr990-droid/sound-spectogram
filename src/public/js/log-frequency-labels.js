@@ -4,7 +4,7 @@
   var AXIS_COLOR = "#cfd7e6";
   var CANDIDATE_VALUES = [0, 10, 20, 50, 75, 100, 125, 150, 175, 200, 250, 300, 400, 500, 600, 800, 1000, 1500, 2000, 3000, 4000, 5000, 8000, 10000, 20000];
   var MIN_LABEL_GAP_PX = 14;
-  var LABEL_COLUMN_LEFT = 22; // keep the rotated axis title (drawn near x = 14) untouched
+  var AXIS_TITLE = "\u0627\u0644\u062a\u0631\u062f\u062f (Hz)"; // same title the linear renderer draws
 
   function formatLabel(hz) {
     var n = Number(hz);
@@ -96,9 +96,21 @@
 
     ctx.save();
 
-    // Erase the old (linear) numeric labels, but not the rotated axis title further left.
+    // Erase EVERYTHING in the left strip beside the plot (the old linear numbers can be wider than
+    // expected, depending on the font, so erasing only part of the strip leaves slivers of them).
     ctx.fillStyle = BACKGROUND_COLOR;
-    ctx.fillRect(LABEL_COLUMN_LEFT, plot.top - 8, Math.max(0, plot.left - 2 - LABEL_COLUMN_LEFT), plotHeight + 16);
+    ctx.fillRect(0, plot.top - 8, Math.max(0, plot.left - 2), plotHeight + 16);
+
+    // The rotated axis title lived in that strip, so draw it again exactly like the linear renderer does.
+    ctx.save();
+    ctx.fillStyle = TEXT_COLOR;
+    ctx.font = "12px Segoe UI";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.translate(14, plot.top + plotHeight / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText(AXIS_TITLE, 0, 0);
+    ctx.restore();
 
     ctx.strokeStyle = AXIS_COLOR;
     ctx.lineWidth = 1;

@@ -13,10 +13,45 @@ import { errorHandler, notFoundMiddleware } from "./utils/error.middleware";
 export function createApp() {
   const app = express();
 
-  //app.use(helmet());
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          upgradeInsecureRequests: null,
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net"],
+          scriptSrcAttr: ["'unsafe-inline'"],
+          styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+          imgSrc: [
+            "'self'",
+            "data:",
+            "https://cdnjs.cloudflare.com",
+            "https://*.tile.opentopomap.org",
+            "https://server.arcgisonline.com",
+            "https://services.arcgisonline.com",
+            "https://*.basemaps.cartocdn.com"
+          ],
+          connectSrc: ["'self'", "https://nominatim.openstreetmap.org", "https://*.basemaps.cartocdn.com"],
+          fontSrc: ["'self'", "data:"]
+        }
+      },
+      crossOriginEmbedderPolicy: false
+    })
+  );
   app.use(
     cors({
-      origin: "*"
+      origin: function (origin, callback) {
+        const allowed = (process.env.ALLOWED_ORIGINS || "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        if (!origin || allowed.length === 0 || allowed.includes(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error("Not allowed by CORS"));
+        }
+      }
     })
   );
   app.use(
