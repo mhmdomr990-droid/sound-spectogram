@@ -226,8 +226,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     return 250.0;
   }
 
-  /// Plot left inset: wider in log mode (kept as-is; labels are numbers only).
-  double get _pLeft => widget.logFrequencyView ? 58.0 : 40.0;
+  /// Plot left inset — same as the linear view so the plot width never changes.
+  double get _pLeft => 40.0;
 
   int? _markerLineHitTest(Offset position) {
     final w = _layoutSize.width;
@@ -1109,7 +1109,7 @@ class _SpectroPainter extends CustomPainter {
       this.logAxis});
 
   static const double _leftInsetBase = 40;
-  static const double _leftInsetLog = 58;
+  static const double _leftInsetLog = 40;
   double get _leftInset => logAxis != null ? _leftInsetLog : _leftInsetBase;
   static const double _rightInset = 6;
   static const double _topInset = 4;
