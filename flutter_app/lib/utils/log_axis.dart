@@ -195,25 +195,30 @@ double _smoothstep(double edge0, double edge1, double x) {
   return t * t * (3.0 - 2.0 * t);
 }
 
-/// Vertical warp — CPU port of the CURRENT web GL fragment shader
-/// (`log-spectrogram.js`), including the "make pixel more soft" sampling.
+/// Vertical warp over the raw INTENSITY plane (0..255 per pixel) — CPU port of
+/// the web GL fragment shader geometry (`log-spectrogram.js`), with all
+/// sampling/pooling done on intensity so the gain LUT can be applied AFTER
+/// the warp (gain changes then cost only a 0.8M-pixel lookup + decode).
 ///
-/// The axis mapping is unchanged; only the sampling matches the shader:
+/// The axis mapping matches the shader; sampling:
 ///  * Where the axis EXPANDS (footprint <= 1 source pixel) every destination
-///    pixel is a plain bilinear sample of the source center — exactly like the
-///    linear view, so thin lines stay smooth instead of becoming hard bands.
+///    pixel is a plain bilinear sample of the source — exactly like the linear
+///    view, so thin lines stay smooth instead of becoming hard bands.
 ///  * Where the axis COMPRESSES (footprint > 1) 12 evenly spaced bilinear
 ///    samples are pooled as `mix(average, brightest, kLogPeakWeight)` and
 ///    blended with the center sample by `smoothstep(1, 2, footprint)`, so
 ///    signals are never averaged away while the noise floor stays soft.
 ///
+/// "Brightest" compares intensity directly — equivalent to the shader's luma
+/// pick because the magma palette is luminance-monotonic.
+///
 /// Image row 0 is the TOP of the picture (= highest frequency, matching
 /// `LOW_FREQUENCY_AT_TOP = false`). Sampling is clamped to the image edges
 /// (web: `CLAMP_TO_EDGE` + `LINEAR` filtering).
-Uint8List warpSpectrogramVertical(
-    Uint8List rgba, int width, int height, LogAxis axis) {
-  if (width <= 0 || height <= 0 || rgba.length < width * height * 4) {
-    return rgba;
+Uint8List warpSpectrogramIntensity(
+    Uint8List src, int width, int height, LogAxis axis) {
+  if (width <= 0 || height <= 0 || src.length < width * height) {
+    return src;
   }
   final w = width;
   final h = height;
@@ -227,7 +232,7 @@ Uint8List warpSpectrogramVertical(
     return (1.0 - srcFromLow) * h;
   }
 
-  final out = Uint8List(rgba.length);
+  final out = Uint8List(w * h);
 
   // Bilinear geometry for one sample position: two source rows + weight.
   // Reused for the center sample and the 12 compression taps.
@@ -253,28 +258,22 @@ Uint8List warpSpectrogramVertical(
     final yb = mapRow((y + 1).toDouble());
     final yc = mapRow(y + 0.5);
     final footprint = (yb - ya).abs();
-    final destRowBase = y * w * 4;
+    final destRowBase = y * w;
 
     if (footprint <= 1.0) {
       // Web: footprintPx <= 1.0 -> plain smooth (bilinear) center sample.
       setup(12, yc);
-      final a = row0[12] * w * 4;
-      final b = row1[12] * w * 4;
+      final a = row0[12] * w;
+      final b = row1[12] * w;
       final t = rowT[12];
       if (t == 0.0) {
-        // Integer source row — straight copy (same result as the bilinear).
-        out.setRange(destRowBase, destRowBase + w * 4, rgba, a);
+        // Integer source row — straight copy.
+        out.setRange(destRowBase, destRowBase + w, src, a);
       } else {
         final inv = 1.0 - t;
         for (var x = 0; x < w; x++) {
-          final x4 = x * 4;
-          final d = destRowBase + x4;
-          final s0 = a + x4;
-          final s1 = b + x4;
-          out[d] = (rgba[s0] * inv + rgba[s1] * t).round();
-          out[d + 1] = (rgba[s0 + 1] * inv + rgba[s1 + 1] * t).round();
-          out[d + 2] = (rgba[s0 + 2] * inv + rgba[s1 + 2] * t).round();
-          out[d + 3] = (rgba[s0 + 3] * inv + rgba[s1 + 3] * t).round();
+          out[destRowBase + x] =
+              _clamp255(src[a + x] * inv + src[b + x] * t);
         }
       }
       continue;
@@ -287,66 +286,35 @@ Uint8List warpSpectrogramVertical(
     }
     setup(12, yc);
 
-    final c0 = row0[12] * w * 4;
-    final c1 = row1[12] * w * 4;
+    final c0 = row0[12] * w;
+    final c1 = row1[12] * w;
     final ct = rowT[12];
     final cinv = 1.0 - ct;
 
     // Per-row constant (footprint does not depend on x).
     final wBlend = _smoothstep(1.0, 2.0, footprint);
+    final peak = kLogPeakWeight;
+    const invPeak = 1.0 - kLogPeakWeight;
 
     for (var x = 0; x < w; x++) {
-      final x4 = x * 4;
-
       // Center sample (bilinear).
-      final s0 = c0 + x4;
-      final s1 = c1 + x4;
-      final cc0 = rgba[s0] * cinv + rgba[s1] * ct;
-      final cc1 = rgba[s0 + 1] * cinv + rgba[s1 + 1] * ct;
-      final cc2 = rgba[s0 + 2] * cinv + rgba[s1 + 2] * ct;
-      final cc3 = rgba[s0 + 3] * cinv + rgba[s1 + 3] * ct;
+      final center = src[c0 + x] * cinv + src[c1 + x] * ct;
 
       // Pool: sum of the 12 taps (average) and the brightest sample, with the
       // center as the initial `best` — exactly like the shader.
-      var sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
-      var best0 = cc0, best1 = cc1, best2 = cc2, best3 = cc3;
-      var bestLuma = 0.299 * cc0 + 0.587 * cc1 + 0.114 * cc2;
+      var sum = 0.0;
+      var best = center;
       for (var i = 0; i < 12; i++) {
-        final t0 = row0[i] * (w * 4) + x4;
-        final t1 = row1[i] * (w * 4) + x4;
-        final tt = rowT[i];
-        final it = 1.0 - tt;
-        final v0 = rgba[t0] * it + rgba[t1] * tt;
-        final v1 = rgba[t0 + 1] * it + rgba[t1 + 1] * tt;
-        final v2 = rgba[t0 + 2] * it + rgba[t1 + 2] * tt;
-        final v3 = rgba[t0 + 3] * it + rgba[t1 + 3] * tt;
-        sum0 += v0;
-        sum1 += v1;
-        sum2 += v2;
-        sum3 += v3;
-        final luma = 0.299 * v0 + 0.587 * v1 + 0.114 * v2;
-        if (luma > bestLuma) {
-          bestLuma = luma;
-          best0 = v0;
-          best1 = v1;
-          best2 = v2;
-          best3 = v3;
-        }
+        final v = src[row0[i] * w + x] * (1.0 - rowT[i]) +
+            src[row1[i] * w + x] * rowT[i];
+        sum += v;
+        if (v > best) best = v;
       }
 
       // pooled = mix(sum / 12, best, PEAK_WEIGHT)
-      final invW = 1.0 - kLogPeakWeight;
-      final pooled0 = (sum0 / 12.0) * invW + best0 * kLogPeakWeight;
-      final pooled1 = (sum1 / 12.0) * invW + best1 * kLogPeakWeight;
-      final pooled2 = (sum2 / 12.0) * invW + best2 * kLogPeakWeight;
-      final pooled3 = (sum3 / 12.0) * invW + best3 * kLogPeakWeight;
-
+      final pooled = (sum / 12.0) * invPeak + best * peak;
       // out = mix(center, pooled, smoothstep(1, 2, footprint))
-      final d = destRowBase + x4;
-      out[d] = _clamp255(cc0 + (pooled0 - cc0) * wBlend);
-      out[d + 1] = _clamp255(cc1 + (pooled1 - cc1) * wBlend);
-      out[d + 2] = _clamp255(cc2 + (pooled2 - cc2) * wBlend);
-      out[d + 3] = _clamp255(cc3 + (pooled3 - cc3) * wBlend);
+      out[destRowBase + x] = _clamp255(center + (pooled - center) * wBlend);
     }
   }
 

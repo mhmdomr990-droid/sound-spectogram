@@ -7,24 +7,23 @@ import 'dart:ui' as ui;
 import 'spectro.dart';
 import 'log_axis.dart';
 
-/// Gain LUT + optional log-axis warp, executed on the render isolate so the
-/// main (UI) thread never freezes while the view image is rebuilt.
-/// Carries the raw intensity plane; the LUT is built on the UI side (cheap,
-/// 256 entries) and shipped here to keep the color mapping logic in one place.
+/// Stage-1 view build: nearest-upscale the raw intensity plane to the
+/// on-screen plot resolution (+ log-axis warp when requested), executed on
+/// the render isolate so the UI thread never freezes. The gain LUT is applied
+/// AFTER this step on the UI thread (a cheap per-pixel lookup), so gain
+/// changes never re-run the warp.
 class WarpRequest {
   final Uint8List intensity;
   final int width;
   final int height;
-  final Uint8List gainLut; // 256 * 4 RGBA entries
   final bool logView;
   final double maxFreq;
   final double focusHz;
 
-  /// Target size in device pixels (plot rect × devicePixelRatio). The LUT
-  /// output is nearest-upscaled to this size before the warp so both views
-  /// share the exact pixel grid of the on-screen (linear) rendering — the
-  /// same "render linear first, warp those pixels" pipeline the web uses.
-  /// Values <= 0 keep the raw data resolution.
+  /// Target size in device pixels (plot rect × devicePixelRatio). The plane
+  /// is nearest-upscaled to this size so both views share the exact pixel
+  /// grid of the on-screen rendering — the same "render linear first, warp
+  /// those pixels" pipeline the web uses. Values <= 0 keep data resolution.
   final int dstWidth;
   final int dstHeight;
 
@@ -32,7 +31,6 @@ class WarpRequest {
     required this.intensity,
     required this.width,
     required this.height,
-    required this.gainLut,
     required this.logView,
     required this.maxFreq,
     required this.focusHz,
@@ -303,43 +301,36 @@ void _isolateEntry(SendPort mainSendPort) {
   });
 }
 
-/// Same math as the UI-side path (spectrogram_canvas): apply the 256-entry
-/// gain LUT to the intensity plane, nearest-upscale to the on-screen plot
-/// resolution (the pixels the linear view draws), then peak-warp for the log
-/// view. This mirrors the web pipeline: render linear at device resolution
-/// first, then warp those exact pixels.
-Uint8List _applyLutAndWarp(WarpRequest req) {
+/// Stage-1 view build: nearest-upscale the intensity plane to the on-screen
+/// plot resolution (the pixels the linear view draws), then peak-warp for the
+/// log view. Runs on intensity — the gain LUT is applied later on the UI
+/// thread, so gain changes never re-enter this function.
+Uint8List _upscaleAndWarp(WarpRequest req) {
   final w = req.width;
   final h = req.height;
   final intensity = req.intensity;
   if (w <= 0 || h <= 0 || intensity.length < w * h) {
     return Uint8List(0);
   }
-  final lutWords = Uint32List.view(req.gainLut.buffer, 0, 256);
-  final rgba = Uint8List(w * h * 4);
-  final outWords = Uint32List.view(rgba.buffer, 0, w * h);
-  for (var i = 0; i < w * h; i++) {
-    outWords[i] = lutWords[intensity[i]];
-  }
-  var plane = rgba;
+  var plane = intensity;
   var pw = w;
   var ph = h;
   final dw = req.dstWidth;
   final dh = req.dstHeight;
   if (dw > 0 && dh > 0 && (dw != w || dh != h)) {
-    plane = _nearestUpscale(rgba, w, h, dw, dh);
+    plane = _nearestUpscaleI8(intensity, w, h, dw, dh);
     pw = dw;
     ph = dh;
   }
   if (!req.logView) return plane;
-  final warped = warpSpectrogramVertical(
+  final warped = warpSpectrogramIntensity(
     plane,
     pw,
     ph,
     buildLogAxis(0, req.maxFreq, req.focusHz),
   );
   // ignore: avoid_print
-  print('[TIMING] iso warp ${pw}x$ph log=${req.logView} '
+  print('[TIMING] iso plane ${pw}x$ph log=${req.logView} '
       'inAvg=${_avg(plane)} outAvg=${_avg(warped)} outLen=${warped.length}');
   return warped;
 }
@@ -359,10 +350,9 @@ double _avg(Uint8List b) {
 /// Nearest-neighbour upscale matching Flutter's
 /// `drawImageRect(..., FilterQuality.none)` sampling:
 /// `src = floor((dst + 0.5) * srcSize / dstSize)`, clamped to the source.
-Uint8List _nearestUpscale(Uint8List src, int srcW, int srcH, int dstW, int dstH) {
-  final out = Uint8List(dstW * dstH * 4);
-  final srcWords = Uint32List.view(src.buffer, src.offsetInBytes, srcW * srcH);
-  final outWords = Uint32List.view(out.buffer, 0, dstW * dstH);
+Uint8List _nearestUpscaleI8(
+    Uint8List src, int srcW, int srcH, int dstW, int dstH) {
+  final out = Uint8List(dstW * dstH);
   final xMap = Int32List(dstW);
   for (var x = 0; x < dstW; x++) {
     final sx = ((2 * x + 1) * srcW) ~/ (2 * dstW);
@@ -374,7 +364,7 @@ Uint8List _nearestUpscale(Uint8List src, int srcW, int srcH, int dstW, int dstH)
     final srcRow = sy * srcW;
     final dstRow = y * dstW;
     for (var x = 0; x < dstW; x++) {
-      outWords[dstRow + x] = srcWords[srcRow + xMap[x]];
+      out[dstRow + x] = src[srcRow + xMap[x]];
     }
   }
   return out;
@@ -438,7 +428,7 @@ void _warpIsolateEntry(SendPort mainSendPort) {
     final req = message[0] as WarpRequest;
     final replyTo = message[1] as SendPort;
     try {
-      replyTo.send(_applyLutAndWarp(req));
+      replyTo.send(_upscaleAndWarp(req));
     } catch (e) {
       replyTo.send(e.toString());
     }

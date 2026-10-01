@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:math';
-import 'dart:typed_data' show Uint8List;
+import 'dart:typed_data' show Uint32List, Uint8List;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show listEquals;
@@ -436,11 +436,16 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     _cachedIntensityWidth = widget.seedIntensityWidth;
     _cachedIntensityHeight = widget.seedIntensityHeight;
     _cachedGamma = widget.seedGamma;
+    widget.gainNotifier?.addListener(_onGainNotifier);
   }
 
   @override
   void didUpdateWidget(SpectrogramCanvas oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.gainNotifier != widget.gainNotifier) {
+      oldWidget.gainNotifier?.removeListener(_onGainNotifier);
+      widget.gainNotifier?.addListener(_onGainNotifier);
+    }
     final renderingChanged = oldWidget.matrix != widget.matrix ||
         oldWidget.gamma != widget.gamma ||
         oldWidget.inputValueMax != widget.inputValueMax;
@@ -462,7 +467,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       });
     }
     if (gainChanged && _cachedIntensity != null && _cachedIntensityWidth > 0 && _cachedIntensityHeight > 0) {
-      _onGainChanged();
+      _queueGainBuild();
     }
     final logChanged = oldWidget.logFrequencyView != widget.logFrequencyView ||
         oldWidget.focusHz != widget.focusHz;
@@ -470,11 +475,11 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         _cachedIntensity != null &&
         _cachedIntensityWidth > 0 &&
         _cachedIntensityHeight > 0) {
-      // Re-warp the cached intensity image for the new axis settings
-      // (no isolate round-trip needed — same path as a gain change). Runs
-      // unconditionally: in live mode `dataChanged` is always true and a
-      // debounced full `_render` would be superseded before finishing.
-      _onGainChanged();
+      // Rebuild for the new axis settings (the axis plane re-warps once on
+      // the isolate; LUT+decode run on the UI thread). Runs unconditionally:
+      // in live mode `dataChanged` is always true and a debounced full
+      // `_render` would be superseded before finishing.
+      _queueGainBuild();
     }
     // Status-bar insets change the plot height (hence the device-pixel image
     // size) without a layout change — rebuild so the image fits the new rect.
@@ -484,13 +489,51 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         _cachedIntensity != null &&
         _cachedIntensityWidth > 0 &&
         _cachedIntensityHeight > 0) {
-      _onGainChanged();
+      _queueGainBuild();
     }
   }
 
-  void applyGain() => _onGainChanged();
+  void applyGain() => _queueGainBuild();
 
-  void _onGainChanged() async {
+  // --- Coalesced gain builds. The slider fires on every drag tick and
+  // onChangeEnd confirms; builds are serialized with a trailing rerun so at
+  // most one is in flight (no queue growth) and the latest state always wins.
+  // Each run only pays the LUT lookup + async decode on the UI thread (~ms),
+  // so live dragging never stalls frames.
+  bool _gainBuildRunning = false;
+  bool _gainRebuildPending = false;
+
+  void _onGainNotifier() {
+    if (!mounted) return;
+    _queueGainBuild();
+  }
+
+  void _queueGainBuild() {
+    if (_cachedIntensity == null ||
+        _cachedIntensityWidth <= 0 ||
+        _cachedIntensityHeight <= 0) {
+      _render();
+      return;
+    }
+    if (_gainBuildRunning) {
+      _gainRebuildPending = true;
+      return;
+    }
+    _startGainBuild();
+  }
+
+  void _startGainBuild() {
+    _gainBuildRunning = true;
+    _onGainChanged().whenComplete(() {
+      _gainBuildRunning = false;
+      if (_gainRebuildPending && mounted) {
+        _gainRebuildPending = false;
+        _startGainBuild();
+      }
+    });
+  }
+
+  Future<void> _onGainChanged() async {
     if (_cachedIntensity == null || _cachedIntensityWidth <= 0 || _cachedIntensityHeight <= 0) {
       _render();
       return;
@@ -579,30 +622,28 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       return _viewLog!;
     }
 
-    // Cold path: LUT + warp run on the render isolate so this (UI) thread
-    // never freezes — the switch/snackbar/labels repaint instantly.
+    // Stage 1 (isolate): display-res intensity plane — nearest upscale +
+    // log warp when needed. NEVER runs for a gain change (plane cache is
+    // keyed by data/axis/layout only).
+    final p0 = sw.elapsedMicroseconds;
+    final plane = await _ensurePlane(
+        log, intensity, w, h, outW, outH, focus, maxFreq);
+    final planeMs = sw.elapsedMicroseconds - p0;
+    if (plane == null || plane.isEmpty) return _image!;
+
+    // Stage 2 (UI thread): gain LUT lookup over the plane, then async decode.
     _buildGainLut(gainDb, gamma);
-    final lutMs = sw.elapsedMicroseconds;
-    final bytes = await warpSpectrogramIsolate(WarpRequest(
-      intensity: intensity,
-      width: w,
-      height: h,
-      gainLut: _gainLut!,
-      logView: log,
-      maxFreq: maxFreq,
-      focusHz: focus,
-      dstWidth: outW,
-      dstHeight: outH,
-    ));
-    final warpMs = sw.elapsedMicroseconds - lutMs;
+    final lut0 = sw.elapsedMicroseconds;
+    final rgba = _applyLutToPlane(plane, _gainLut!);
+    final lutMs = sw.elapsedMicroseconds - lut0;
     final stale = !mounted || !identical(_cachedIntensity, intensity);
-    final t0 = sw.elapsedMicroseconds;
-    final img = await rgbaToUiImage(bytes, outW, outH);
-    final d1 = sw.elapsedMicroseconds - t0;
+    final d0 = sw.elapsedMicroseconds;
+    final img = await rgbaToUiImage(rgba, outW, outH);
+    final decodeMs = sw.elapsedMicroseconds - d0;
     // ignore: avoid_print
-    print('[TIMING] lut=${lutMs / 1000}ms warp+ipc=${warpMs / 1000}ms '
-        'decode=${d1 / 1000}ms total=${sw.elapsedMilliseconds}ms '
-        'data=${w}x$h dst=${outW}x$outH log=$log');
+    print('[TIMING] build plane=${planeMs / 1000}ms lut=${lutMs / 1000}ms '
+        'decode=${decodeMs / 1000}ms total=${sw.elapsedMilliseconds}ms '
+        'data=${w}x$h dst=${outW}x$outH log=$log gain=$gainDb');
     // Data changed while we were building: don't publish into the cache (it
     // is keyed by the old intensity), just hand the image back.
     if (stale) return img;
@@ -623,32 +664,127 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         _disposeImg(old);
       }
     }
-    // Pre-build the opposite view off the critical path so the very first
-    // toggle after a data/gain change is a cache hit too.
-    _prewarmAlternate(gainDb, intensity, gamma, focus, maxFreq, log);
+    // Pre-build the opposite view's PLANE off the critical path so the first
+    // toggle after a data/axis change never waits on the isolate.
+    _prewarmAlternatePlane(intensity, w, h, outW, outH, focus, maxFreq, log);
     return img;
+  }
+
+  // --- Display-resolution intensity planes (gain-independent), one per axis
+  // view. Built on the warp isolate whenever the data/axis/dst changes; the
+  // gain LUT is applied to these on the UI thread afterwards.
+  Uint8List? _planeLinear;
+  Uint8List? _planeLinearIntensity;
+  int _planeLinDstW = 0;
+  int _planeLinDstH = 0;
+
+  Uint8List? _planeLog;
+  Uint8List? _planeLogIntensity;
+  double _planeLogFocus = double.nan;
+  double _planeLogMaxFreq = double.nan;
+  int _planeLogDstW = 0;
+  int _planeLogDstH = 0;
+
+  Future<Uint8List?> _ensurePlane(
+      bool log,
+      Uint8List intensity,
+      int w,
+      int h,
+      int outW,
+      int outH,
+      double focus,
+      double maxFreq) async {
+    if (log) {
+      if (_planeLog != null &&
+          identical(_planeLogIntensity, intensity) &&
+          _planeLogDstW == outW &&
+          _planeLogDstH == outH &&
+          _planeLogFocus == focus &&
+          _planeLogMaxFreq == maxFreq) {
+        return _planeLog;
+      }
+    } else {
+      // Data resolution == display resolution: the intensity buffer itself is
+      // already the plane (no isolate round-trip).
+      if (outW == w && outH == h) return intensity;
+      if (_planeLinear != null &&
+          identical(_planeLinearIntensity, intensity) &&
+          _planeLinDstW == outW &&
+          _planeLinDstH == outH) {
+        return _planeLinear;
+      }
+    }
+    final bytes = await warpSpectrogramIsolate(WarpRequest(
+      intensity: intensity,
+      width: w,
+      height: h,
+      logView: log,
+      maxFreq: maxFreq,
+      focusHz: focus,
+      dstWidth: outW,
+      dstHeight: outH,
+    ));
+    if (bytes.isEmpty) return null;
+    if (!mounted || !identical(_cachedIntensity, intensity)) {
+      // Stale: usable for this call, but don't publish into the cache (it is
+      // keyed by the old intensity).
+      return bytes;
+    }
+    if (log) {
+      _planeLog = bytes;
+      _planeLogIntensity = intensity;
+      _planeLogDstW = outW;
+      _planeLogDstH = outH;
+      _planeLogFocus = focus;
+      _planeLogMaxFreq = maxFreq;
+    } else {
+      _planeLinear = bytes;
+      _planeLinearIntensity = intensity;
+      _planeLinDstW = outW;
+      _planeLinDstH = outH;
+    }
+    return bytes;
+  }
+
+  /// 256-entry gain LUT lookup over the intensity plane → RGBA bytes.
+  Uint8List _applyLutToPlane(Uint8List plane, Uint8List lut) {
+    final out = Uint8List(plane.length * 4);
+    final lutWords = Uint32List.view(lut.buffer, 0, 256);
+    final outWords = Uint32List.view(out.buffer, 0, plane.length);
+    for (var i = 0; i < plane.length; i++) {
+      outWords[i] = lutWords[plane[i]];
+    }
+    return out;
   }
 
   bool _prewarmRunning = false;
 
-  Future<void> _prewarmAlternate(double gainDb, Object intensity, double gamma,
-      double focus, double maxFreq, bool builtLog) async {
+  Future<void> _prewarmAlternatePlane(Uint8List intensity, int w, int h,
+      int outW, int outH, double focus, double maxFreq, bool builtLog) async {
     if (_prewarmRunning || !mounted) return;
-    // Only useful while the keys we built for are still current.
-    if (!identical(_cachedIntensity, intensity) ||
-        _viewGainDb != gainDb ||
-        _viewGamma != gamma) {
-      return;
-    }
+    if (!identical(_cachedIntensity, intensity)) return;
     final altLog = !builtLog;
     if (altLog) {
-      if (_viewLog != null && _viewFocus == focus && _viewMaxFreq == maxFreq) return;
-    } else if (_viewLinear != null) {
-      return;
+      if (_planeLog != null &&
+          identical(_planeLogIntensity, intensity) &&
+          _planeLogDstW == outW &&
+          _planeLogDstH == outH &&
+          _planeLogFocus == focus &&
+          _planeLogMaxFreq == maxFreq) {
+        return;
+      }
+    } else {
+      if (outW == w && outH == h) return;
+      if (_planeLinear != null &&
+          identical(_planeLinearIntensity, intensity) &&
+          _planeLinDstW == outW &&
+          _planeLinDstH == outH) {
+        return;
+      }
     }
     _prewarmRunning = true;
     try {
-      await _applyGainAndBuildImage(gainDb, logOverride: altLog);
+      await _ensurePlane(altLog, intensity, w, h, outW, outH, focus, maxFreq);
     } finally {
       _prewarmRunning = false;
     }
@@ -845,6 +981,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
 
   @override
   void dispose() {
+    widget.gainNotifier?.removeListener(_onGainNotifier);
     _renderDebounce?.cancel();
     _jobId++;
     final lin = _viewLinear;
