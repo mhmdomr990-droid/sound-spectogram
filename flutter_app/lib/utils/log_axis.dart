@@ -179,13 +179,37 @@ double _srcFromLowAt(LogAxis axis, double d) {
   return axis.focusFrac + axis.k2Frac * (math.exp(u * axis.logD) - 1.0);
 }
 
-/// Peak-preserving vertical warp — CPU port of the web GL fragment shader.
+/// Blend weight of the brightest sample where the axis COMPRESSES several
+/// source rows into one output pixel (web `PEAK_WEIGHT`): 0 = pure average
+/// (cleanest background, dimmer thin lines), 1 = strongest sample only. 0.5 is
+/// the web default.
+const double kLogPeakWeight = 0.5;
+
+/// Smooth blend used by the web shader to fade between plain sampling and the
+/// pooled (average+peak) result over footprint 1..2 source pixels.
+double _smoothstep(double edge0, double edge1, double x) {
+  if (edge0 == edge1) return x < edge0 ? 0.0 : 1.0;
+  var t = (x - edge0) / (edge1 - edge0);
+  if (t < 0) t = 0;
+  if (t > 1) t = 1;
+  return t * t * (3.0 - 2.0 * t);
+}
+
+/// Vertical warp — CPU port of the CURRENT web GL fragment shader
+/// (`log-spectrogram.js`), including the "make pixel more soft" sampling.
 ///
-/// Re-maps ONLY the image vertically: for every destination row the source
-/// span [ya, yb] is sampled (center + up to 12 evenly spaced samples) and the
-/// sample with the highest luma wins, so compressed signals are never
-/// averaged away. Image row 0 is the TOP of the picture (= highest frequency,
-/// matching `LOW_FREQUENCY_AT_TOP = false`).
+/// The axis mapping is unchanged; only the sampling matches the shader:
+///  * Where the axis EXPANDS (footprint <= 1 source pixel) every destination
+///    pixel is a plain bilinear sample of the source center — exactly like the
+///    linear view, so thin lines stay smooth instead of becoming hard bands.
+///  * Where the axis COMPRESSES (footprint > 1) 12 evenly spaced bilinear
+///    samples are pooled as `mix(average, brightest, kLogPeakWeight)` and
+///    blended with the center sample by `smoothstep(1, 2, footprint)`, so
+///    signals are never averaged away while the noise floor stays soft.
+///
+/// Image row 0 is the TOP of the picture (= highest frequency, matching
+/// `LOW_FREQUENCY_AT_TOP = false`). Sampling is clamped to the image edges
+/// (web: `CLAMP_TO_EDGE` + `LINEAR` filtering).
 Uint8List warpSpectrogramVertical(
     Uint8List rgba, int width, int height, LogAxis axis) {
   if (width <= 0 || height <= 0 || rgba.length < width * height * 4) {
@@ -204,85 +228,134 @@ Uint8List warpSpectrogramVertical(
   }
 
   final out = Uint8List(rgba.length);
-  // Per-pixel luma, computed ONCE for the whole image (was: recomputed for
-  // every sample of every destination row — up to 13x per pixel).
-  final luma = Int32List(w * h);
-  for (var i = 0, o = 0; i < luma.length; i++, o += 4) {
-    luma[i] = 299 * rgba[o] + 587 * rgba[o + 1] + 114 * rgba[o + 2];
+
+  // Bilinear geometry for one sample position: two source rows + weight.
+  // Reused for the center sample and the 12 compression taps.
+  final row0 = Int32List(13);
+  final row1 = Int32List(13);
+  final rowT = Float64List(13);
+  void setup(int i, double srcRow) {
+    var a = srcRow.floor();
+    if (a < 0) a = 0;
+    if (a > h - 1) a = h - 1;
+    var b = a + 1;
+    if (b > h - 1) b = h - 1;
+    var t = srcRow - a;
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    row0[i] = a;
+    row1[i] = b;
+    rowT[i] = t;
   }
-  // Fixed-size sample buffer (max 12 even samples + 2 edges + center) — avoids
-  // List<int> allocations/`contains` scans per row.
-  final sampleBuf = Int32List(15);
-  final srcBaseBuf = Int32List(15);
 
   for (var y = 0; y < h; y++) {
     final ya = mapRow(y.toDouble());
     final yb = mapRow((y + 1).toDouble());
     final yc = mapRow(y + 0.5);
-
-    final lo = ya < yb ? ya : yb;
-    final hi = ya < yb ? yb : ya;
-    final startRow = lo.floor().clamp(0, h - 1);
-    final endRow = hi.ceil().clamp(0, h - 1);
-    var n = 0;
-    if (endRow - startRow <= 12) {
-      // Cover every source row the destination row maps onto, so the peak
-      // (brightest row) is never skipped.
-      for (var r = startRow; r <= endRow; r++) {
-        var dup = false;
-        for (var k = 0; k < n; k++) {
-          if (sampleBuf[k] == r) { dup = true; break; }
-        }
-        if (!dup) sampleBuf[n++] = r;
-      }
-    } else {
-      // Wide spans: the shader's 12 evenly spaced samples + both edges.
-      void add(int r) {
-        for (var k = 0; k < n; k++) {
-          if (sampleBuf[k] == r) return;
-        }
-        sampleBuf[n++] = r;
-      }
-
-      add(startRow);
-      add(endRow);
-      add(yc.round().clamp(0, h - 1));
-      for (var i = 0; i < 12; i++) {
-        final f = (i + 0.5) / 12.0;
-        add((lo + (hi - lo) * f).round().clamp(0, h - 1));
-      }
-    }
-
+    final footprint = (yb - ya).abs();
     final destRowBase = y * w * 4;
-    if (n == 1) {
-      // Expansion region: direct row copy.
-      final srcBase = sampleBuf[0] * w * 4;
-      out.setRange(destRowBase, destRowBase + w * 4, rgba, srcBase);
+
+    if (footprint <= 1.0) {
+      // Web: footprintPx <= 1.0 -> plain smooth (bilinear) center sample.
+      setup(12, yc);
+      final a = row0[12] * w * 4;
+      final b = row1[12] * w * 4;
+      final t = rowT[12];
+      if (t == 0.0) {
+        // Integer source row — straight copy (same result as the bilinear).
+        out.setRange(destRowBase, destRowBase + w * 4, rgba, a);
+      } else {
+        final inv = 1.0 - t;
+        for (var x = 0; x < w; x++) {
+          final x4 = x * 4;
+          final d = destRowBase + x4;
+          final s0 = a + x4;
+          final s1 = b + x4;
+          out[d] = (rgba[s0] * inv + rgba[s1] * t).round();
+          out[d + 1] = (rgba[s0 + 1] * inv + rgba[s1 + 1] * t).round();
+          out[d + 2] = (rgba[s0 + 2] * inv + rgba[s1 + 2] * t).round();
+          out[d + 3] = (rgba[s0 + 3] * inv + rgba[s1 + 3] * t).round();
+        }
+      }
       continue;
     }
 
-    for (var s = 0; s < n; s++) {
-      srcBaseBuf[s] = sampleBuf[s] * w;
+    // Compression: 12 evenly spaced bilinear taps over [ya, yb] (web:
+    // mix(ya, yb, (i + 0.5) / 12)) plus the bilinear center sample.
+    for (var i = 0; i < 12; i++) {
+      setup(i, ya + (yb - ya) * ((i + 0.5) / 12.0));
     }
+    setup(12, yc);
+
+    final c0 = row0[12] * w * 4;
+    final c1 = row1[12] * w * 4;
+    final ct = rowT[12];
+    final cinv = 1.0 - ct;
+
+    // Per-row constant (footprint does not depend on x).
+    final wBlend = _smoothstep(1.0, 2.0, footprint);
+
     for (var x = 0; x < w; x++) {
-      var bestLuma = -1;
-      var bestIdx = srcBaseBuf[0] + x;
-      for (var s = 0; s < n; s++) {
-        final idx = srcBaseBuf[s] + x;
-        final l = luma[idx];
-        if (l > bestLuma) {
-          bestLuma = l;
-          bestIdx = idx;
+      final x4 = x * 4;
+
+      // Center sample (bilinear).
+      final s0 = c0 + x4;
+      final s1 = c1 + x4;
+      final cc0 = rgba[s0] * cinv + rgba[s1] * ct;
+      final cc1 = rgba[s0 + 1] * cinv + rgba[s1 + 1] * ct;
+      final cc2 = rgba[s0 + 2] * cinv + rgba[s1 + 2] * ct;
+      final cc3 = rgba[s0 + 3] * cinv + rgba[s1 + 3] * ct;
+
+      // Pool: sum of the 12 taps (average) and the brightest sample, with the
+      // center as the initial `best` — exactly like the shader.
+      var sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
+      var best0 = cc0, best1 = cc1, best2 = cc2, best3 = cc3;
+      var bestLuma = 0.299 * cc0 + 0.587 * cc1 + 0.114 * cc2;
+      for (var i = 0; i < 12; i++) {
+        final t0 = row0[i] * (w * 4) + x4;
+        final t1 = row1[i] * (w * 4) + x4;
+        final tt = rowT[i];
+        final it = 1.0 - tt;
+        final v0 = rgba[t0] * it + rgba[t1] * tt;
+        final v1 = rgba[t0 + 1] * it + rgba[t1 + 1] * tt;
+        final v2 = rgba[t0 + 2] * it + rgba[t1 + 2] * tt;
+        final v3 = rgba[t0 + 3] * it + rgba[t1 + 3] * tt;
+        sum0 += v0;
+        sum1 += v1;
+        sum2 += v2;
+        sum3 += v3;
+        final luma = 0.299 * v0 + 0.587 * v1 + 0.114 * v2;
+        if (luma > bestLuma) {
+          bestLuma = luma;
+          best0 = v0;
+          best1 = v1;
+          best2 = v2;
+          best3 = v3;
         }
       }
-      final src = bestIdx * 4;
-      final dst = destRowBase + x * 4;
-      out[dst] = rgba[src];
-      out[dst + 1] = rgba[src + 1];
-      out[dst + 2] = rgba[src + 2];
-      out[dst + 3] = rgba[src + 3];
+
+      // pooled = mix(sum / 12, best, PEAK_WEIGHT)
+      final invW = 1.0 - kLogPeakWeight;
+      final pooled0 = (sum0 / 12.0) * invW + best0 * kLogPeakWeight;
+      final pooled1 = (sum1 / 12.0) * invW + best1 * kLogPeakWeight;
+      final pooled2 = (sum2 / 12.0) * invW + best2 * kLogPeakWeight;
+      final pooled3 = (sum3 / 12.0) * invW + best3 * kLogPeakWeight;
+
+      // out = mix(center, pooled, smoothstep(1, 2, footprint))
+      final d = destRowBase + x4;
+      out[d] = _clamp255(cc0 + (pooled0 - cc0) * wBlend);
+      out[d + 1] = _clamp255(cc1 + (pooled1 - cc1) * wBlend);
+      out[d + 2] = _clamp255(cc2 + (pooled2 - cc2) * wBlend);
+      out[d + 3] = _clamp255(cc3 + (pooled3 - cc3) * wBlend);
     }
   }
 
   return out;
+}
+
+int _clamp255(double v) {
+  final r = v.round();
+  if (r < 0) return 0;
+  if (r > 255) return 255;
+  return r;
 }

@@ -20,6 +20,14 @@ class WarpRequest {
   final double maxFreq;
   final double focusHz;
 
+  /// Target size in device pixels (plot rect × devicePixelRatio). The LUT
+  /// output is nearest-upscaled to this size before the warp so both views
+  /// share the exact pixel grid of the on-screen (linear) rendering — the
+  /// same "render linear first, warp those pixels" pipeline the web uses.
+  /// Values <= 0 keep the raw data resolution.
+  final int dstWidth;
+  final int dstHeight;
+
   const WarpRequest({
     required this.intensity,
     required this.width,
@@ -28,6 +36,8 @@ class WarpRequest {
     required this.logView,
     required this.maxFreq,
     required this.focusHz,
+    this.dstWidth = 0,
+    this.dstHeight = 0,
   });
 }
 
@@ -294,7 +304,10 @@ void _isolateEntry(SendPort mainSendPort) {
 }
 
 /// Same math as the UI-side path (spectrogram_canvas): apply the 256-entry
-/// gain LUT to the intensity plane, then peak-warp for the log view.
+/// gain LUT to the intensity plane, nearest-upscale to the on-screen plot
+/// resolution (the pixels the linear view draws), then peak-warp for the log
+/// view. This mirrors the web pipeline: render linear at device resolution
+/// first, then warp those exact pixels.
 Uint8List _applyLutAndWarp(WarpRequest req) {
   final w = req.width;
   final h = req.height;
@@ -308,13 +321,63 @@ Uint8List _applyLutAndWarp(WarpRequest req) {
   for (var i = 0; i < w * h; i++) {
     outWords[i] = lutWords[intensity[i]];
   }
-  if (!req.logView) return rgba;
-  return warpSpectrogramVertical(
-    rgba,
-    w,
-    h,
+  var plane = rgba;
+  var pw = w;
+  var ph = h;
+  final dw = req.dstWidth;
+  final dh = req.dstHeight;
+  if (dw > 0 && dh > 0 && (dw != w || dh != h)) {
+    plane = _nearestUpscale(rgba, w, h, dw, dh);
+    pw = dw;
+    ph = dh;
+  }
+  if (!req.logView) return plane;
+  final warped = warpSpectrogramVertical(
+    plane,
+    pw,
+    ph,
     buildLogAxis(0, req.maxFreq, req.focusHz),
   );
+  // ignore: avoid_print
+  print('[TIMING] iso warp ${pw}x$ph log=${req.logView} '
+      'inAvg=${_avg(plane)} outAvg=${_avg(warped)} outLen=${warped.length}');
+  return warped;
+}
+
+double _avg(Uint8List b) {
+  if (b.isEmpty) return -1;
+  final step = b.length < 40000 ? 1 : b.length ~/ 40000;
+  var s = 0;
+  var n = 0;
+  for (var i = 0; i < b.length; i += step) {
+    s += b[i];
+    n++;
+  }
+  return s / n;
+}
+
+/// Nearest-neighbour upscale matching Flutter's
+/// `drawImageRect(..., FilterQuality.none)` sampling:
+/// `src = floor((dst + 0.5) * srcSize / dstSize)`, clamped to the source.
+Uint8List _nearestUpscale(Uint8List src, int srcW, int srcH, int dstW, int dstH) {
+  final out = Uint8List(dstW * dstH * 4);
+  final srcWords = Uint32List.view(src.buffer, src.offsetInBytes, srcW * srcH);
+  final outWords = Uint32List.view(out.buffer, 0, dstW * dstH);
+  final xMap = Int32List(dstW);
+  for (var x = 0; x < dstW; x++) {
+    final sx = ((2 * x + 1) * srcW) ~/ (2 * dstW);
+    xMap[x] = sx >= srcW ? srcW - 1 : sx;
+  }
+  for (var y = 0; y < dstH; y++) {
+    var sy = ((2 * y + 1) * srcH) ~/ (2 * dstH);
+    if (sy >= srcH) sy = srcH - 1;
+    final srcRow = sy * srcW;
+    final dstRow = y * dstW;
+    for (var x = 0; x < dstW; x++) {
+      outWords[dstRow + x] = srcWords[srcRow + xMap[x]];
+    }
+  }
+  return out;
 }
 
 /// Singleton persistent isolate worker — reused across all renders.

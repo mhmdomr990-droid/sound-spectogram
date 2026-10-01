@@ -351,6 +351,28 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _jobId = 0;
   Size _layoutSize = Size.zero;
   double _dpr = 1.0;
+
+  /// Plot rect in device pixels — the resolution `_SpectroPainter` draws the
+  /// image at. Mirrors the painter's insets (single source of truth for the
+  /// bottom inset); 0 before the first layout pass, which falls back to data
+  /// resolution (the painter stretches it as before).
+  int get _plotDstWidth {
+    if (_layoutSize == Size.zero) return 0;
+    // _leftInsetLog == _leftInsetBase, so either constant matches the painter.
+    final plotW = _layoutSize.width -
+        _SpectroPainter._leftInsetBase -
+        _SpectroPainter._rightInset;
+    return plotW <= 0 ? 0 : (plotW * _dpr).round();
+  }
+
+  int get _plotDstHeight {
+    if (_layoutSize == Size.zero) return 0;
+    final plotH = _layoutSize.height -
+        _SpectroPainter._topInset -
+        _SpectroPainter.bottomInsetFor(
+            widget.showStatusBar, widget.compactStatusBar);
+    return plotH <= 0 ? 0 : (plotH * _dpr).round();
+  }
   Timer? _renderDebounce;
 
   List<List<num>>? _cachedMatrix;
@@ -379,6 +401,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   double _viewGamma = double.nan;
   double _viewFocus = double.nan;
   double _viewMaxFreq = double.nan;
+  // Plot rect (device px) the view images were built for — part of the cache
+  // key: a layout/dpr/inset change makes the cached sizes stale.
+  int _viewDstW = 0;
+  int _viewDstH = 0;
 
   bool _isViewCached(ui.Image img) =>
       identical(img, _viewLinear) || identical(img, _viewLog);
@@ -450,6 +476,16 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       // debounced full `_render` would be superseded before finishing.
       _onGainChanged();
     }
+    // Status-bar insets change the plot height (hence the device-pixel image
+    // size) without a layout change — rebuild so the image fits the new rect.
+    final insetsChanged = oldWidget.showStatusBar != widget.showStatusBar ||
+        oldWidget.compactStatusBar != widget.compactStatusBar;
+    if (insetsChanged &&
+        _cachedIntensity != null &&
+        _cachedIntensityWidth > 0 &&
+        _cachedIntensityHeight > 0) {
+      _onGainChanged();
+    }
   }
 
   void applyGain() => _onGainChanged();
@@ -484,7 +520,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     }
     setState(() {});
     // ignore: avoid_print
-    print('[TIMING] applied+setState total=${sw.elapsedMilliseconds}ms');
+    print('[TIMING] applied+setState total=${sw.elapsedMilliseconds}ms '
+        'image=${image.width}x${image.height} viewLog='
+        '${_viewLog?.width}x${_viewLog?.height} '
+        'viewLin=${_viewLinear?.width}x${_viewLinear?.height}');
     if (oldImage != null && oldImage != image && !_isViewCached(oldImage)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         try { oldImage.dispose(); } catch (_) {}
@@ -504,17 +543,28 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final log = logOverride ?? widget.logFrequencyView;
     final focus = widget.focusHz;
     final maxFreq = _effectiveMaxFreq();
+    // Build both views at the on-screen plot resolution (device px) so the
+    // log warp operates on the exact pixels the linear view draws — the same
+    // "render linear first, warp those pixels" pipeline the web uses.
+    final dstW = _plotDstWidth;
+    final dstH = _plotDstHeight;
+    final outW = (dstW > 0 && dstH > 0) ? dstW : w;
+    final outH = (dstW > 0 && dstH > 0) ? dstH : h;
 
     // Key the caches by the data they were derived from.
     if (!identical(_viewIntensity, intensity) ||
         _viewGainDb != gainDb ||
-        _viewGamma != gamma) {
+        _viewGamma != gamma ||
+        _viewDstW != outW ||
+        _viewDstH != outH) {
       _invalidateViewCache();
       _viewIntensity = intensity;
       _viewGainDb = gainDb;
       _viewGamma = gamma;
       _viewFocus = double.nan;
       _viewMaxFreq = double.nan;
+      _viewDstW = outW;
+      _viewDstH = outH;
     }
 
     // Warm cache: axis toggle needs no work at all.
@@ -541,15 +591,18 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       logView: log,
       maxFreq: maxFreq,
       focusHz: focus,
+      dstWidth: outW,
+      dstHeight: outH,
     ));
     final warpMs = sw.elapsedMicroseconds - lutMs;
     final stale = !mounted || !identical(_cachedIntensity, intensity);
     final t0 = sw.elapsedMicroseconds;
-    final img = await rgbaToUiImage(bytes, w, h);
+    final img = await rgbaToUiImage(bytes, outW, outH);
     final d1 = sw.elapsedMicroseconds - t0;
     // ignore: avoid_print
     print('[TIMING] lut=${lutMs / 1000}ms warp+ipc=${warpMs / 1000}ms '
-        'decode=${d1 / 1000}ms total=${sw.elapsedMilliseconds}ms');
+        'decode=${d1 / 1000}ms total=${sw.elapsedMilliseconds}ms '
+        'data=${w}x$h dst=${outW}x$outH log=$log');
     // Data changed while we were building: don't publish into the cache (it
     // is keyed by the old intensity), just hand the image back.
     if (stale) return img;
@@ -1113,7 +1166,9 @@ class _SpectroPainter extends CustomPainter {
   double get _leftInset => logAxis != null ? _leftInsetLog : _leftInsetBase;
   static const double _rightInset = 6;
   static const double _topInset = 4;
-  double get _bottomInset => showStatusBar ? (compactStatusBar ? 50.0 : 68.0) : 36.0;
+  static double bottomInsetFor(bool showStatusBar, bool compactStatusBar) =>
+      showStatusBar ? (compactStatusBar ? 50.0 : 68.0) : 36.0;
+  double get _bottomInset => bottomInsetFor(showStatusBar, compactStatusBar);
   static const int _xTicks = 5;
   static const int _yTicks = 5;
 
