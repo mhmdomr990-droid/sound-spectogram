@@ -306,15 +306,6 @@ class DashboardController extends GetxController {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_logViewStorageKey, enabled ? '1' : '0');
     } catch (_) {}
-    Get.rawSnackbar(
-      message: enabled ? 'تم تفعيل العرض اللوغاريتمي' : 'تم تفعيل العرض الخطي',
-      duration: const Duration(seconds: 2),
-      snackPosition: SnackPosition.BOTTOM,
-      backgroundColor: const Color(0xE61A1A2E),
-      borderRadius: 8,
-      margin: const EdgeInsets.all(10),
-      snackStyle: SnackStyle.FLOATING,
-    );
   }
 
   /// Set the focus frequency (Hz). Non-positive/invalid values fall back to
