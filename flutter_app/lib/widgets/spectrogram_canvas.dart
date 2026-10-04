@@ -195,6 +195,38 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   // Prevent onTapDown from removing a marker that was just added by onDoubleTapDown.
   int _lastMarkerAddedAt = 0;
 
+  // --- Display snapshot bound to the LAST COMPLETED image -----------------
+  // The painter must read window/coverage/histories from the same state the
+  // visible image was rendered with; otherwise a rebuild during the async
+  // render shows a new time axis over the old image (visible tearing for the
+  // few seconds the render is in flight). These are written atomically with
+  // _image and cleared whenever _image is cleared.
+  List<DeviceHistory>? _imgHistories;
+  String? _imgWindowStart;
+  String? _imgWindowEnd;
+
+  // True when a render request was skipped because this route was covered
+  // (e.g. fullscreen pushed on top). Flushed when the route becomes current.
+  bool _skippedWhileHidden = false;
+
+  bool _routeIsCurrentSafely() {
+    if (!mounted) return false;
+    final route = ModalRoute.of(context);
+    return route == null || route.isCurrent;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_skippedWhileHidden && mounted && _routeIsCurrentSafely()) {
+      _skippedWhileHidden = false;
+      _renderDebounce?.cancel();
+      _renderDebounce = Timer(const Duration(milliseconds: 100), () {
+        if (mounted) _render();
+      });
+    }
+  }
+
   void forceRender() {
     if (!mounted) return;
     // ignore: avoid_print
@@ -408,6 +440,22 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _viewDstW = 0;
   int _viewDstH = 0;
 
+  // Content-token snapshot accepted by the last dataChanged decision — RxList
+  // mutates in place (old/new widgets share one object), so the widgets cannot
+  // be compared to each other for content changes.
+  String _lastDataToken = '';
+
+  String _dataToken() {
+    final hs = widget.histories;
+    if (hs == null) return 'null';
+    if (hs.isEmpty) return '0';
+    var empty = 0;
+    for (final b in hs) {
+      if (b.data.isEmpty) empty++;
+    }
+    return '${hs.length}|$empty|${hs.first.startTime}|${hs.last.endTime}';
+  }
+
   bool _isViewCached(ui.Image img) =>
       identical(img, _viewLinear) || identical(img, _viewLog);
 
@@ -438,6 +486,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     _cachedIntensityWidth = widget.seedIntensityWidth;
     _cachedIntensityHeight = widget.seedIntensityHeight;
     _cachedGamma = widget.seedGamma;
+    _lastDataToken = _dataToken();
     widget.gainNotifier?.addListener(_onGainNotifier);
   }
 
@@ -452,10 +501,17 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         oldWidget.gamma != widget.gamma ||
         oldWidget.inputValueMax != widget.inputValueMax;
     final gainChanged = oldWidget.gainDb != widget.gainDb;
-    final dataChanged = oldWidget.histories != widget.histories ||
-        oldWidget.requestStartTime != widget.requestStartTime ||
-        oldWidget.requestEndTime != widget.requestEndTime;
+    // GetX RxList's `operator ==` is `value == o` (plain list vs RxList) and is
+    // always false, so a `histories !=` check fires on every parent rebuild.
+    // RxList also mutates in place (old/new widgets share one object), so
+    // identity comparisons are meaningless too. Key data identity on the window
+    // strings plus an O(1) content token captured into state.
+    final token = _dataToken();
+    final dataChanged = oldWidget.requestStartTime != widget.requestStartTime ||
+        oldWidget.requestEndTime != widget.requestEndTime ||
+        token != _lastDataToken;
     if (dataChanged) {
+      _lastDataToken = token;
       // ignore: avoid_print
       print('[DbgRx] didUpdateWidget dataChanged '
           '${oldWidget.requestStartTime} -> ${widget.requestStartTime} | '
@@ -907,11 +963,20 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   }
 
   Future<void> _render() async {
+    if (!mounted) return;
+    if (!_routeIsCurrentSafely()) {
+      // Covered by another route (fullscreen): skip and flush on return.
+      _skippedWhileHidden = true;
+      return;
+    }
     final histories = widget.histories;
     final id = ++_jobId;
     if (histories == null || histories.isEmpty || _layoutSize == Size.zero) {
       final stale = _image;
       _image = null;
+      _imgHistories = null;
+      _imgWindowStart = null;
+      _imgWindowEnd = null;
       if (mounted) setState(() {});
       if (stale != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -926,6 +991,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         'hist=${histories.length} emptyBlocks=${histories.where((e) => e.data.isEmpty).length}');
     final sw = Stopwatch()..start();
     try {
+      if (id != _jobId) return; // superseded before dispatch
       final result = await renderSpectrogramIsolate(
         RenderRequest(
           matrix: const [],
@@ -984,6 +1050,10 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       final oldImage = _image;
       _imageOwned = true;
       _image = image;
+      // Atomic with _image: the axis/coverage will read exactly this state.
+      _imgHistories = histories;
+      _imgWindowStart = widget.requestStartTime;
+      _imgWindowEnd = widget.requestEndTime;
       setState(() {});
       // ignore: avoid_print
       print('[DbgRx] _render#$id DONE ${sw.elapsedMilliseconds}ms img=${result.width}x${result.height}');
@@ -994,7 +1064,12 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       }
     } catch (_) {
       if (!mounted || id != _jobId) return;
-      setState(() => _image = null);
+      setState(() {
+        _image = null;
+        _imgHistories = null;
+        _imgWindowStart = null;
+        _imgWindowEnd = null;
+      });
     }
   }
 
@@ -1018,17 +1093,17 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     super.dispose();
   }
 
-  List<CoverageInterval> _buildCoverageIntervals() {
-    final histories = widget.histories;
+  List<CoverageInterval> _buildCoverageIntervals(
+      List<DeviceHistory>? histories, String? windowStart, String? windowEnd) {
     if (histories == null || histories.isEmpty) return const [];
 
-    final key = Object.hash(histories, widget.requestStartTime, widget.requestEndTime);
+    final key = Object.hash(histories, windowStart, windowEnd);
     if (_coverageCacheKey == key && _cachedCoverageIntervals != null) {
       return _cachedCoverageIntervals!;
     }
 
-    final fromMs = _stateParseMs(widget.requestStartTime ?? histories.first.startTime);
-    final toMs = _stateParseMs(widget.requestEndTime ?? histories.last.endTime);
+    final fromMs = _stateParseMs(windowStart ?? histories.first.startTime);
+    final toMs = _stateParseMs(windowEnd ?? histories.last.endTime);
     if (fromMs == null || toMs == null || toMs <= fromMs) {
       final result = _buildCoverageIntervalsFallback(histories);
       _cachedCoverageIntervals = result;
@@ -1073,17 +1148,16 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     return intervals;
   }
 
-  int _totalCols() {
-    final histories = widget.histories;
+  int _totalCols(List<DeviceHistory>? histories, String? windowStart, String? windowEnd) {
     if (histories == null || histories.isEmpty) return 0;
 
-    final key = Object.hash(histories, widget.requestStartTime, widget.requestEndTime);
+    final key = Object.hash(histories, windowStart, windowEnd);
     if (_coverageCacheKey == key && _cachedTotalCols > 0) {
       return _cachedTotalCols;
     }
 
-    final fromMs = _stateParseMs(widget.requestStartTime ?? (histories.isNotEmpty ? histories.first.startTime : null));
-    final toMs = _stateParseMs(widget.requestEndTime ?? (histories.isNotEmpty ? histories.last.endTime : null));
+    final fromMs = _stateParseMs(windowStart ?? (histories.isNotEmpty ? histories.first.startTime : null));
+    final toMs = _stateParseMs(windowEnd ?? (histories.isNotEmpty ? histories.last.endTime : null));
     if (fromMs == null || toMs == null || toMs <= fromMs) {
       int total = 0;
       for (final h in histories) {
@@ -1141,6 +1215,14 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                   ),
           );
         }
+        // Axis/coverage/labels come from the snapshot of the image that is
+        // actually on screen (falls back to live values before first render),
+        // so the time axis never tears against an in-flight render.
+        final dispHistories = _imgHistories ?? widget.histories;
+        final dispWindowStart =
+            _imgHistories != null ? _imgWindowStart : widget.requestStartTime;
+        final dispWindowEnd =
+            _imgHistories != null ? _imgWindowEnd : widget.requestEndTime;
         return SizedBox.expand(
           child: Container(
             color: widget.background,
@@ -1239,11 +1321,11 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                     timeLabels: widget.timeLabels,
                     viewportStart: _viewportStart,
                     viewportEnd: _viewportEnd,
-                    startTimeIso: widget.requestStartTime ?? widget.startTime ?? widget.histories?.firstOrNull?.startTime,
-                    endTimeIso: widget.requestEndTime ?? widget.endTime ?? widget.histories?.lastOrNull?.endTime,
-                    coverageIntervals: _buildCoverageIntervals(),
-                    totalCols: _totalCols(),
-                    histories: widget.histories,
+                    startTimeIso: dispWindowStart ?? widget.startTime ?? dispHistories?.firstOrNull?.startTime,
+                    endTimeIso: dispWindowEnd ?? widget.endTime ?? dispHistories?.lastOrNull?.endTime,
+                    coverageIntervals: _buildCoverageIntervals(dispHistories, dispWindowStart, dispWindowEnd),
+                    totalCols: _totalCols(dispHistories, dispWindowStart, dispWindowEnd),
+                    histories: dispHistories,
                     showStatusBar: widget.showStatusBar,
                     compactStatusBar: widget.compactStatusBar,
                     markers: List<MarkerData>.from(widget.markers),
