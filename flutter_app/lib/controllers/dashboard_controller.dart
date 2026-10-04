@@ -361,7 +361,10 @@ class DashboardController extends GetxController {
         'rows=${h.data.length} histCount=${histories.length} '
         'emptyBlocks=${histories.where((e) => e.data.isEmpty).length} '
         'window=${requestStartTime.value} -> ${requestEndTime.value}');
-    canvasKey.currentState?.forceRender();
+    // NOTE: no forceRender here on purpose. It rendered with the previous
+    // (stale) window because the widget had not rebuilt yet, queueing a
+    // redundant full render ahead of the correct debounced one. The rebuild
+    // triggered by liveDataNotifier schedules the fresh render instead.
   }
 
   String _hostFromApi() => api.baseUrl.replaceAll(RegExp(r'/$'), '');

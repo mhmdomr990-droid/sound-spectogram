@@ -169,7 +169,9 @@ List<List<num>> buildMatrixFromHistories(
   }
   if (targetRows == 0) return const [];
 
-  final combined = List.generate(targetRows, (_) => List<num>.filled(totalCols, 0));
+  // Float64List rows: same IEEE-754 doubles as before, stored unboxed
+  // (faster fill and far better cache locality for the render passes).
+  final combined = List.generate(targetRows, (_) => Float64List(totalCols));
 
   for (final h in blocks) {
     if (h.data.isEmpty) continue;

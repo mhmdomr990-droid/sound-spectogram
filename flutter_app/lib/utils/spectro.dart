@@ -95,23 +95,36 @@ String _inferImageIntensityType(List<List<num>> matrix) {
   return 'magnitude';
 }
 
-double _normalizeScalarByType(num value, String? intensityType, num inputValueMax, num dbMin, num dbMax) {
-  final n = value.toDouble();
-  if (intensityType == null) {
-    return normalizeIntensity(n, inputValueMax: inputValueMax);
-  }
+// Intensity modes resolved once per pass (was: toLowerCase + string
+// comparisons re-run for every matrix cell).
+const int _normModeNormalizeIntensity = -1; // null or unrecognized type
+const int _normModeNormalized = 0;
+const int _normModeUint8 = 1;
+const int _normModeDb = 2;
+const int _normModeMagnitude = 3;
+
+int _normModeOf(String? intensityType) {
+  if (intensityType == null) return _normModeNormalizeIntensity;
   final type = intensityType.toLowerCase();
-  if (type == 'normalized') return clamp01(n);
-  if (type == 'uint8') return clamp01(n / 255.0);
-  if (type == 'db') {
+  if (type == 'normalized') return _normModeNormalized;
+  if (type == 'uint8') return _normModeUint8;
+  if (type == 'db') return _normModeDb;
+  if (type == 'magnitude') return _normModeMagnitude;
+  return _normModeNormalizeIntensity;
+}
+
+double _normalizeScalarByMode(num value, int mode, num inputValueMax, num dbMin, num dbMax) {
+  final n = value.toDouble();
+  if (mode == _normModeNormalized) return clamp01(n);
+  if (mode == _normModeUint8) return clamp01(n / 255.0);
+  if (mode == _normModeDb) {
     var minDb = dbMin.toDouble();
     var maxDb = dbMax.toDouble();
     if (!minDb.isFinite) minDb = -95.0;
     if (!maxDb.isFinite || maxDb <= minDb) maxDb = minDb + 75.0;
     return clamp01((n - minDb) / (maxDb - minDb));
   }
-  // magnitude or fallback
-  if (type == 'magnitude') {
+  if (mode == _normModeMagnitude) {
     final db = _dbFromMagnitude(n);
     if (!db.isFinite) return 0.0;
     var minDb = dbMin.toDouble();
@@ -217,41 +230,28 @@ bool _hasLineSupport(List<List<bool>> mask, int row, int col) {
 void _removeSingletonComponents(List<List<bool>> mask) {
   final rows = mask.length;
   final cols = rows > 0 ? mask[0].length : 0;
-  final visited = List.generate(rows, (_) => List<bool>.filled(cols, false));
-  final dirs = [
-    [-1, -1],
-    [-1, 0],
-    [-1, 1],
-    [0, -1],
-    [0, 1],
-    [1, -1],
-    [1, 0],
-    [1, 1]
-  ];
-
+  // Equivalent to the connected-component scan it replaces: a component has
+  // size 1 iff its cell has no active 8-neighbour. Removing a zero-neighbour
+  // cell cannot change any other cell's neighbour count (it was nobody's
+  // neighbour), so no cascades occur and a single in-place pass yields the
+  // same result as the BFS.
   for (var row = 0; row < rows; row++) {
     for (var col = 0; col < cols; col++) {
-      if (!mask[row][col] || visited[row][col]) continue;
-      final queue = <Map<String, int>>[];
-      queue.add({'r': row, 'c': col});
-      final members = <Map<String, int>>[];
-      visited[row][col] = true;
-      while (queue.isNotEmpty) {
-        final node = queue.removeLast();
-        members.add(node);
-        for (var di = 0; di < dirs.length; di++) {
-          final rr = node['r']! + dirs[di][0];
-          final cc = node['c']! + dirs[di][1];
+      if (!mask[row][col]) continue;
+      var hasNeighbor = false;
+      for (var dr = -1; dr <= 1 && !hasNeighbor; dr++) {
+        for (var dc = -1; dc <= 1; dc++) {
+          if (dr == 0 && dc == 0) continue;
+          final rr = row + dr;
+          final cc = col + dc;
           if (rr < 0 || cc < 0 || rr >= rows || cc >= cols) continue;
-          if (!mask[rr][cc] || visited[rr][cc]) continue;
-          visited[rr][cc] = true;
-          queue.add({'r': rr, 'c': cc});
+          if (mask[rr][cc]) {
+            hasNeighbor = true;
+            break;
+          }
         }
       }
-      if (members.length == 1) {
-        final only = members[0];
-        mask[only['r']!][only['c']!] = false;
-      }
+      if (!hasNeighbor) mask[row][col] = false;
     }
   }
 }
@@ -259,16 +259,22 @@ void _removeSingletonComponents(List<List<bool>> mask) {
 List<List<bool>> _bridgeThinGaps(List<List<bool>> mask) {
   final rows = mask.length;
   final cols = rows > 0 ? mask[0].length : 0;
-  final next = List.generate(rows, (r) => mask[r].toList());
+  // Deferred writes: every decision reads the untouched original mask, and
+  // writes only flip false->true, so applying them afterwards yields the same
+  // result as writing into a full copy (without allocating it).
+  final additions = <int>[];
   for (var row = 1; row < rows - 1; row++) {
     for (var col = 1; col < cols - 1; col++) {
       if (mask[row][col]) continue;
       final verticalBridge = mask[row - 1][col] && mask[row + 1][col];
       final horizontalBridge = mask[row][col - 1] && mask[row][col + 1];
-      if (verticalBridge || horizontalBridge) next[row][col] = true;
+      if (verticalBridge || horizontalBridge) additions.add(row * cols + col);
     }
   }
-  return next;
+  for (final idx in additions) {
+    mask[idx ~/ cols][idx % cols] = true;
+  }
+  return mask;
 }
 
 List<List<double>> _processMatrix(
@@ -286,9 +292,9 @@ List<List<double>> _processMatrix(
 }) {
   final rows = matrix.length;
   final cols = rows > 0 ? matrix[0].length : 0;
-  final original = List.generate(rows, (_) => List<double>.filled(cols, 0.0));
-  final thresholded = List.generate(rows, (_) => List<double>.filled(cols, 0.0));
+  final thresholded = List.generate(rows, (_) => Float64List(cols));
   var mask = List.generate(rows, (_) => List<bool>.filled(cols, false));
+  final normMode = _normModeOf(intensityType);
 
   // adaptive floor via histogram
   final hist = _collectNormalizedHistogram(matrix, 200000, 1024, inputValueMax: inputValueMax);
@@ -301,8 +307,7 @@ List<List<double>> _processMatrix(
   var activeBefore = 0;
   for (var r = 0; r < rows; r++) {
     for (var c = 0; c < cols; c++) {
-      final normalized = _normalizeScalarByType(matrix[r][c], intensityType, inputValueMax, dbMin, dbMax);
-      original[r][c] = normalized;
+      final normalized = _normalizeScalarByMode(matrix[r][c], normMode, inputValueMax, dbMin, dbMax);
       final gated = (normalized < threshold) ? 0.0 : normalized;
       thresholded[r][c] = gated;
       final active = gated > 0.0;
@@ -333,7 +338,7 @@ List<List<double>> _processMatrix(
     mask = _bridgeThinGaps(mask);
   }
 
-  final denoised = List.generate(rows, (_) => List<double>.filled(cols, 0.0));
+  final denoised = List.generate(rows, (_) => Float64List(cols));
   for (var r2 = 0; r2 < rows; r2++) {
     for (var c2 = 0; c2 < cols; c2++) {
       final keepValue = mask[r2][c2] ? thresholded[r2][c2] : 0.0;
@@ -492,9 +497,9 @@ SpectroRgbaResult buildRgba(
         intensityType: effectiveIntensityType, dbMin: dbMin, dbMax: dbMax);
 
     // helper matching web's aggregateBucketValue behaviour (supports 'hybrid').
-    num _aggregateBucketValue(num maxValue, num sumValue, int countValue, {String bucketAggregation = 'hybrid'}) {
+    double _aggregateBucketValue(double maxValue, double sumValue, int countValue, {String bucketAggregation = 'hybrid'}) {
       if (bucketAggregation == 'hybrid') {
-        if (countValue <= 0) return 0;
+        if (countValue <= 0) return 0.0;
         final meanValue = sumValue / countValue;
         return 0.7 * maxValue + 0.3 * meanValue;
       }
@@ -507,10 +512,10 @@ SpectroRgbaResult buildRgba(
   final intensity = Uint8List(width * height);
   final fastRowStride = max(1, (rows / 260).floor());
 
-  void flushColumnBucket(List<num> bucketMax, List<num> bucketSum, List<int> bucketCount, int xStart, int xEnd) {
+  void flushColumnBucket(Float64List bucketMax, Float64List bucketSum, List<int> bucketCount, int xStart, int xEnd) {
     for (var r = 0; r < rows; r += fastRowStride) {
       final rowEnd = min(rows, r + fastRowStride);
-      num groupedValue = 0;
+      double groupedValue = 0;
       for (var rg = r; rg < rowEnd; rg++) {
         final candidate = _aggregateBucketValue(bucketMax[rg], bucketSum[rg], bucketCount[rg], bucketAggregation: 'max');
         if (candidate > groupedValue) {
@@ -544,36 +549,43 @@ SpectroRgbaResult buildRgba(
   }
 
   // Aggregate columns into x-buckets and flush like the web renderer's flushColumnBucket.
-  final bucketMax = List<num>.filled(rows, 0);
-  final bucketSum = List<num>.filled(rows, 0);
+  final bucketMax = Float64List(rows);
+  final bucketSum = Float64List(rows);
   final bucketCount = List<int>.filled(rows, 0);
   var hasBucket = false;
   int bucketX0 = -1;
   int bucketX1 = -1;
 
+  // Parse the time range once instead of DateTime.parse for every column.
+  double? rangeStartMs;
+  double? rangeEndMs;
+  if (startTimeIso != null && endTimeIso != null) {
+    try {
+      final s = DateTime.parse(startTimeIso).toUtc().millisecondsSinceEpoch.toDouble();
+      final e = DateTime.parse(endTimeIso).toUtc().millisecondsSinceEpoch.toDouble();
+      if (e > s) {
+        rangeStartMs = s;
+        rangeEndMs = e;
+      }
+    } catch (_) {
+      rangeStartMs = null;
+      rangeEndMs = null;
+    }
+  }
+
   for (var c = 0; c < cols; c++) {
     // compute x mapping by dividing columns across width or using explicit time range
     int xStart;
     int xEnd;
-    if (startTimeIso != null && endTimeIso != null) {
-      try {
-        final startMs = DateTime.parse(startTimeIso).toUtc().millisecondsSinceEpoch.toDouble();
-        final endMs = DateTime.parse(endTimeIso).toUtc().millisecondsSinceEpoch.toDouble();
-        if (endMs > startMs) {
-          final stepMs = (endMs - startMs) / max(1, cols);
-          final timeMs = startMs + c * stepMs;
-          final nextTimeMs = startMs + (c + 1) * stepMs;
-          final range = max(1e-9, endMs - startMs);
-          xStart = (((timeMs - startMs) / range) * width).floor().clamp(0, width - 1);
-          xEnd = (((nextTimeMs - startMs) / range) * width).ceil().clamp(xStart + 1, width);
-        } else {
-          xStart = ((c * width) / cols).floor().clamp(0, width - 1);
-          xEnd = ((((c + 1) * width) / cols).ceil()).clamp(xStart + 1, width);
-        }
-      } catch (_) {
-        xStart = ((c * width) / cols).floor().clamp(0, width - 1);
-        xEnd = ((((c + 1) * width) / cols).ceil()).clamp(xStart + 1, width);
-      }
+    if (rangeStartMs != null && rangeEndMs != null) {
+      final startMs = rangeStartMs;
+      final endMs = rangeEndMs;
+      final stepMs = (endMs - startMs) / max(1, cols);
+      final timeMs = startMs + c * stepMs;
+      final nextTimeMs = startMs + (c + 1) * stepMs;
+      final range = max(1e-9, endMs - startMs);
+      xStart = (((timeMs - startMs) / range) * width).floor().clamp(0, width - 1);
+      xEnd = (((nextTimeMs - startMs) / range) * width).ceil().clamp(xStart + 1, width);
     } else {
       // compute x mapping by dividing columns across width
       xStart = ((c * width) / cols).floor().clamp(0, width - 1);
@@ -622,9 +634,14 @@ SpectroRgbaResult buildRgba(
     flushColumnBucket(bucketMax, bucketSum, bucketCount, bucketX0, bucketX1);
   }
 
+  // Palette lookup: _colorForNormalized is a pure function of the intensity
+  // byte and gamma, so precompute all 256 entries once.
+  final paletteLut = Uint32List(256);
+  for (var i = 0; i < 256; i++) {
+    paletteLut[i] = _colorForNormalized(i / 255.0, gammaArg);
+  }
   for (var i = 0; i < intensity.length; i++) {
-    final byteValue = intensity[i];
-    final rgb = _colorForNormalized(byteValue / 255.0, gammaArg);
+    final rgb = paletteLut[intensity[i]];
     final offset = i * 4;
     rgba[offset] = (rgb >> 16) & 0xFF;
     rgba[offset + 1] = (rgb >> 8) & 0xFF;
