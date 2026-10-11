@@ -11,7 +11,7 @@ enum DeviceStatusSource { ping, telemetry, query }
 
 class DeviceStatusEntry {
   final String deviceId;
-  final String internet;
+  final String? internet;
   final double? battery;
   final double? temperature;
   final String? uptime;
@@ -38,6 +38,12 @@ class SocketService {
   bool _started = false;
   String _currentBase = '';
   bool _secureConnection = false;
+  String? _lastToken;
+  bool _authProbeInFlight = false;
+
+  /// Fired when the server reports "not authenticated" for an authenticated-only
+  /// event right after connect (stale/expired token in the handshake).
+  void Function()? onAuthMismatch;
 
   SocketStatus get status => _socket?.connected == true ? SocketStatus.connected : SocketStatus.disconnected;
 
@@ -61,10 +67,13 @@ class SocketService {
     _started = true;
     _currentBase = base;
     _secureConnection = secure;
+    if (token != null && token.isNotEmpty) {
+      _lastToken = token;
+    }
 
     final opts = io.OptionBuilder()
         .setTransports(['websocket'])
-        .setAuth({'token': token})
+        .setAuth({'token': token ?? _lastToken})
         .setReconnectionAttempts(999999)
         .setReconnectionDelay(1000)
         .setReconnectionDelayMax(10000)
@@ -76,6 +85,7 @@ class SocketService {
     _socket!.onConnect((_) {
       _onStatus.add(SocketStatus.connected);
       _socket!.emit('mobile:subscribe', {});
+      _probeAuth();
     });
 
     _socket!.onDisconnect((_) => _onStatus.add(SocketStatus.disconnected));
@@ -98,7 +108,7 @@ class SocketService {
             if (e is Map) {
               entries.add(DeviceStatusEntry(
                 deviceId: (e['device_id'] ?? '').toString(),
-                internet: (e['internet'] ?? 'DOWN').toString(),
+                internet: e['internet']?.toString(),
                 battery: (e['battery'] as num?)?.toDouble(),
                 temperature: (e['temperature'] as num?)?.toDouble(),
                 uptime: e['uptime']?.toString(),
@@ -123,7 +133,7 @@ class SocketService {
           final name = (payload['name'] ?? '').toString();
           final info = DeviceStatusEntry(
             deviceId: deviceId,
-            internet: (payload['internet'] ?? 'DOWN').toString(),
+            internet: payload['internet']?.toString(),
             battery: (payload['battery'] as num?)?.toDouble(),
             temperature: (payload['temperature'] as num?)?.toDouble(),
             uptime: payload['uptime']?.toString(),
@@ -218,12 +228,31 @@ class SocketService {
     return '${two(n.hour)}:${two(n.minute)}:${two(n.second)}.${three(n.millisecond)}';
   }
 
+  /// Verifies the handshake was actually authenticated: `mobile:subscribe`
+  /// fails silently when the token is stale, so probe an auth-gated event.
+  void _probeAuth() {
+    if (_authProbeInFlight) return;
+    _authProbeInFlight = true;
+    requestLatestTelemetry().then((response) {
+      _authProbeInFlight = false;
+      if (response != null && response['error'] == 'not authenticated') {
+        if (kDebugMode) print('[Socket] AUTH MISMATCH: connected but not authenticated');
+        onAuthMismatch?.call();
+      }
+    }).catchError((_) {
+      _authProbeInFlight = false;
+    });
+  }
+
   Future<Map<String, dynamic>?> emitCheckAiStatus({
     required int deviceId,
     required String startTime,
     required String endTime,
   }) async {
-    if (_socket == null || _socket?.connected != true) return null;
+    if (_socket == null || _socket?.connected != true) {
+      if (kDebugMode) print('[Socket] check_ai_status skipped: not connected');
+      return null;
+    }
 
     final completer = Completer<Map<String, dynamic>?>();
 
@@ -236,14 +265,18 @@ class SocketService {
         if (response is Map) {
           completer.complete(Map<String, dynamic>.from(response.cast()));
         } else {
+          if (kDebugMode) print('[Socket] check_ai_status: non-map ack type=${response.runtimeType}');
           completer.complete(null);
         }
       }
     });
 
     return completer.future.timeout(
-      const Duration(seconds: 10),
-      onTimeout: () => null,
+      const Duration(seconds: 30),
+      onTimeout: () {
+        if (kDebugMode) print('[Socket] check_ai_status: ack timeout 30s');
+        return null;
+      },
     );
   }
 
@@ -257,14 +290,21 @@ class SocketService {
 
   /// Dispose the current socket and open a fresh one with [token].
   /// Used when the JWT expired and a new one was obtained.
+  /// Never reconnects with a null/empty token — that would produce a socket
+  /// that connects but silently fails `mobile:subscribe` (no pushes).
   void reconnect({String? token}) {
     final base = _currentBase;
     if (base.isEmpty) return;
+    final effective = (token != null && token.isNotEmpty) ? token : _lastToken;
+    if (effective == null || effective.isEmpty) {
+      if (kDebugMode) print('[Socket] reconnect skipped: no token available');
+      return;
+    }
     final scheme = _secureConnection ? 'wss' : 'ws';
     _socket?.dispose();
     _socket = null;
     _started = false;
-    connect('$scheme://$base', token: token);
+    connect('$scheme://$base', token: effective);
   }
 
   void dispose() {
@@ -290,7 +330,7 @@ class SocketService {
     });
 
     return completer.future.timeout(
-      const Duration(seconds: 10),
+      const Duration(seconds: 30),
       onTimeout: () => null,
     );
   }

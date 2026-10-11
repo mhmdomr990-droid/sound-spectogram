@@ -332,7 +332,7 @@ class DashboardScreen extends StatelessWidget {
                 const SizedBox(height: 12),
                 Text(c.error.value!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.redAccent)),
                 const SizedBox(height: 16),
-                FilledButton(onPressed: () => c.loadRange(), child: const Text('إعادة المحاولة')),
+                FilledButton(onPressed: () => c.recoverView(), child: const Text('إعادة المحاولة')),
               ],
             ),
           ),
@@ -556,7 +556,7 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     return '$y-$m-${d}T$h:$min:$s';
   }
 
-  Future<void> _fetch() async {
+  Future<void> _fetch({bool allowRetry = true}) async {
     setState(() {
       _loading = true;
       _error = null;
@@ -564,26 +564,57 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     });
 
     final socket = Get.find<SocketService>();
-    final response = await socket.emitCheckAiStatus(
+    final controller = Get.find<DashboardController>();
+
+    if (socket.status != SocketStatus.connected) {
+      final connected = await controller.ensureConnected();
+      if (!connected) {
+        if (!mounted) return;
+        setState(() {
+          _loading = false;
+          _error = 'انقطع الاتصال بالخادم — تحقق من الشبكة';
+        });
+        return;
+      }
+    }
+
+    var response = await socket.emitCheckAiStatus(
       deviceId: _device!.id,
       startTime: _iso(_from),
       endTime: _iso(_to),
     );
+
+    // One automatic retry: covers ack loss during a connection blip.
+    if (response == null && allowRetry && mounted) {
+      if (socket.status != SocketStatus.connected) {
+        await controller.ensureConnected();
+      }
+      if (socket.status == SocketStatus.connected) {
+        response = await socket.emitCheckAiStatus(
+          deviceId: _device!.id,
+          startTime: _iso(_from),
+          endTime: _iso(_to),
+        );
+      }
+    }
 
     if (!mounted) return;
 
     if (response == null) {
       setState(() {
         _loading = false;
-        _error = 'فشل الاتصال بالخادم';
+        _error = socket.status == SocketStatus.connected
+            ? 'استغرق الخادم وقتاً طويلاً — أعد المحاولة'
+            : 'انقطع الاتصال بالخادم — تحقق من الشبكة';
       });
       return;
     }
 
     if (response['ok'] == false) {
+      final message = response['message'] ?? 'خطأ غير معروف';
       setState(() {
         _loading = false;
-        _error = response['message'] ?? 'خطأ غير معروف';
+        _error = message;
       });
       return;
     }

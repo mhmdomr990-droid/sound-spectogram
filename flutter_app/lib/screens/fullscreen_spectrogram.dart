@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
+import '../controllers/dashboard_controller.dart';
 import '../models/device_history.dart';
 import '../models/marker.dart';
 import '../utils/log_axis.dart';
@@ -128,39 +129,47 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                 valueListenable: widget.liveDataNotifier,
                 builder: (context, data, _) {
                   final (histories, startTime, endTime) = data;
-                  return SpectrogramCanvas(
-                    key: _canvasKey,
-                    histories: histories,
-                    gainNotifier: _gainNotifier,
-                    seedImage: widget.seedImage,
-                    seedCachedCombined: widget.seedCachedCombined,
-                    seedCachedWidth: widget.seedCachedWidth,
-                    seedCachedHeight: widget.seedCachedHeight,
-                    seedFrequencyBins: widget.seedFrequencyBins,
-                    seedColCount: widget.seedColCount,
-                    seedStartTime: widget.seedStartTime,
-                    seedEndTime: widget.seedEndTime,
-                    seedIntensity: widget.seedIntensity,
-                    seedIntensityWidth: widget.seedIntensityWidth,
-                    seedIntensityHeight: widget.seedIntensityHeight,
-                    seedGamma: widget.seedGamma,
-                    requestStartTime: startTime,
-                    requestEndTime: endTime,
-                    showStatusBar: true,
-                    compactStatusBar: true,
-                    maxFrequency: widget.maxFrequency,
-                    logFrequencyView: _logFrequencyView,
-                    focusHz: widget.focusHz,
-                    markers: _markers,
-                    onMarkerAdd: (timeMs) => setState(() => _markers = [..._markers, MarkerData(timeMs: timeMs)]),
-                    onMarkerRemove: (index) => setState(() {
-                      _markers = List<MarkerData>.from(_markers)..removeAt(index);
-                    }),
-                    onMarkerMove: (index, newTimeMs) => setState(() {
-                      _markers = List<MarkerData>.from(_markers);
-                      _markers[index] = MarkerData(timeMs: newTimeMs);
-                    }),
-                  );
+                  // Reactive axis params: a device maxFrequency/focusHz change
+                  // (refreshDevicesMeta) must reach fullscreen too — the route
+                  // itself never rebuilds from the dashboard Obx.
+                  return Obx(() {
+                    final c = Get.isRegistered<DashboardController>()
+                        ? Get.find<DashboardController>()
+                        : null;
+                    return SpectrogramCanvas(
+                      key: _canvasKey,
+                      histories: histories,
+                      gainNotifier: _gainNotifier,
+                      seedImage: widget.seedImage,
+                      seedCachedCombined: widget.seedCachedCombined,
+                      seedCachedWidth: widget.seedCachedWidth,
+                      seedCachedHeight: widget.seedCachedHeight,
+                      seedFrequencyBins: widget.seedFrequencyBins,
+                      seedColCount: widget.seedColCount,
+                      seedStartTime: widget.seedStartTime,
+                      seedEndTime: widget.seedEndTime,
+                      seedIntensity: widget.seedIntensity,
+                      seedIntensityWidth: widget.seedIntensityWidth,
+                      seedIntensityHeight: widget.seedIntensityHeight,
+                      seedGamma: widget.seedGamma,
+                      requestStartTime: startTime,
+                      requestEndTime: endTime,
+                      showStatusBar: true,
+                      compactStatusBar: true,
+                      maxFrequency: c?.selected.value?.maxFrequency ?? widget.maxFrequency,
+                      logFrequencyView: _logFrequencyView,
+                      focusHz: c?.focusHz.value ?? widget.focusHz,
+                      markers: _markers,
+                      onMarkerAdd: (timeMs) => setState(() => _markers = [..._markers, MarkerData(timeMs: timeMs)]),
+                      onMarkerRemove: (index) => setState(() {
+                        _markers = List<MarkerData>.from(_markers)..removeAt(index);
+                      }),
+                      onMarkerMove: (index, newTimeMs) => setState(() {
+                        _markers = List<MarkerData>.from(_markers);
+                        _markers[index] = MarkerData(timeMs: newTimeMs);
+                      }),
+                    );
+                  });
                 },
               ),
             ),

@@ -531,16 +531,17 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     if (gainChanged && _cachedIntensity != null && _cachedIntensityWidth > 0 && _cachedIntensityHeight > 0) {
       _queueGainBuild();
     }
-    final logChanged = oldWidget.logFrequencyView != widget.logFrequencyView ||
-        oldWidget.focusHz != widget.focusHz;
-    if (logChanged &&
+    final axisChanged = oldWidget.logFrequencyView != widget.logFrequencyView ||
+        oldWidget.focusHz != widget.focusHz ||
+        oldWidget.maxFrequency != widget.maxFrequency;
+    if (axisChanged &&
         _cachedIntensity != null &&
         _cachedIntensityWidth > 0 &&
         _cachedIntensityHeight > 0) {
       // Rebuild for the new axis settings (the axis plane re-warps once on
-      // the isolate; LUT+decode run on the UI thread). Runs unconditionally:
-      // in live mode `dataChanged` is always true and a debounced full
-      // `_render` would be superseded before finishing.
+      // the isolate; LUT+decode run on the UI thread). maxFrequency is part
+      // of the same path: a server-side device edit must renumber the axis
+      // without waiting for a full screen rebuild (logout/login).
       _queueGainBuild();
     }
     // Status-bar insets change the plot height (hence the device-pixel image

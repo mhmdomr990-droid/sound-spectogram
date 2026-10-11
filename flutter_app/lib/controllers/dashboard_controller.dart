@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -69,6 +70,7 @@ class DashboardController extends GetxController {
   Timer? _pollTimer;
   Timer? _telemetryTimer;
   Timer? _healthTimer;
+  Timer? _devicesMetaTimer;
   Timer? _disconnectRetry;
   bool _recoveringSocket = false;
   DateTime? _lastSocketRecovery;
@@ -80,8 +82,9 @@ class DashboardController extends GetxController {
     _loadLogFrequencySettings();
     _bindSocket();
     _loadDevices();
-    _telemetryTimer = Timer.periodic(const Duration(seconds: 60), (_) => _fetchLatestTelemetry());
+    _telemetryTimer = Timer.periodic(const Duration(seconds: 30), (_) => _fetchLatestTelemetry());
     _healthTimer = Timer.periodic(const Duration(seconds: 30), (_) => _healthCheck());
+    _devicesMetaTimer = Timer.periodic(const Duration(seconds: 30), (_) => refreshDevicesMeta());
   }
 
   @override
@@ -91,6 +94,7 @@ class DashboardController extends GetxController {
     _pollTimer?.cancel();
     _telemetryTimer?.cancel();
     _healthTimer?.cancel();
+    _devicesMetaTimer?.cancel();
     _disconnectRetry?.cancel();
     _dataSub?.cancel();
     _statusSub?.cancel();
@@ -146,12 +150,10 @@ class DashboardController extends GetxController {
     _deviceStatusSub = socket.onDeviceStatus.listen((entries) {
       for (final e in entries) {
         final info = deviceStatusMap[e.deviceId] ?? DeviceStatusInfo();
-        if (e.source == DeviceStatusSource.ping) {
-          info.internet = e.internet;
-        }
-        info.battery = e.battery;
-        info.temperature = e.temperature;
-        info.uptime = e.uptime;
+        if (e.internet != null) info.internet = e.internet;
+        if (e.battery != null) info.battery = e.battery;
+        if (e.temperature != null) info.temperature = e.temperature;
+        if (e.uptime != null) info.uptime = e.uptime;
         deviceStatusMap[e.deviceId] = info;
         final name = _deviceNameFromId(e.deviceId);
         if (name != null) deviceStatusMap[name] = info;
@@ -159,20 +161,71 @@ class DashboardController extends GetxController {
       deviceStatusMap.refresh();
       _saveDeviceStatus();
     });
+    socket.onAuthMismatch = _handleAuthMismatch;
     socket.connect(_hostFromApi(), token: auth.token);
   }
+
+  DateTime? _lastAuthFixAt;
+
+  Future<void> _handleAuthMismatch() async {
+    final now = DateTime.now();
+    if (_lastAuthFixAt != null && now.difference(_lastAuthFixAt!) < const Duration(seconds: 30)) {
+      return;
+    }
+    _lastAuthFixAt = now;
+    final refreshed = await _refreshTokenSafely();
+    if (refreshed != null && socket.status == SocketStatus.connected) {
+      if (kDebugMode) print('[Socket] auth mismatch: reconnecting with refreshed token');
+      socket.reconnect(token: refreshed);
+    }
+  }
+
+  /// Waits briefly for the socket to (re)connect; returns true when connected.
+  Future<bool> ensureConnected() async {
+    if (socket.status == SocketStatus.connected) return true;
+    await _attemptSocketRecovery();
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (DateTime.now().isBefore(deadline)) {
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (socket.status == SocketStatus.connected) return true;
+    }
+    return socket.status == SocketStatus.connected;
+  }
+
+  bool _wasDisconnected = false;
 
   void _onSocketStatusChanged(SocketStatus s) {
     if (s == SocketStatus.connected) {
       _disconnectRetry?.cancel();
       _fetchLatestTelemetry();
+      if (_wasDisconnected) {
+        _wasDisconnected = false;
+        // Connection came back after a drop (possibly long enough for the
+        // JWT to expire): reload the view with the refreshed token instead
+        // of leaving the stale error/empty screen until logout/login.
+        recoverView();
+      }
     } else if (s == SocketStatus.disconnected) {
+      _wasDisconnected = true;
       _disconnectRetry?.cancel();
       _disconnectRetry = Timer(const Duration(seconds: 5), () {
         if (socket.status != SocketStatus.connected) {
           _attemptSocketRecovery();
         }
       });
+    }
+  }
+
+  /// Reloads the visible view after a recovery event (reconnect or token
+  /// refresh). Silent while a load is already running; reloads devices when
+  /// the list is empty (cold start with an expired token), otherwise the
+  /// current range. Errors are managed by the load paths themselves.
+  Future<void> recoverView() async {
+    if (loadingDevices.value || loadingHistory.value) return;
+    if (devices.isEmpty) {
+      await _loadDevices();
+    } else {
+      await loadRange();
     }
   }
 
@@ -183,9 +236,13 @@ class DashboardController extends GetxController {
       final refreshed = await _refreshTokenSafely();
       if (refreshed != null && socket.status != SocketStatus.connected) {
         socket.reconnect(token: refreshed);
+        recoverView();
         return;
       }
-      if (refreshed != null) return;
+      if (refreshed != null) {
+        recoverView();
+        return;
+      }
     }
     if (socket.status != SocketStatus.connected) {
       await _attemptSocketRecovery();
@@ -206,6 +263,10 @@ class DashboardController extends GetxController {
       if (token == null || auth.isTokenExpiringSoon()) {
         final refreshed = await _refreshTokenSafely();
         if (refreshed != null) token = refreshed;
+      }
+      if (token == null || token.isEmpty) {
+        if (kDebugMode) print('[Socket] recovery skipped: no token after refresh');
+        return;
       }
       socket.reconnect(token: token);
     } finally {
@@ -231,10 +292,12 @@ class DashboardController extends GetxController {
       final temperature = (data['temperature'] as num?)?.toDouble();
       final battery = (data['battery'] as num?)?.toDouble();
       final uptime = data['uptime']?.toString();
+      final internet = data['internet']?.toString();
       final info = deviceStatusMap[deviceId] ?? DeviceStatusInfo();
-      info.battery = battery;
-      info.temperature = temperature;
-      info.uptime = uptime;
+      if (battery != null) info.battery = battery;
+      if (temperature != null) info.temperature = temperature;
+      if (uptime != null) info.uptime = uptime;
+      if (internet != null) info.internet = internet;
       deviceStatusMap[deviceId] = info;
       if (name.isNotEmpty) {
         deviceStatusMap[name] = info;
@@ -378,6 +441,60 @@ class DashboardController extends GetxController {
       error.value = e.toString();
     }
   }
+
+  /// Lightweight device metadata refresh (name/minFrequency/maxFrequency...)
+  /// so server-side edits reach the app without logout/login. Rx values are
+  /// only touched when content actually changed, so the normal 60s tick costs
+  /// no rebuilds and never triggers a history reload.
+  Future<void> refreshDevicesMeta() async {
+    try {
+      final result = await api.fetchDevices();
+      if (result.isEmpty) return;
+
+      bool listDiffers = result.length != devices.length;
+      if (!listDiffers) {
+        for (var i = 0; i < result.length; i++) {
+          if (_deviceMetaDiffers(devices[i], result[i])) {
+            listDiffers = true;
+            break;
+          }
+        }
+      }
+
+      final oldSelected = selected.value;
+      Device? updatedSelected;
+      if (oldSelected != null) {
+        for (final d in result) {
+          if (d.id == oldSelected.id) {
+            updatedSelected = d;
+            break;
+          }
+        }
+      }
+      final selectedRemoved = oldSelected != null && updatedSelected == null;
+      final selectedMetaChanged = oldSelected != null &&
+          updatedSelected != null &&
+          _deviceMetaDiffers(oldSelected, updatedSelected);
+
+      if (!listDiffers && !selectedRemoved && !selectedMetaChanged) return;
+
+      if (listDiffers) devices.value = result;
+      if (selectedRemoved) {
+        selected.value = result.first;
+        await loadRange();
+      } else if (selectedMetaChanged) {
+        selected.value = updatedSelected;
+      }
+    } catch (_) {
+      // Silent: a metadata refresh must never disturb the running view.
+    }
+  }
+
+  static bool _deviceMetaDiffers(Device a, Device b) =>
+      a.name != b.name ||
+      a.description != b.description ||
+      a.minFrequency != b.minFrequency ||
+      a.maxFrequency != b.maxFrequency;
 
   Future<void> loadRange() async {
     final device = selected.value;
