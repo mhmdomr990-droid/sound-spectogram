@@ -12,10 +12,15 @@ import '../screens/fullscreen_spectrogram.dart';
 import '../services/api_client.dart';
 import '../services/socket_service.dart';
 import '../services/notification_service.dart';
+import '../utils/export_service.dart';
 import '../widgets/spectrogram_canvas.dart';
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
+
+  /// Shared with the export button; the widget tree may rebuild freely
+  /// (static keeps the key stable for this single-instance screen).
+  static final GlobalKey _exportBoundaryKey = GlobalKey();
 
   @override
   Widget build(BuildContext context) {
@@ -250,7 +255,23 @@ class DashboardScreen extends StatelessWidget {
                     const SizedBox(width: 4),
                     const Text('عرض لوغاريتمي',
                         style: TextStyle(color: Colors.white70, fontSize: 12)),
-                    const SizedBox(width: 16),
+                    IconButton(
+                      tooltip: 'تصدير لقطة',
+                      icon: const Icon(Icons.save_alt,
+                          color: Colors.white70, size: 18),
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      constraints:
+                          const BoxConstraints(minWidth: 30, minHeight: 30),
+                      onPressed: () => ExportService.exportPng(
+                        _exportBoundaryKey,
+                        devicePixelRatio:
+                            MediaQuery.of(context).devicePixelRatio,
+                        deviceName: c.selected.value?.name ?? 'device',
+                        histories: c.histories,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
                     const Text('تركيز حتى',
                         style: TextStyle(color: Colors.white70, fontSize: 12)),
                     const SizedBox(width: 6),
@@ -359,19 +380,22 @@ class DashboardScreen extends StatelessWidget {
               borderRadius: BorderRadius.circular(4),
             ),
             clipBehavior: Clip.hardEdge,
-            child: SpectrogramCanvas(
-              key: c.canvasKey,
-              histories: c.histories,
-              gainNotifier: c.gainNotifier,
-              requestStartTime: c.requestStartTime.value,
-              requestEndTime: c.requestEndTime.value,
-              markers: c.markers,
-              maxFrequency: c.selected.value?.maxFrequency,
-              logFrequencyView: c.logFrequencyView.value,
-              focusHz: c.focusHz.value,
-              onMarkerAdd: (timeMs) => c.addMarker(timeMs),
-              onMarkerRemove: (index) => c.removeMarker(index),
-              onMarkerMove: (index, newTimeMs) => c.moveMarker(index, newTimeMs),
+            child: RepaintBoundary(
+              key: _exportBoundaryKey,
+              child: SpectrogramCanvas(
+                key: c.canvasKey,
+                histories: c.histories,
+                gainNotifier: c.gainNotifier,
+                requestStartTime: c.requestStartTime.value,
+                requestEndTime: c.requestEndTime.value,
+                markers: c.markers,
+                maxFrequency: c.selected.value?.maxFrequency,
+                logFrequencyView: c.logFrequencyView.value,
+                focusHz: c.focusHz.value,
+                onMarkerAdd: (timeMs) => c.addMarker(timeMs),
+                onMarkerRemove: (index) => c.removeMarker(index),
+                onMarkerMove: (index, newTimeMs) => c.moveMarker(index, newTimeMs),
+              ),
             ),
           ),
           if (c.markers.isNotEmpty)

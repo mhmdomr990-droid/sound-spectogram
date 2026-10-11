@@ -8,6 +8,7 @@ import 'package:get/get.dart';
 import '../controllers/dashboard_controller.dart';
 import '../models/device_history.dart';
 import '../models/marker.dart';
+import '../utils/export_service.dart';
 import '../utils/log_axis.dart';
 import '../widgets/spectrogram_canvas.dart';
 
@@ -76,6 +77,20 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
   late bool _logFrequencyView;
   bool _controlsVisible = true;
   final _canvasKey = GlobalKey<SpectrogramCanvasState>();
+  final _fsExportBoundaryKey = GlobalKey();
+
+  void _export() {
+    final c = Get.isRegistered<DashboardController>()
+        ? Get.find<DashboardController>()
+        : null;
+    final (histories, _, _) = widget.liveDataNotifier.value;
+    ExportService.exportPng(
+      _fsExportBoundaryKey,
+      devicePixelRatio: MediaQuery.of(context).devicePixelRatio,
+      deviceName: c?.selected.value?.name ?? 'device',
+      histories: histories,
+    );
+  }
 
   @override
   void initState() {
@@ -136,38 +151,41 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                     final c = Get.isRegistered<DashboardController>()
                         ? Get.find<DashboardController>()
                         : null;
-                    return SpectrogramCanvas(
-                      key: _canvasKey,
-                      histories: histories,
-                      gainNotifier: _gainNotifier,
-                      seedImage: widget.seedImage,
-                      seedCachedCombined: widget.seedCachedCombined,
-                      seedCachedWidth: widget.seedCachedWidth,
-                      seedCachedHeight: widget.seedCachedHeight,
-                      seedFrequencyBins: widget.seedFrequencyBins,
-                      seedColCount: widget.seedColCount,
-                      seedStartTime: widget.seedStartTime,
-                      seedEndTime: widget.seedEndTime,
-                      seedIntensity: widget.seedIntensity,
-                      seedIntensityWidth: widget.seedIntensityWidth,
-                      seedIntensityHeight: widget.seedIntensityHeight,
-                      seedGamma: widget.seedGamma,
-                      requestStartTime: startTime,
-                      requestEndTime: endTime,
-                      showStatusBar: true,
-                      compactStatusBar: true,
-                      maxFrequency: c?.selected.value?.maxFrequency ?? widget.maxFrequency,
-                      logFrequencyView: _logFrequencyView,
-                      focusHz: c?.focusHz.value ?? widget.focusHz,
-                      markers: _markers,
-                      onMarkerAdd: (timeMs) => setState(() => _markers = [..._markers, MarkerData(timeMs: timeMs)]),
-                      onMarkerRemove: (index) => setState(() {
-                        _markers = List<MarkerData>.from(_markers)..removeAt(index);
-                      }),
-                      onMarkerMove: (index, newTimeMs) => setState(() {
-                        _markers = List<MarkerData>.from(_markers);
-                        _markers[index] = MarkerData(timeMs: newTimeMs);
-                      }),
+                    return RepaintBoundary(
+                      key: _fsExportBoundaryKey,
+                      child: SpectrogramCanvas(
+                        key: _canvasKey,
+                        histories: histories,
+                        gainNotifier: _gainNotifier,
+                        seedImage: widget.seedImage,
+                        seedCachedCombined: widget.seedCachedCombined,
+                        seedCachedWidth: widget.seedCachedWidth,
+                        seedCachedHeight: widget.seedCachedHeight,
+                        seedFrequencyBins: widget.seedFrequencyBins,
+                        seedColCount: widget.seedColCount,
+                        seedStartTime: widget.seedStartTime,
+                        seedEndTime: widget.seedEndTime,
+                        seedIntensity: widget.seedIntensity,
+                        seedIntensityWidth: widget.seedIntensityWidth,
+                        seedIntensityHeight: widget.seedIntensityHeight,
+                        seedGamma: widget.seedGamma,
+                        requestStartTime: startTime,
+                        requestEndTime: endTime,
+                        showStatusBar: true,
+                        compactStatusBar: true,
+                        maxFrequency: c?.selected.value?.maxFrequency ?? widget.maxFrequency,
+                        logFrequencyView: _logFrequencyView,
+                        focusHz: c?.focusHz.value ?? widget.focusHz,
+                        markers: _markers,
+                        onMarkerAdd: (timeMs) => setState(() => _markers = [..._markers, MarkerData(timeMs: timeMs)]),
+                        onMarkerRemove: (index) => setState(() {
+                          _markers = List<MarkerData>.from(_markers)..removeAt(index);
+                        }),
+                        onMarkerMove: (index, newTimeMs) => setState(() {
+                          _markers = List<MarkerData>.from(_markers);
+                          _markers[index] = MarkerData(timeMs: newTimeMs);
+                        }),
+                      ),
                     );
                   });
                 },
@@ -290,6 +308,8 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                               child: Row(
                                 children: [
                                   Expanded(child: _fsBtn(Icons.fit_screen, null, () => _canvasKey.currentState?.fitToScreen())),
+                                  const SizedBox(width: 1),
+                                  Expanded(child: _fsBtn(Icons.save_alt, null, _export)),
                                   const SizedBox(width: 1),
                                   if (_markers.isNotEmpty)
                                     Expanded(child: _fsBtn(Icons.delete_outline, null, () => setState(() => _markers.clear()))),
