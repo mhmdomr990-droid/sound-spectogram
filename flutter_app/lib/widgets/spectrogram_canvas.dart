@@ -606,6 +606,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final image = await _applyGainAndBuildImage(gainDb);
     if (!mounted) return;
     final oldImage = _image;
+    final oldOwned = _imageOwned;
     _imageOwned = true;
     _image = image;
     if (seedSnapshot != null) {
@@ -630,7 +631,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         'image=${image.width}x${image.height} viewLog='
         '${_viewLog?.width}x${_viewLog?.height} '
         'viewLin=${_viewLinear?.width}x${_viewLinear?.height}');
-    if (oldImage != null && oldImage != image && !_isViewCached(oldImage)) {
+    if (oldOwned && oldImage != null && oldImage != image && !_isViewCached(oldImage)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         try { oldImage.dispose(); } catch (_) {}
       });
@@ -1049,6 +1050,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         cachedGamma: result.gamma,
       );
       final oldImage = _image;
+      final oldOwned = _imageOwned;
       _imageOwned = true;
       _image = image;
       // Atomic with _image: the axis/coverage will read exactly this state.
@@ -1058,7 +1060,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       setState(() {});
       // ignore: avoid_print
       print('[DbgRx] _render#$id DONE ${sw.elapsedMilliseconds}ms img=${result.width}x${result.height}');
-      if (oldImage != null && oldImage != image && !_isViewCached(oldImage)) {
+      if (oldOwned && oldImage != null && oldImage != image && !_isViewCached(oldImage)) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           try { oldImage.dispose(); } catch (_) {}
         });
