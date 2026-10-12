@@ -30,6 +30,10 @@ Future<void> main() async {
   final api = ApiClient(savedServer, auth);
   final socket = SocketService();
 
+  // Idle logout: if 48h (testing: 10 min) passed since the last app exit,
+  // clear the full session BEFORE the foreground service can start.
+  await AuthController.enforceIdleLogoutOnLaunch(auth);
+
   if (auth.isLoggedIn && NotificationService.enabled) {
     await AppForegroundService.start();
   }
@@ -47,8 +51,35 @@ Future<void> main() async {
   runApp(const SpectroApp());
 }
 
-class SpectroApp extends StatelessWidget {
+class SpectroApp extends StatefulWidget {
   const SpectroApp({super.key});
+
+  @override
+  State<SpectroApp> createState() => _SpectroAppState();
+}
+
+class _SpectroAppState extends State<SpectroApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Stamp "last exit" on background and on return so continuous foreground
+    // use is never treated as an exit.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.resumed) {
+      AuthController.stampExit();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

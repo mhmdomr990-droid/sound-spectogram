@@ -17,7 +17,10 @@ class AuthController extends GetxController {
   static const _savedUsernameKey = 'saved_username';
   static const _savedPasswordKey = 'saved_password';
   static const _savedServerKey = 'saved_server_url';
+  static const _lastExitKey = 'last_exit_at';
   static const FlutterSecureStorage _secure = FlutterSecureStorage();
+
+  static const Duration kIdleLogoutMax = Duration(hours: 48);
 
   final isLoggedIn = false.obs;
   final isLoading = false.obs;
@@ -32,6 +35,36 @@ class AuthController extends GetxController {
     super.onInit();
     isLoggedIn.value = _auth.isLoggedIn;
     _loadSavedCredentials();
+  }
+
+  /// Cold-start check: if [kIdleLogoutMax] passed since the last app exit,
+  /// perform the same full clear as a manual logout. Always stamps the exit
+  /// key afterwards. Static (no GetX) to avoid racing onInit's credential
+  /// load.
+  static Future<bool> enforceIdleLogoutOnLaunch(AuthService auth,
+      {Duration maxIdle = kIdleLogoutMax}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final last = prefs.getInt(_lastExitKey);
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final expired = last != null &&
+        (nowMs - last >= maxIdle.inMilliseconds || last > nowMs);
+    if (expired && auth.isLoggedIn) {
+      await auth.logout();
+      await prefs.remove(_savedUsernameKey);
+      await prefs.remove(_savedPasswordKey);
+      await prefs.remove(_savedServerKey);
+      await _secure.delete(key: _savedPasswordKey);
+    }
+    await prefs.setInt(_lastExitKey, nowMs);
+    return expired;
+  }
+
+  /// Stamp "last exit" with the current time — called on app pause (exit to
+  /// background) and resume so continuous foreground use is not treated as
+  /// an exit.
+  static Future<void> stampExit() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_lastExitKey, DateTime.now().millisecondsSinceEpoch);
   }
 
   Future<void> _loadSavedCredentials() async {
