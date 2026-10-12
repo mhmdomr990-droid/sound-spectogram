@@ -201,13 +201,20 @@ double _smoothstep(double edge0, double edge1, double x) {
 /// the warp (gain changes then cost only a 0.8M-pixel lookup + decode).
 ///
 /// The axis mapping matches the shader; sampling:
+///  * When the axis falls back to plain linear (`topLinear`) the mapping is
+///    the identity, so the plane is returned unchanged — the log view then
+///    matches the linear view pixel-for-pixel (a pixel-center blend here
+///    would only dim thin lines against the dark background).
 ///  * Where the axis EXPANDS (footprint <= 1 source pixel) every destination
-///    pixel is a plain bilinear sample of the source — exactly like the linear
-///    view, so thin lines stay smooth instead of becoming hard bands.
+///    pixel takes the BRIGHTEST of the two source rows its center falls
+///    between instead of their average — a thin line keeps the exact
+///    brightness it has in the linear view, while dark backgrounds
+///    (max of two darks = dark) are unchanged.
 ///  * Where the axis COMPRESSES (footprint > 1) 12 evenly spaced bilinear
 ///    samples are pooled as `mix(average, brightest, kLogPeakWeight)` and
-///    blended with the center sample by `smoothstep(1, 2, footprint)`, so
-///    signals are never averaged away while the noise floor stays soft.
+///    blended with the center sample by `smoothstep(1, 2, footprint)`; the
+///    center sample is also the brightest of its two rows (not their
+///    average) so mild compression (footprint 1..2) does not dim thin lines.
 ///
 /// "Brightest" compares intensity directly — equivalent to the shader's luma
 /// pick because the magma palette is luminance-monotonic.
@@ -222,6 +229,13 @@ Uint8List warpSpectrogramIntensity(
   }
   final w = width;
   final h = height;
+
+  // Plain-linear fallback: the mapping is the identity (share == focusFrac
+  // by construction), so there is nothing to warp — any pixel-center blend
+  // would only dim thin lines relative to the linear view.
+  if (axis.topLinear) {
+    return src;
+  }
 
   // Source row (in pixels, from the top) for a destination pixel edge/center.
   double mapRow(double vy) {
@@ -261,26 +275,28 @@ Uint8List warpSpectrogramIntensity(
     final destRowBase = y * w;
 
     if (footprint <= 1.0) {
-      // Web: footprintPx <= 1.0 -> plain smooth (bilinear) center sample.
+      // Peak sample: brightest of the two rows the center falls between. A
+      // thin line (one bright row between dark rows) keeps its full
+      // brightness — identical to the linear view — instead of being halved
+      // by a 50/50 blend at the pixel center.
       setup(12, yc);
       final a = row0[12] * w;
       final b = row1[12] * w;
-      final t = rowT[12];
-      if (t == 0.0) {
+      if (rowT[12] == 0.0) {
         // Integer source row — straight copy.
         out.setRange(destRowBase, destRowBase + w, src, a);
       } else {
-        final inv = 1.0 - t;
         for (var x = 0; x < w; x++) {
-          out[destRowBase + x] =
-              _clamp255(src[a + x] * inv + src[b + x] * t);
+          final va = src[a + x];
+          final vb = src[b + x];
+          out[destRowBase + x] = va >= vb ? va : vb;
         }
       }
       continue;
     }
 
     // Compression: 12 evenly spaced bilinear taps over [ya, yb] (web:
-    // mix(ya, yb, (i + 0.5) / 12)) plus the bilinear center sample.
+    // mix(ya, yb, (i + 0.5) / 12)) plus the peak center sample.
     for (var i = 0; i < 12; i++) {
       setup(i, ya + (yb - ya) * ((i + 0.5) / 12.0));
     }
@@ -288,8 +304,6 @@ Uint8List warpSpectrogramIntensity(
 
     final c0 = row0[12] * w;
     final c1 = row1[12] * w;
-    final ct = rowT[12];
-    final cinv = 1.0 - ct;
 
     // Per-row constant (footprint does not depend on x).
     final wBlend = _smoothstep(1.0, 2.0, footprint);
@@ -297,11 +311,15 @@ Uint8List warpSpectrogramIntensity(
     const invPeak = 1.0 - kLogPeakWeight;
 
     for (var x = 0; x < w; x++) {
-      // Center sample (bilinear).
-      final center = src[c0 + x] * cinv + src[c1 + x] * ct;
+      // Center sample: brightest of its two rows (see the expansion note) so
+      // mild compression — where wBlend blends toward the center — does not
+      // dim thin lines.
+      final va = src[c0 + x];
+      final vb = src[c1 + x];
+      final center = va >= vb ? va.toDouble() : vb.toDouble();
 
       // Pool: sum of the 12 taps (average) and the brightest sample, with the
-      // center as the initial `best` — exactly like the shader.
+      // center as the initial `best` — like the shader.
       var sum = 0.0;
       var best = center;
       for (var i = 0; i < 12; i++) {

@@ -32,4 +32,35 @@ void main() {
     expect(gBottom, greaterThan(200));
     expect(gTop, lessThan(50));
   });
+
+  test('topLinear axis (identity) returns the plane unchanged', () {
+    const w = 64;
+    const h = 80;
+    final plane = Uint8List(w * h);
+    for (var y = 0; y < h; y++) {
+      plane.fillRange(y * w, (y + 1) * w, (y * 255) ~/ h);
+    }
+    // focus=200 / max=250 -> compression impossible -> plain linear axis.
+    final axis = buildLogAxis(0, 250, 200);
+    expect(axis.topLinear, isTrue);
+    final out = warpSpectrogramIntensity(plane, w, h, axis);
+    expect(identical(out, plane), isTrue);
+  });
+
+  test('thin bright line keeps full brightness under a log axis', () {
+    const w = 32;
+    const h = 400;
+    final plane = Uint8List(w * h);
+    // One bright row between dark rows, in the low-frequency (expansion)
+    // zone where the axis stretches source rows across more pixels.
+    plane.fillRange(300 * w, 301 * w, 255);
+    final axis = buildLogAxis(0, 500, 200);
+    expect(axis.topLinear, isFalse);
+    final out = warpSpectrogramIntensity(plane, w, h, axis);
+    var maxV = 0;
+    for (final b in out) {
+      if (b > maxV) maxV = b;
+    }
+    expect(maxV, 255);
+  });
 }
