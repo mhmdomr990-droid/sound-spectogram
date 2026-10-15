@@ -17,6 +17,11 @@ class WarpRequest {
   final int width;
   final int height;
   final bool logView;
+
+  /// Frequency range the log axis warps over — resolved from the device /
+  /// frequencyBins like the web resolveViewRange chain (never 0 unless the
+  /// device actually reports 0).
+  final double minFreq;
   final double maxFreq;
   final double focusHz;
 
@@ -32,6 +37,7 @@ class WarpRequest {
     required this.width,
     required this.height,
     required this.logView,
+    required this.minFreq,
     required this.maxFreq,
     required this.focusHz,
     this.dstWidth = 0,
@@ -344,7 +350,7 @@ Uint8List _upscaleAndWarp(WarpRequest req) {
     plane,
     pw,
     ph,
-    buildLogAxis(0, req.maxFreq, req.focusHz),
+    buildLogAxis(req.minFreq, req.maxFreq, req.focusHz),
   );
   // ignore: avoid_print
   print('[TIMING] iso plane ${pw}x$ph log=${req.logView} '

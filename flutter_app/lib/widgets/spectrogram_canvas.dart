@@ -156,7 +156,7 @@ class SpectrogramCanvas extends StatefulWidget {
       this.onMarkerMove,
       this.maxFrequency,
       this.minFrequency,
-      this.logFrequencyView = false,
+      this.logFrequencyView = true,
       this.focusHz = kLogDefaultFocusHz,
   });
 
@@ -269,12 +269,18 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     return null;
   }
 
-  /// Axis floor for the linear view: device minFrequency clamped to >= 30 Hz
-  /// (web DEFAULT_CONFIG.axisMinFrequency).
+  /// Axis floor: device minFrequency clamped to >= 30 Hz (web
+  /// DEFAULT_CONFIG.axisMinFrequency), else the first frequencyBins row, else
+  /// 30 — the web resolveViewRange chain (device range → packet bins[0] →
+  /// axis floor). Never 0, so the log axis starts where the data starts.
   double _axisMinFrequency() {
     final deviceMin = widget.minFrequency;
     if (deviceMin != null && deviceMin.isFinite && deviceMin >= 0) {
       return deviceMin < 30 ? 30.0 : deviceMin;
+    }
+    final bins = _effectiveFrequencyBins();
+    if (bins != null && bins.length > 1 && bins.first.isFinite && bins.first > 0) {
+      return bins.first;
     }
     return 30.0;
   }
@@ -447,7 +453,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   // --- View-image cache: one decoded image per axis mode (linear / log) so a
   // repeat toggle swaps images instantly (no LUT, no warp, no decode).
   // All entries are keyed by the intensity buffer identity + gain + gamma;
-  // focus/maxFreq additionally key the log entry.
+  // focus/minFreq/maxFreq additionally key the log entry.
   ui.Image? _viewLinear;
   ui.Image? _viewLog;
   Object? _viewIntensity;
@@ -455,6 +461,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   double _viewGamma = double.nan;
   String _viewColorMap = '';
   double _viewFocus = double.nan;
+  double _viewMinFreq = double.nan;
   double _viewMaxFreq = double.nan;
   // Plot rect (device px) the view images were built for — part of the cache
   // key: a layout/dpr/inset change makes the cached sizes stale.
@@ -556,6 +563,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     }
     final axisChanged = oldWidget.logFrequencyView != widget.logFrequencyView ||
         oldWidget.focusHz != widget.focusHz ||
+        oldWidget.minFrequency != widget.minFrequency ||
         oldWidget.maxFrequency != widget.maxFrequency;
     if (axisChanged &&
         _cachedIntensity != null &&
@@ -672,6 +680,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final gamma = _cachedGamma;
     final log = logOverride ?? widget.logFrequencyView;
     final focus = widget.focusHz;
+    final minFreq = _axisMinFrequency();
     final maxFreq = _effectiveMaxFreq();
     // Build both views at the on-screen plot resolution (device px) so the
     // log warp operates on the exact pixels the linear view draws — the same
@@ -694,6 +703,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _viewGamma = gamma;
       _viewColorMap = widget.colorMapName;
       _viewFocus = double.nan;
+      _viewMinFreq = double.nan;
       _viewMaxFreq = double.nan;
       _viewDstW = outW;
       _viewDstH = outH;
@@ -705,7 +715,11 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       print('[TIMING] cache HIT linear');
       return _viewLinear!;
     }
-    if (log && _viewLog != null && _viewFocus == focus && _viewMaxFreq == maxFreq) {
+    if (log &&
+        _viewLog != null &&
+        _viewFocus == focus &&
+        _viewMinFreq == minFreq &&
+        _viewMaxFreq == maxFreq) {
       // ignore: avoid_print
       print('[TIMING] cache HIT log');
       return _viewLog!;
@@ -716,7 +730,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     // keyed by data/axis/layout only).
     final p0 = sw.elapsedMicroseconds;
     final plane = await _ensurePlane(
-        log, intensity, w, h, outW, outH, focus, maxFreq);
+        log, intensity, w, h, outW, outH, focus, minFreq, maxFreq);
     final planeMs = sw.elapsedMicroseconds - p0;
     if (plane == null || plane.isEmpty) return _image!;
 
@@ -742,6 +756,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       final old = _viewLog;
       _viewLog = img;
       _viewFocus = focus;
+      _viewMinFreq = minFreq;
       _viewMaxFreq = maxFreq;
       if (old != null && !identical(old, img) && !identical(old, _image)) {
         _disposeImg(old);
@@ -755,7 +770,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     }
     // Pre-build the opposite view's PLANE off the critical path so the first
     // toggle after a data/axis change never waits on the isolate.
-    _prewarmAlternatePlane(intensity, w, h, outW, outH, focus, maxFreq, log);
+    _prewarmAlternatePlane(intensity, w, h, outW, outH, focus, minFreq, maxFreq, log);
     return img;
   }
 
@@ -770,6 +785,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   Uint8List? _planeLog;
   Uint8List? _planeLogIntensity;
   double _planeLogFocus = double.nan;
+  double _planeLogMinFreq = double.nan;
   double _planeLogMaxFreq = double.nan;
   int _planeLogDstW = 0;
   int _planeLogDstH = 0;
@@ -782,6 +798,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       int outW,
       int outH,
       double focus,
+      double minFreq,
       double maxFreq) async {
     if (log) {
       if (_planeLog != null &&
@@ -789,6 +806,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
           _planeLogDstW == outW &&
           _planeLogDstH == outH &&
           _planeLogFocus == focus &&
+          _planeLogMinFreq == minFreq &&
           _planeLogMaxFreq == maxFreq) {
         return _planeLog;
       }
@@ -808,6 +826,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       width: w,
       height: h,
       logView: log,
+      minFreq: minFreq,
       maxFreq: maxFreq,
       focusHz: focus,
       dstWidth: outW,
@@ -825,6 +844,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _planeLogDstW = outW;
       _planeLogDstH = outH;
       _planeLogFocus = focus;
+      _planeLogMinFreq = minFreq;
       _planeLogMaxFreq = maxFreq;
     } else {
       _planeLinear = bytes;
@@ -849,7 +869,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   bool _prewarmRunning = false;
 
   Future<void> _prewarmAlternatePlane(Uint8List intensity, int w, int h,
-      int outW, int outH, double focus, double maxFreq, bool builtLog) async {
+      int outW, int outH, double focus, double minFreq, double maxFreq, bool builtLog) async {
     if (_prewarmRunning || !mounted) return;
     if (!identical(_cachedIntensity, intensity)) return;
     final altLog = !builtLog;
@@ -859,6 +879,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
           _planeLogDstW == outW &&
           _planeLogDstH == outH &&
           _planeLogFocus == focus &&
+          _planeLogMinFreq == minFreq &&
           _planeLogMaxFreq == maxFreq) {
         return;
       }
@@ -873,7 +894,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     }
     _prewarmRunning = true;
     try {
-      await _ensurePlane(altLog, intensity, w, h, outW, outH, focus, maxFreq);
+      await _ensurePlane(altLog, intensity, w, h, outW, outH, focus, minFreq, maxFreq);
     } finally {
       _prewarmRunning = false;
     }
@@ -1342,7 +1363,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                     dataRowCount: dispHistories?.firstOrNull?.data.length ?? 0,
                     freqGuideY: _freqGuideY,
                     logAxis: widget.logFrequencyView
-                        ? buildLogAxis(0, _effectiveMaxFreq(), widget.focusHz)
+                        ? buildLogAxis(
+                            _axisMinFrequency(), _effectiveMaxFreq(), widget.focusHz)
                         : null,
                   ),
                 ),
@@ -1628,16 +1650,15 @@ class _SpectroPainter extends CustomPainter {
     }
     final axis = logAxis;
     for (var i = 0; i <= _yTicks; i++) {
+      final yFrac = i / _yTicks;
       final double y;
       if (axis != null) {
-        // Grid lines are drawn at linear-frequency positions and then warped
-        // by the shader on the web — same as placing them at the warped
-        // position of each linear fifth.
-        final freqFromBottom = maxFrequency * (1.0 - i / _yTicks);
-        final pos = frequencyToPosition(axis, freqFromBottom);
+        // Same frequency as the axis label of this tick, warped onto the
+        // curved axis — grid lines always sit under their own numbering.
+        final pos = frequencyToPosition(axis, _axisLabelHz(yFrac));
         y = pTop + plotH * (1.0 - pos);
       } else {
-        y = pTop + (plotH * i / _yTicks).roundToDouble();
+        y = pTop + (plotH * yFrac).roundToDouble();
       }
       canvas.drawLine(Offset(pLeft, y), Offset(pLeft + plotW, y), gridPaint);
     }
@@ -1664,74 +1685,39 @@ class _SpectroPainter extends CustomPainter {
       tp.paint(canvas, Offset(x - tp.width / 2, pTop + plotH + 6));
     }
 
-    // 6) Frequency (y) axis labels — classic linear view: 0 to maxFrequency.
-    //    Log view: candidate values placed at warped positions (web parity).
-    if (axis != null) {
-      final minHz = axis.minHz;
-      final maxHz = axis.maxHz;
-      final values = <double>[minHz];
-      for (final candidate in kLogLabelCandidates) {
-        if (candidate > minHz && candidate < maxHz) values.add(candidate);
+    // 6) Frequency (y) axis labels — ONE numbering key for both views:
+    //    (A) frequencyBins row values when available;
+    //    (B) linear interpolation max..max(min, 30);
+    //    (C) fallback: Arabic bin index.
+    //    The linear view places those values at equal fifths; the log view
+    //    warps every value to its true position on the curved axis, so the
+    //    numbers stay identical to the linear view in both modes.
+    final bins = frequencyBins;
+    final hasBins = bins != null && bins.length > 1 && dataRowCount > 0;
+    final binCount = hasBins ? bins.length : dataRowCount;
+    final axisFloor = minFrequency > 0 ? minFrequency : 30.0;
+    final freqSpan = maxFrequency - axisFloor;
+    final useBinIndexLabels = !hasBins && !(binCount > 0 && freqSpan > 0);
+    var lastLabelY = double.negativeInfinity;
+    for (var i = 0; i <= _yTicks; i++) {
+      final yFrac = i / _yTicks;
+      final String label;
+      if (useBinIndexLabels) {
+        final bin = ((1 - yFrac) * (binCount > 0 ? binCount - 1 : 0)).round();
+        label = 'نطاق $bin';
+      } else {
+        label = '${_axisLabelHz(yFrac).round().clamp(0, 99999)} Hz';
       }
-      values.add(maxHz);
-
-      final positioned = <List<double>>[]; // [value, y]
-      for (final v in values) {
-        final pos = frequencyToPosition(axis, v);
-        positioned.add([v, pTop + plotH * (1.0 - pos)]);
+      final double y;
+      if (axis != null && !useBinIndexLabels) {
+        y = pTop + plotH * (1.0 - frequencyToPosition(axis, _axisLabelHz(yFrac)));
+      } else {
+        y = pTop + plotH * yFrac;
       }
-
-      // Drop labels closer than 14px to the previous one, but always keep
-      // the maximum-frequency label (web MIN_LABEL_GAP_PX behaviour).
-      final kept = <List<double>>[];
-      for (var k = 0; k < positioned.length; k++) {
-        final item = positioned[k];
-        final isLast = k == positioned.length - 1;
-        if (kept.isNotEmpty &&
-            (kept.last[1] - item[1]).abs() < 14.0) {
-          if (isLast) kept[kept.length - 1] = item;
-          continue;
-        }
-        kept.add(item);
-      }
-
-      for (final item in kept) {
-        final hz = item[0].round();
-        final y = item[1];
-        // Short tick at the plot edge (web drawLogFrequencyAxisLabels).
-        canvas.drawLine(Offset(pLeft - 4, y), Offset(pLeft, y), _axisPaint);
-        final fp = _getFreqLabelPainter('$hz Hz');
-        fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
-      }
-    } else {
-      // Linear view labels — web parity (spectrogram.js 3109–3133):
-      //  (A) frequencyBins row values when available;
-      //  (B) linear interpolation max..max(min, 30);
-      //  (C) fallback: Arabic bin index.
-      final bins = frequencyBins;
-      final hasBins = bins != null && bins.length > 1 && dataRowCount > 0;
-      final binCount = hasBins ? bins.length : dataRowCount;
-      final axisFloor = minFrequency > 0 ? minFrequency : 30.0;
-      final span = maxFrequency - axisFloor;
-      for (var i = 0; i <= _yTicks; i++) {
-        final yF = i / _yTicks; // 0 = top, 1 = bottom
-        final y = pTop + plotH * i / _yTicks;
-        final String label;
-        if (hasBins) {
-          // Screen top = highest frequency = last bin (ascending bins).
-          final idx =
-              (bins.length - 1 - (yF * (bins.length - 1)).round()).clamp(0, bins.length - 1);
-          label = '${bins[idx].round()} Hz';
-        } else if (binCount > 0 && span > 0) {
-          final hz = maxFrequency - yF * span;
-          label = '${hz.round().clamp(0, 99999)} Hz';
-        } else {
-          final bin = ((1 - yF) * (binCount > 0 ? binCount - 1 : 0)).round();
-          label = 'نطاق $bin';
-        }
-        final fp = _getFreqLabelPainter(label);
-        fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
-      }
+      if (y - lastLabelY < 10.0) continue; // never overlap the previous label
+      final fp = _getFreqLabelPainter(label);
+      fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
+      lastLabelY = y;
     }
 
     // 6b) Long-press frequency guide (dashed horizontal line + Hz label).
@@ -1869,6 +1855,22 @@ class _SpectroPainter extends CustomPainter {
     if (fromMs == null || toMs == null) return '';
     final labelMs = fromMs + ((toMs - fromMs) * i / n).round();
     return _fmtTime(labelMs, withDate);
+  }
+
+  /// Frequency shown by the axis label at a screen fraction (0 = top,
+  /// 1 = bottom) — the numbering key shared by the linear and log views:
+  /// the frequencyBins row value first (exact bin, web parity), else linear
+  /// interpolation max..axisFloor.
+  double _axisLabelHz(double yFrac) {
+    final f = yFrac.clamp(0.0, 1.0);
+    final bins = frequencyBins;
+    if (bins != null && bins.length > 1 && dataRowCount > 0) {
+      final idx =
+          (bins.length - 1 - (f * (bins.length - 1)).round()).clamp(0, bins.length - 1);
+      return bins[idx];
+    }
+    final axisFloor = minFrequency > 0 ? minFrequency : 30.0;
+    return maxFrequency - f * (maxFrequency - axisFloor);
   }
 
   /// Frequency under a screen fraction (0 = top, 1 = bottom) in the LINEAR

@@ -63,7 +63,7 @@ class FullscreenSpectrogram extends StatefulWidget {
     this.seedGamma = 1.0,
     this.markers = const [],
     this.maxFrequency,
-    this.logFrequencyView = false,
+    this.logFrequencyView = true,
     this.focusHz = kLogDefaultFocusHz,
   });
 

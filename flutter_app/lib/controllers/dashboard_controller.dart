@@ -53,8 +53,8 @@ class DashboardController extends GetxController {
   final deviceStatusMap = <String, DeviceStatusInfo>{}.obs;
 
   // Log/focus frequency view (web parity: keys `logFrequencyView` /
-  // `logFocusHz`, default = classic linear view).
-  final logFrequencyView = false.obs;
+  // `logFocusHz`, default = warped log view).
+  final logFrequencyView = true.obs;
   final focusHz = kLogDefaultFocusHz.obs;
   static const _logViewStorageKey = 'logFrequencyView';
   static const _focusStorageKey = 'logFocusHz';
@@ -361,7 +361,8 @@ class DashboardController extends GetxController {
   Future<void> _loadLogFrequencySettings() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      logFrequencyView.value = prefs.getString(_logViewStorageKey) == '1';
+      // Default = log view; only an explicit stored "0" keeps the linear view.
+      logFrequencyView.value = prefs.getString(_logViewStorageKey) != '0';
       final stored = double.tryParse(prefs.getString(_focusStorageKey) ?? '');
       if (stored != null && stored.isFinite && stored > 0) {
         focusHz.value = stored;
