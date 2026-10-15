@@ -59,6 +59,9 @@ class RenderRequest {
   final String? startTimeIso;
   final String? endTimeIso;
   final int backgroundColor;
+  final String colorMap;
+  final num noiseLevel;
+  final int dstHeight;
 
   final List<HistoryBlock>? _histories;
   final String? requestStartTime;
@@ -84,6 +87,9 @@ class RenderRequest {
     this.startTimeIso,
     this.endTimeIso,
     this.backgroundColor = 0xFF111026,
+    this.colorMap = 'sonic',
+    this.noiseLevel = 0,
+    this.dstHeight = 0,
     List<HistoryBlock>? histories,
     this.requestStartTime,
     this.requestEndTime,
@@ -297,6 +303,9 @@ void _isolateEntry(SendPort mainSendPort) {
         startTimeIso: req.startTimeIso,
         endTimeIso: req.endTimeIso,
         backgroundColor: req.backgroundColor,
+        colorMap: req.colorMap,
+        noiseLevel: req.noiseLevel,
+        dstHeight: req.dstHeight,
       );
       // ignore: avoid_print
       print('[DbgRx] iso render matrix=${matrixMs}ms rgba=${sw.elapsedMilliseconds - matrixMs}ms '

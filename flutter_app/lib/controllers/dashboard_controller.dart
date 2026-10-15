@@ -14,6 +14,7 @@ import '../services/api_client.dart';
 import '../services/auth_service.dart';
 import '../services/notification_service.dart';
 import '../services/socket_service.dart';
+import '../utils/colormaps.dart';
 import '../utils/log_axis.dart';
 import '../widgets/spectrogram_canvas.dart';
 import 'auth_controller.dart';
@@ -57,6 +58,12 @@ class DashboardController extends GetxController {
   final focusHz = kLogDefaultFocusHz.obs;
   static const _logViewStorageKey = 'logFrequencyView';
   static const _focusStorageKey = 'logFocusHz';
+
+  // Spectrogram appearance (web parity: colorMap / noiseLevel).
+  final colorMapName = kDefaultColorMap.obs;
+  final noiseLevel = 0.obs;
+  static const _colorMapStorageKey = 'colorMap';
+  static const _noiseLevelStorageKey = 'noiseLevel';
 
   final canvasKey = GlobalKey<SpectrogramCanvasState>();
 
@@ -359,6 +366,14 @@ class DashboardController extends GetxController {
       if (stored != null && stored.isFinite && stored > 0) {
         focusHz.value = stored;
       }
+      final mapName = prefs.getString(_colorMapStorageKey);
+      if (mapName != null && kColorMaps.containsKey(mapName)) {
+        colorMapName.value = mapName;
+      }
+      final noise = int.tryParse(prefs.getString(_noiseLevelStorageKey) ?? '');
+      if (noise != null) {
+        noiseLevel.value = noise.clamp(0, 10);
+      }
     } catch (_) {}
   }
 
@@ -380,6 +395,28 @@ class DashboardController extends GetxController {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_focusStorageKey, '$safe');
+    } catch (_) {}
+  }
+
+  /// Set the colour map (web parity: message + persistence).
+  Future<void> setColorMap(String name) async {
+    if (!kColorMaps.containsKey(name)) return;
+    if (colorMapName.value == name) return;
+    colorMapName.value = name;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_colorMapStorageKey, name);
+    } catch (_) {}
+  }
+
+  /// Set the noise level 0..10 (web parity: message + persistence).
+  Future<void> setNoiseLevel(int value) async {
+    final safe = value.clamp(0, 10);
+    if (noiseLevel.value == safe) return;
+    noiseLevel.value = safe;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_noiseLevelStorageKey, '$safe');
     } catch (_) {}
   }
 

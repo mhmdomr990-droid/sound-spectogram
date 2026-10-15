@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:archive/archive.dart';
 
+import '../utils/png_gray.dart';
+
 /// Shared stateless GZipDecoder instance — avoids reallocation per call.
 final _sharedGZipDecoder = GZipDecoder();
 
@@ -130,6 +132,9 @@ class DeviceHistory {
     }
     if (payload is Map<String, dynamic>) {
       final format = payload['format'];
+      if (format == 'png-gray-v1') {
+        return decodePngGrayPayload(payload) ?? const [];
+      }
       if (format == 'gzip-base64-json-v1') {
         final raw = payload['payload'] as String;
         final bytes = base64Decode(raw);

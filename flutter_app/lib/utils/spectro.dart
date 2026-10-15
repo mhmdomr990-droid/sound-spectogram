@@ -2,24 +2,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-class MagmaStop {
-  final double p;
-  final int r;
-  final int g;
-  final int b;
-
-  const MagmaStop(this.p, this.r, this.g, this.b);
-}
-
-const List<MagmaStop> _magmaStops = [
-  MagmaStop(0.0, 0, 0, 4),
-  MagmaStop(0.16, 28, 16, 68),
-  MagmaStop(0.33, 79, 18, 123),
-  MagmaStop(0.5, 129, 37, 129),
-  MagmaStop(0.66, 181, 54, 122),
-  MagmaStop(0.83, 229, 80, 100),
-  MagmaStop(1.0, 252, 253, 191),
-];
+import 'colormaps.dart';
 
 double clamp01(double n) {
   if (n.isNaN) return 0;
@@ -35,37 +18,6 @@ double normalizeIntensity(num value, {num inputValueMax = 255}) {
   final maxValue = inputValueMax.toDouble();
   if (maxValue <= 0) return clamp01(n);
   return clamp01(n / maxValue);
-}
-
-int _colorForNormalized(double v0, double gammaValue) {
-  final g = gammaValue > 0 ? gammaValue : 1.0;
-  double v = clamp01(v0);
-  v = pow(v, g).toDouble();
-
-  for (var i = 0; i < _magmaStops.length - 1; i++) {
-    final a = _magmaStops[i];
-    final b = _magmaStops[i + 1];
-    if (v >= a.p && v <= b.p) {
-      final denom = (b.p - a.p).abs() < 1e-9 ? 1.0 : (b.p - a.p);
-      final t = (v - a.p) / denom;
-      final r = _round(_lerp(a.r, b.r, t));
-      final g2 = _round(_lerp(a.g, b.g, t));
-      final bl = _round(_lerp(a.b, b.b, t));
-      return (0xFF << 24) | (r << 16) | (g2 << 8) | bl;
-    }
-  }
-
-  final last = _magmaStops[_magmaStops.length - 1];
-  return (0xFF << 24) | (last.r << 16) | (last.g << 8) | last.b;
-}
-
-double _lerp(num a, num b, double t) => a + (b - a) * t;
-
-int _round(double v) {
-  int r = v.round();
-  if (r < 0) r = 0;
-  if (r > 255) r = 255;
-  return r;
 }
 
 double _dbFromMagnitude(num value) {
@@ -351,6 +303,173 @@ List<List<double>> _processMatrix(
 
 // --- end processing helpers ---
 
+// [sonic] Sparse peak extraction, ported from the web dashboard's
+// processSonicMatrix (spectrogram.js). One column at a time:
+//  1. keep only spectral PEAKS that stand out of the local level around them;
+//  2. drop lone peaks with no peak near them (+-N bins) in the moment before
+//     or after;
+//  3. strength = value / loudest shown value of that moment;
+//  4. remember where the peak really lies between two bins (parabola).
+class SonicPeaks {
+  final Int32List start; // cols+1 offsets into rows/values/offsets
+  final Int32List rows;
+  final Float32List values;
+  final Float32List offsets;
+
+  const SonicPeaks(this.start, this.rows, this.values, this.offsets);
+}
+
+SonicPeaks processSonicMatrix(
+  List<List<num>> matrix, {
+  String intensityType = 'uint8',
+  num dbMin = -95,
+  num dbMax = -20,
+  num noiseRelease = 0,
+  int rowStart = 0,
+  int rowEnd = -1,
+}) {
+  const localBins = 6;
+  const prominence = 0.03;
+  const noiseFactor = 1.5;
+  const silence = 0.04;
+  const timeTolerance = 2;
+  const dbRange = 60.0;
+
+  final rows = matrix.length;
+  final cols = rows > 0 ? matrix[0].length : 0;
+  final isUint8 = intensityType == 'uint8';
+  final isDb = intensityType == 'db';
+  final lo = max(0, min(rows - 1, rowStart));
+  final hi = max(lo, min(rows - 1, rowEnd >= 0 ? rowEnd : rows - 1));
+  final tolerance = max(timeTolerance, (rows / 150).ceil());
+  final release = noiseRelease.toDouble().clamp(0.0, 1.0);
+  final keepFactor = pow(1 - release, 1.5).toDouble();
+  final checkTime = cols >= 3 && release < 0.8;
+
+  double normalizeScalar(num x) {
+    final n = x.toDouble();
+    if (!n.isFinite) return 0;
+    if (isUint8) return clamp01(n / 255);
+    if (intensityType == 'normalized') return clamp01(n);
+    if (isDb) {
+      var mn = dbMin.toDouble();
+      var mx = dbMax.toDouble();
+      if (!mn.isFinite) mn = -95;
+      if (!mx.isFinite || mx <= mn) mx = mn + 75;
+      return clamp01((n - mn) / (mx - mn));
+    }
+    return normalizeIntensity(n);
+  }
+
+  final vals = [Float32List(rows), Float32List(rows), Float32List(rows)];
+  final cand = [Uint8List(rows), Uint8List(rows), Uint8List(rows)];
+  final tops = Float32List(3);
+  final prefix = Float64List(rows + 1);
+  final excess = Float32List(rows);
+  final start = Int32List(cols + 1);
+  final outRows = <int>[];
+  final outVals = <double>[];
+  final outOffs = <double>[];
+
+  void load(int c, int slot) {
+    final v = vals[slot];
+    final cd = cand[slot];
+    for (var r = 0; r < rows; r++) {
+      final line = matrix[r];
+      v[r] = normalizeScalar(c < line.length ? line[c] : 0);
+    }
+    for (var i = 0; i < rows; i++) {
+      cd[i] = 0;
+    }
+    var maxV = 0.0;
+    for (var r = lo; r <= hi; r++) {
+      if (v[r] > maxV) maxV = v[r];
+    }
+    tops[slot] = maxV;
+    if (maxV < silence) return;
+    prefix[0] = 0;
+    for (var r = 0; r < rows; r++) {
+      prefix[r + 1] = prefix[r] + v[r];
+    }
+    var wiggle = 0.0;
+    for (var r = 0; r < rows; r++) {
+      final a0 = r - localBins < 0 ? 0 : r - localBins;
+      final a1 = r + localBins > rows - 1 ? rows - 1 : r + localBins;
+      final i0 = r - 1 < 0 ? 0 : r - 1;
+      final i1 = r + 1 > rows - 1 ? rows - 1 : r + 1;
+      final count = a1 - a0 + 1 - (i1 - i0 + 1);
+      final local =
+          count > 0 ? (prefix[a1 + 1] - prefix[a0] - (prefix[i1 + 1] - prefix[i0])) / count : 0.0;
+      final e = v[r] - local;
+      excess[r] = e;
+      if (r >= lo && r <= hi) {
+        wiggle += e < 0 ? -e : e;
+      }
+    }
+    final need = max(prominence, (noiseFactor * wiggle) / (hi - lo + 1)) * keepFactor;
+    for (var r = 1; r < rows - 1; r++) {
+      if ((need > 0 ? excess[r] > need : v[r] > 0) && v[r] > v[r - 1] && v[r] >= v[r + 1]) {
+        cd[r] = 1;
+      }
+    }
+  }
+
+  bool hasNear(int slot, int row) {
+    if (slot < 0) return false;
+    final cd = cand[slot];
+    final from = max(0, row - tolerance);
+    final to = min(rows - 1, row + tolerance);
+    for (var k = from; k <= to; k++) {
+      if (cd[k] == 1) return true;
+    }
+    return false;
+  }
+
+  void finalize(int c, int prevSlot, int slot, int nextSlot) {
+    start[c] = outRows.length;
+    if (rows < 3) return;
+    final top = tops[slot];
+    if (top < silence) return;
+    final v = vals[slot];
+    final cd = cand[slot];
+    for (var r = 1; r < rows - 1; r++) {
+      if (cd[r] != 1) continue;
+      if (checkTime && !hasNear(prevSlot, r) && !hasNear(nextSlot, r)) continue;
+      final value = v[r];
+      final strength =
+          isDb ? pow(10.0, (-(top - value) * dbRange) / 20).toDouble() : value / top;
+      final a = v[r - 1];
+      final b = v[r + 1];
+      final den = a - 2 * value + b;
+      final off = den < 0 ? (0.5 * (a - b)) / den : 0.0;
+      outRows.add(r);
+      outVals.add(strength > 1 ? 1.0 : strength);
+      outOffs.add(off > 0.5 ? 0.5 : (off < -0.5 ? -0.5 : off));
+    }
+  }
+
+  for (var c = 0; c < cols; c++) {
+    load(c, c % 3);
+    if (c >= 1) {
+      finalize(c - 1, c >= 2 ? (c - 2) % 3 : -1, (c - 1) % 3, c % 3);
+    }
+  }
+  if (cols >= 1) {
+    finalize(cols - 1, cols >= 2 ? (cols - 2) % 3 : -1, (cols - 1) % 3, -1);
+  }
+  start[cols] = outRows.length;
+  // ignore: avoid_print
+  print('[Sonic] peaks=${outRows.length} cols=$cols rows=$rows '
+      'release=$release keepFactor=$keepFactor checkTime=$checkTime');
+
+  return SonicPeaks(
+    start,
+    Int32List.fromList(outRows),
+    Float32List.fromList(outVals),
+    Float32List.fromList(outOffs),
+  );
+}
+
 /// Builds an RGBA byte buffer (width*height*4) that renders a spectrogram
 /// from a frequency x time matrix, with optional column bucket aggregation
 /// (max) to fit the display width. Returns raw RGBA bytes ready for a ui.Image.
@@ -384,6 +503,9 @@ SpectroRgbaResult buildRgba(
   String? startTimeIso,
   String? endTimeIso,
   int backgroundColor = 0xFF111026,
+  String colorMap = kDefaultColorMap,
+  num noiseLevel = 0,
+  int dstHeight = 0,
 }) {
   final rows = matrix.length;
   final cols = rows > 0 ? matrix[0].length : 0;
@@ -406,7 +528,9 @@ SpectroRgbaResult buildRgba(
 
   final colToBin = cols / width;
   final rowToFreq = rows / height;
-  final gammaArg = gamma.toDouble();
+  // effectiveGamma = gamma * (1 - 0.65*noiseRelease): lifts weak values in the
+  // colour table only, matching the web's palette construction.
+  final gammaArg = effectiveGammaOf(gamma, noiseLevel);
   final gainScale = pow(10.0, gainDb.toDouble() / 20.0).toDouble();
 
   // Infer intensity type when not provided (match web behavior)
@@ -417,6 +541,86 @@ SpectroRgbaResult buildRgba(
 
   if (debug) {
     print('SPECTRO DEBUG: effectiveIntensityType=$effectiveIntensityType');
+  }
+
+  // [sonic] Peak-lines drawing mode: extract sparse spectral peaks and draw
+  // them as thin sub-rows (up to 8 rows per bin) instead of filled columns.
+  // This is the web's processSonicMatrix + drawSonicPeaks pipeline; the
+  // returned intensity plane is rows*sonicScale tall and the existing
+  // upscale/warp path maps it to the display resolution.
+  if (isSonicColorMap(colorMap)) {
+    final peaks = processSonicMatrix(
+      matrix,
+      intensityType: effectiveIntensityType!,
+      dbMin: dbMin,
+      dbMax: dbMax,
+      noiseRelease: noiseReleaseOf(noiseLevel),
+    );
+    final sonicScale =
+        dstHeight > 0 ? max(1, min(8, dstHeight ~/ rows)) : 1;
+    final surfH = rows * sonicScale;
+    final intensity = Uint8List(width * surfH);
+
+    // Parse the time range once for the x mapping (same as the bucket path).
+    double? rangeStartMs;
+    double? rangeEndMs;
+    if (startTimeIso != null && endTimeIso != null) {
+      try {
+        final s = DateTime.parse(startTimeIso).toUtc().millisecondsSinceEpoch.toDouble();
+        final e = DateTime.parse(endTimeIso).toUtc().millisecondsSinceEpoch.toDouble();
+        if (e > s) {
+          rangeStartMs = s;
+          rangeEndMs = e;
+        }
+      } catch (_) {}
+    }
+
+    for (var c = 0; c < cols; c++) {
+      final k0 = peaks.start[c];
+      final k1 = peaks.start[c + 1];
+      if (k0 == k1) continue;
+      int xStart;
+      int xEnd;
+      if (rangeStartMs != null && rangeEndMs != null) {
+        final stepMs = (rangeEndMs - rangeStartMs) / max(1, cols);
+        final timeMs = rangeStartMs + c * stepMs;
+        final nextTimeMs = rangeStartMs + (c + 1) * stepMs;
+        final range = max(1e-9, rangeEndMs - rangeStartMs);
+        xStart = (((timeMs - rangeStartMs) / range) * width).floor().clamp(0, width - 1);
+        xEnd = (((nextTimeMs - rangeStartMs) / range) * width).ceil().clamp(xStart + 1, width);
+      } else {
+        xStart = ((c * width) / cols).floor().clamp(0, width - 1);
+        xEnd = ((((c + 1) * width) / cols).ceil()).clamp(xStart + 1, width);
+      }
+      for (var k = k0; k < k1; k++) {
+        var byteValue = (peaks.values[k] * gainScale * 255).round();
+        if (byteValue <= 0) continue;
+        if (byteValue > 255) byteValue = 255;
+        final y = ((rows - 1 - peaks.rows[k] - peaks.offsets[k]) * sonicScale +
+                (sonicScale - 1) / 2)
+            .round();
+        if (y < 0 || y >= surfH) continue;
+        final rowOffset = y * width;
+        for (var x = xStart; x < xEnd && x < width; x++) {
+          if (intensity[rowOffset + x] < byteValue) {
+            intensity[rowOffset + x] = byteValue;
+          }
+        }
+      }
+    }
+
+    final paletteLut = buildPaletteLut(colorMap, gammaArg);
+    final sonicRgba = Uint8List(width * surfH * 4);
+    for (var i = 0; i < intensity.length; i++) {
+      final rgb = paletteLut[intensity[i]];
+      final offset = i * 4;
+      sonicRgba[offset] = (rgb >> 16) & 0xFF;
+      sonicRgba[offset + 1] = (rgb >> 8) & 0xFF;
+      sonicRgba[offset + 2] = rgb & 0xFF;
+      sonicRgba[offset + 3] = 0xFF;
+    }
+    return SpectroRgbaResult(sonicRgba, width, surfH,
+        intensity: intensity, gamma: gammaArg);
   }
 
   // Pre-process matrix to match web renderer (denoising / gating / morphology)
@@ -634,12 +838,9 @@ SpectroRgbaResult buildRgba(
     flushColumnBucket(bucketMax, bucketSum, bucketCount, bucketX0, bucketX1);
   }
 
-  // Palette lookup: _colorForNormalized is a pure function of the intensity
-  // byte and gamma, so precompute all 256 entries once.
-  final paletteLut = Uint32List(256);
-  for (var i = 0; i < 256; i++) {
-    paletteLut[i] = _colorForNormalized(i / 255.0, gammaArg);
-  }
+  // Palette lookup: use the selected colour map's 256-entry LUT (same
+  // construction the web uses for its palette texture).
+  final paletteLut = buildPaletteLut(colorMap, gammaArg);
   for (var i = 0; i < intensity.length; i++) {
     final rgb = paletteLut[intensity[i]];
     final offset = i * 4;

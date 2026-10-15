@@ -8,35 +8,9 @@ import 'package:flutter/material.dart';
 
 import '../models/device_history.dart';
 import '../models/marker.dart';
+import '../utils/colormaps.dart';
 import '../utils/log_axis.dart';
 import '../utils/spectro_isolate.dart';
-
-const List<List<double>> kColorMapMagma = [
-  [0.0, 0.0, 0.0157],
-  [0.16, 28.0 / 255.0, 16.0 / 255.0, 68.0 / 255.0],
-  [0.33, 79.0 / 255.0, 18.0 / 255.0, 123.0 / 255.0],
-  [0.5, 129.0 / 255.0, 37.0 / 255.0, 129.0 / 255.0],
-  [0.66, 181.0 / 255.0, 54.0 / 255.0, 122.0 / 255.0],
-  [0.83, 229.0 / 255.0, 80.0 / 255.0, 100.0 / 255.0],
-  [1.0, 252.0 / 255.0, 253.0 / 255.0, 191.0 / 255.0],
-];
-
-const List<List<double>> kColorMapSunset = [
-  [0.0, 15.0 / 255.0, 16.0 / 255.0, 50.0 / 255.0],
-  [0.2, 45.0 / 255.0, 24.0 / 255.0, 105.0 / 255.0],
-  [0.4, 98.0 / 255.0, 33.0 / 255.0, 135.0 / 255.0],
-  [0.6, 170.0 / 255.0, 52.0 / 255.0, 112.0 / 255.0],
-  [0.8, 235.0 / 255.0, 96.0 / 255.0, 70.0 / 255.0],
-  [1.0, 255.0 / 255.0, 190.0 / 255.0, 92.0 / 255.0],
-];
-
-const List<List<double>> kColorMapViridis = [
-  [0.0, 68.0 / 255.0, 1.0 / 255.0, 84.0 / 255.0],
-  [0.25, 59.0 / 255.0, 82.0 / 255.0, 139.0 / 255.0],
-  [0.5, 33.0 / 255.0, 145.0 / 255.0, 140.0 / 255.0],
-  [0.75, 94.0 / 255.0, 201.0 / 255.0, 97.0 / 255.0],
-  [1.0, 253.0 / 255.0, 231.0 / 255.0, 37.0 / 255.0],
-];
 
 class CanvasSeedSnapshot {
   final ui.Image? image;
@@ -86,7 +60,15 @@ class SpectrogramCanvas extends StatefulWidget {
   final List<num>? frequencyBins;
   final String? startTime;
   final String? endTime;
-  final List<List<double>> colorMap;
+
+  /// Colour map key (see colormaps.dart kColorMaps). "sonic" is the web
+  /// default — Sonic Visualiser Sunset look with peak-lines drawing.
+  final String colorMapName;
+
+  /// Noise level 0..10 (web: releases the noise gate + lifts weak values in
+  /// the colour table via effectiveGamma).
+  final num noiseLevel;
+
   final double noiseThreshold;
   final ui.Image? seedImage;
   final List<List<double>>? seedCachedCombined;
@@ -142,7 +124,8 @@ class SpectrogramCanvas extends StatefulWidget {
     this.frequencyBins,
     this.startTime,
     this.endTime,
-    this.colorMap = kColorMapMagma,
+    this.colorMapName = kDefaultColorMap,
+    this.noiseLevel = 0,
     this.noiseThreshold = 0.06,
     this.seedImage,
     this.seedCachedCombined,
@@ -423,6 +406,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   Uint8List? _gainLut;
   double _gainLutGainDb = double.nan;
   double _gainLutGamma = double.nan;
+  String _gainLutColorMap = '';
 
   // --- View-image cache: one decoded image per axis mode (linear / log) so a
   // repeat toggle swaps images instantly (no LUT, no warp, no decode).
@@ -433,6 +417,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   Object? _viewIntensity;
   double _viewGainDb = double.nan;
   double _viewGamma = double.nan;
+  String _viewColorMap = '';
   double _viewFocus = double.nan;
   double _viewMaxFreq = double.nan;
   // Plot rect (device px) the view images were built for — part of the cache
@@ -499,7 +484,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     }
     final renderingChanged = oldWidget.matrix != widget.matrix ||
         oldWidget.gamma != widget.gamma ||
-        oldWidget.inputValueMax != widget.inputValueMax;
+        oldWidget.inputValueMax != widget.inputValueMax ||
+        oldWidget.colorMapName != widget.colorMapName ||
+        oldWidget.noiseLevel != widget.noiseLevel;
     final gainChanged = oldWidget.gainDb != widget.gainDb;
     // GetX RxList's `operator ==` is `value == o` (plain list vs RxList) and is
     // always false, so a `histories !=` check fires on every parent rebuild.
@@ -662,12 +649,14 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     if (!identical(_viewIntensity, intensity) ||
         _viewGainDb != gainDb ||
         _viewGamma != gamma ||
+        _viewColorMap != widget.colorMapName ||
         _viewDstW != outW ||
         _viewDstH != outH) {
       _invalidateViewCache();
       _viewIntensity = intensity;
       _viewGainDb = gainDb;
       _viewGamma = gamma;
+      _viewColorMap = widget.colorMapName;
       _viewFocus = double.nan;
       _viewMaxFreq = double.nan;
       _viewDstW = outW;
@@ -855,12 +844,14 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   }
 
   void _buildGainLut(double gainDb, double gammaValue) {
-    if (_gainLut != null && _gainLutGainDb == gainDb && _gainLutGamma == gammaValue) return;
+    if (_gainLut != null && _gainLutGainDb == gainDb && _gainLutGamma == gammaValue && _gainLutColorMap == widget.colorMapName) return;
     final gainScale = gainDb == 0.0 ? 1.0 : pow(10.0, gainDb / 20.0).toDouble();
+    final stops = colorMapStops(widget.colorMapName);
+    final g = gammaValue > 0 ? gammaValue : 1.0;
     final buf = Uint8List(256 * 4);
     for (var i = 0; i < 256; i++) {
       final v = clampDouble(i.toDouble() / 255.0 * gainScale, 0.0, 1.0);
-      final rgb = _colorForGamma(v, gammaValue);
+      final rgb = colorFromStops(stops, pow(v, g).toDouble());
       buf[i * 4]     = (rgb >> 16) & 0xFF;
       buf[i * 4 + 1] = (rgb >> 8) & 0xFF;
       buf[i * 4 + 2] = rgb & 0xFF;
@@ -869,6 +860,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     _gainLut = buf;
     _gainLutGainDb = gainDb;
     _gainLutGamma = gammaValue;
+    _gainLutColorMap = widget.colorMapName;
   }
 
   static double clampDouble(double v, double min, double max) {
@@ -876,39 +868,6 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     if (v > max) return max;
     return v;
   }
-
-  static int _colorForGamma(double v0, double gammaValue) {
-    const stops = [
-      [0.0, 0.0, 0.0, 4.0 / 255.0],
-      [0.16, 28.0 / 255.0, 16.0 / 255.0, 68.0 / 255.0],
-      [0.33, 79.0 / 255.0, 18.0 / 255.0, 123.0 / 255.0],
-      [0.5, 129.0 / 255.0, 37.0 / 255.0, 129.0 / 255.0],
-      [0.66, 181.0 / 255.0, 54.0 / 255.0, 122.0 / 255.0],
-      [0.83, 229.0 / 255.0, 80.0 / 255.0, 100.0 / 255.0],
-      [1.0, 252.0 / 255.0, 253.0 / 255.0, 191.0 / 255.0],
-    ];
-    final g = gammaValue > 0 ? gammaValue : 1.0;
-    double v = v0;
-    if (v < 0) v = 0;
-    if (v > 1) v = 1;
-    v = pow(v, g).toDouble();
-    for (var i = 0; i < stops.length - 1; i++) {
-      final a = stops[i];
-      final b = stops[i + 1];
-      if (v >= a[0] && v <= b[0]) {
-        final denom = (b[0] - a[0]).abs() < 1e-9 ? 1.0 : (b[0] - a[0]);
-        final t = (v - a[0]) / denom;
-        final r = a[1] + (b[1] - a[1]) * t;
-        final g2 = a[2] + (b[2] - a[2]) * t;
-        final bl = a[3] + (b[3] - a[3]) * t;
-        return (0xFF << 24) | (_clamp255(r * 255) << 16) | (_clamp255(g2 * 255) << 8) | _clamp255(bl * 255);
-      }
-    }
-    final last = stops[stops.length - 1];
-    return (0xFF << 24) | (_clamp255(last[1] * 255) << 16) | (_clamp255(last[2] * 255) << 8) | _clamp255(last[3] * 255);
-  }
-
-  static int _clamp255(double v) => v.round().clamp(0, 255);
 
   static int? _stateParseMs(String? iso) {
     if (iso == null || iso.isEmpty) return null;
@@ -1001,12 +960,21 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
           height: 1,
           gamma: widget.gamma,
           inputValueMax: widget.inputValueMax,
+          // Web createProcessingContext: threshold is released by the noise
+          // slider — at max the gate is fully open.
+          noiseThreshold:
+              widget.noiseThreshold * (1 - noiseReleaseOf(widget.noiseLevel)),
+          isolatedPixelRemovalEnabled:
+              noiseReleaseOf(widget.noiseLevel) < 0.7,
           intensityType: widget.intensityType ?? histories.firstOrNull?.intensityType,
           startTimeIso: widget.startTime ?? histories.firstOrNull?.startTime,
           endTimeIso: widget.endTime ?? histories.lastOrNull?.endTime,
           debug: false,
           gainDb: 0.0,
           backgroundColor: widget.background.toARGB32(),
+          colorMap: widget.colorMapName,
+          noiseLevel: widget.noiseLevel,
+          dstHeight: _plotDstHeight,
           histories: histories.map((h) => HistoryBlock(
             h.data, h.startTime, h.endTime, h.intensityType,
             h.intensityRange[0], h.intensityRange[1],

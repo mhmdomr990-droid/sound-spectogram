@@ -8,6 +8,7 @@ import 'package:get/get.dart';
 import '../controllers/dashboard_controller.dart';
 import '../models/device_history.dart';
 import '../models/marker.dart';
+import '../utils/colormaps.dart';
 import '../utils/export_service.dart';
 import '../utils/log_axis.dart';
 import '../widgets/spectrogram_canvas.dart';
@@ -176,6 +177,8 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                         maxFrequency: c?.selected.value?.maxFrequency ?? widget.maxFrequency,
                         logFrequencyView: _logFrequencyView,
                         focusHz: c?.focusHz.value ?? widget.focusHz,
+                        colorMapName: c?.colorMapName.value ?? kDefaultColorMap,
+                        noiseLevel: c?.noiseLevel.value ?? 0,
                         markers: _markers,
                         onMarkerAdd: (timeMs) => setState(() => _markers = [..._markers, MarkerData(timeMs: timeMs)]),
                         onMarkerRemove: (index) => setState(() {

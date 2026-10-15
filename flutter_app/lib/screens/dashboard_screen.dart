@@ -12,6 +12,7 @@ import '../screens/fullscreen_spectrogram.dart';
 import '../services/api_client.dart';
 import '../services/socket_service.dart';
 import '../services/notification_service.dart';
+import '../utils/colormaps.dart';
 import '../utils/export_service.dart';
 import '../widgets/spectrogram_canvas.dart';
 
@@ -243,6 +244,53 @@ class DashboardScreen extends StatelessWidget {
             ),
           ),
           Padding(
+            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
+            child: Obx(() => Row(
+                  children: [
+                    const Icon(Icons.palette, size: 18, color: Colors.white70),
+                    const SizedBox(width: 6),
+                    Container(
+                      height: 28,
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: DropdownButton<String>(
+                        value: c.colorMapName.value,
+                        isDense: true,
+                        underline: const SizedBox.shrink(),
+                        style: const TextStyle(color: Colors.white70, fontSize: 13),
+                        dropdownColor: const Color(0xFF1A1A2E),
+                        items: kColorMapOrder.map((key) => DropdownMenuItem<String>(
+                              value: key,
+                              child: Text(kColorMapLabels[key] ?? key,
+                                  style: const TextStyle(fontSize: 13)),
+                            )).toList(),
+                        onChanged: (v) {
+                          if (v != null) c.setColorMap(v);
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Icon(Icons.grain, size: 16, color: Colors.white70),
+                    const SizedBox(width: 4),
+                    Text(
+                      'الضوضاء: ${c.noiseLevel.value}',
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                    Expanded(
+                      child: SliderTheme(
+                        data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4)),
+                        child: Slider(
+                          value: c.noiseLevel.value.toDouble(),
+                          min: 0,
+                          max: 10,
+                          divisions: 10,
+                          onChanged: (v) => c.setNoiseLevel(v.round()),
+                        ),
+                      ),
+                    ),
+                  ],
+                )),
+          ),
+          Padding(
             padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
             child: Obx(() => Row(
                   children: [
@@ -393,6 +441,8 @@ class DashboardScreen extends StatelessWidget {
                 maxFrequency: c.selected.value?.maxFrequency,
                 logFrequencyView: c.logFrequencyView.value,
                 focusHz: c.focusHz.value,
+                colorMapName: c.colorMapName.value,
+                noiseLevel: c.noiseLevel.value,
                 onMarkerAdd: (timeMs) => c.addMarker(timeMs),
                 onMarkerRemove: (index) => c.removeMarker(index),
                 onMarkerMove: (index, newTimeMs) => c.moveMarker(index, newTimeMs),

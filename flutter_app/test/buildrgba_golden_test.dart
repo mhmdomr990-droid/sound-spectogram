@@ -139,6 +139,9 @@ void main() {
         dbMax: (cfg['dbMax'] as num?) ?? -20,
         gainDb: (cfg['gainDb'] as num?) ?? 0.0,
         backgroundColor: (cfg['bg'] as int?) ?? 0xFF111026,
+        // Pin magma so the golden hashes stay stable across the app default
+        // (sonic) — these cases capture the pre-colormap-picker rendering.
+        colorMap: 'magma',
         startTimeIso: cfg['start'] as String?,
         endTimeIso: cfg['end'] as String?,
       );
