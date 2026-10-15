@@ -1743,7 +1743,9 @@ class _SpectroPainter extends CustomPainter {
         final posFromLow = 1.0 - (guideY - pTop) / plotH;
         hz = positionToFrequency(axis, posFromLow);
       } else {
-        hz = maxFrequency * (1.0 - (guideY - pTop) / plotH);
+        // Same key as the axis labels (frequencyBins lookup, else linear
+        // max..axisFloor) so the guide always matches the tick beside it.
+        hz = _linearViewHz((guideY - pTop) / plotH);
       }
       final guidePaint = Paint()
         ..color = const Color(0xFF00E676)
@@ -1867,6 +1869,25 @@ class _SpectroPainter extends CustomPainter {
     if (fromMs == null || toMs == null) return '';
     final labelMs = fromMs + ((toMs - fromMs) * i / n).round();
     return _fmtTime(labelMs, withDate);
+  }
+
+  /// Frequency under a screen fraction (0 = top, 1 = bottom) in the LINEAR
+  /// view — must use the exact same key as the axis labels (frequencyBins
+  /// lookup first, else max..axisFloor interpolation) so the long-press guide
+  /// always agrees with the tick it sits on.
+  double _linearViewHz(double yFrac) {
+    final f = yFrac.clamp(0.0, 1.0);
+    final bins = frequencyBins;
+    if (bins != null && bins.length > 1 && dataRowCount > 0) {
+      // Ascending bins: image top = last bin (highest frequency).
+      final pos = (bins.length - 1) * (1.0 - f);
+      final i0 = pos.floor().clamp(0, bins.length - 1);
+      final i1 = (i0 + 1).clamp(0, bins.length - 1);
+      final t = pos - i0;
+      return bins[i0] + (bins[i1] - bins[i0]) * t;
+    }
+    final axisFloor = minFrequency > 0 ? minFrequency : 30.0;
+    return maxFrequency - f * (maxFrequency - axisFloor);
   }
 
   static Color _resolveStatusColor(AiStatus status) {
