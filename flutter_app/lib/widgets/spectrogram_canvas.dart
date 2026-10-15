@@ -100,8 +100,12 @@ class SpectrogramCanvas extends StatefulWidget {
   final void Function(int index, int newTimeMs)? onMarkerMove;
 
   /// Maximum frequency for the Y-axis labels. When null, derived from
-  /// frequencyBins in histories, then device maxFrequency, then 250.
+  /// frequencyBins in histories, then 250.
   final double? maxFrequency;
+
+  /// Minimum frequency for the Y-axis labels (device-configured). Used as the
+  /// axis floor in the linear view (web: axisMinFrequency default 30).
+  final double? minFrequency;
 
   /// Web-parity log/focus frequency view: linear 0..focus over 75% of the
   /// plot height, logarithmic above it. When false the classic linear view
@@ -151,6 +155,7 @@ class SpectrogramCanvas extends StatefulWidget {
       this.onMarkerRemove,
       this.onMarkerMove,
       this.maxFrequency,
+      this.minFrequency,
       this.logFrequencyView = false,
       this.focusHz = kLogDefaultFocusHz,
   });
@@ -241,6 +246,37 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       }
     }
     return 250.0;
+  }
+
+  /// Returns the first usable frequencyBins array from the current histories
+  /// (web: hasFrequencyBins path — labels come from the real per-row Hz).
+  List<double>? _effectiveFrequencyBins() {
+    final histories = widget.histories;
+    if (histories == null) return null;
+    for (final h in histories) {
+      final bins = h.frequencyBins;
+      if (bins != null && bins.length > 1) {
+        var sawPositive = false;
+        for (final b in bins) {
+          if (b > 0) {
+            sawPositive = true;
+            break;
+          }
+        }
+        if (sawPositive) return bins;
+      }
+    }
+    return null;
+  }
+
+  /// Axis floor for the linear view: device minFrequency clamped to >= 30 Hz
+  /// (web DEFAULT_CONFIG.axisMinFrequency).
+  double _axisMinFrequency() {
+    final deviceMin = widget.minFrequency;
+    if (deviceMin != null && deviceMin.isFinite && deviceMin >= 0) {
+      return deviceMin < 30 ? 30.0 : deviceMin;
+    }
+    return 30.0;
   }
 
   /// Plot left inset — same as the linear view so the plot width never changes.
@@ -1301,6 +1337,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                     compactStatusBar: widget.compactStatusBar,
                     markers: List<MarkerData>.from(widget.markers),
                     maxFrequency: _effectiveMaxFreq(),
+                    minFrequency: _axisMinFrequency(),
+                    frequencyBins: _effectiveFrequencyBins(),
+                    dataRowCount: dispHistories?.firstOrNull?.data.length ?? 0,
                     freqGuideY: _freqGuideY,
                     logAxis: widget.logFrequencyView
                         ? buildLogAxis(0, _effectiveMaxFreq(), widget.focusHz)
@@ -1346,6 +1385,9 @@ class _SpectroPainter extends CustomPainter {
   final bool compactStatusBar;
   final List<MarkerData> markers;
   final double maxFrequency;
+  final double minFrequency;
+  final List<double>? frequencyBins;
+  final int dataRowCount;
   final double? freqGuideY;
 
   /// Non-null in log/focus frequency view — drives grid lines, frequency
@@ -1368,6 +1410,9 @@ class _SpectroPainter extends CustomPainter {
       this.compactStatusBar = false,
       this.markers = const [],
       this.maxFrequency = 250.0,
+      this.minFrequency = 30.0,
+      this.frequencyBins,
+      this.dataRowCount = 0,
       this.freqGuideY,
       this.logAxis});
 
@@ -1379,7 +1424,6 @@ class _SpectroPainter extends CustomPainter {
   static double bottomInsetFor(bool showStatusBar, bool compactStatusBar) =>
       showStatusBar ? (compactStatusBar ? 50.0 : 68.0) : 36.0;
   double get _bottomInset => bottomInsetFor(showStatusBar, compactStatusBar);
-  static const int _xTicks = 5;
   static const int _yTicks = 5;
 
   static const Color _gridColor = Color(0x29CFD7E6);
@@ -1405,11 +1449,11 @@ class _SpectroPainter extends CustomPainter {
     text: const TextSpan(text: 'الزمن', style: TextStyle(color: _textColor, fontSize: 10)),
     textDirection: TextDirection.rtl,
   )..layout();
-  static final Map<int, TextPainter> _freqLabelCache = {};
+  static final Map<String, TextPainter> _freqLabelCache = {};
   static final Map<String, TextPainter> _gapTextCache = {};
-  static TextPainter _getFreqLabelPainter(int hz) {
-    return _freqLabelCache.putIfAbsent(hz, () => TextPainter(
-      text: TextSpan(text: '$hz', style: const TextStyle(color: _textColor, fontSize: 10)),
+  static TextPainter _getFreqLabelPainter(String label) {
+    return _freqLabelCache.putIfAbsent(label, () => TextPainter(
+      text: TextSpan(text: label, style: const TextStyle(color: _textColor, fontSize: 10)),
       textDirection: TextDirection.ltr,
     )..layout());
   }
@@ -1576,8 +1620,10 @@ class _SpectroPainter extends CustomPainter {
 
     // 3) Grid lines.
     final gridPaint = _gridPaint;
-    for (var i = 0; i <= _xTicks; i++) {
-      final x = pLeft + (plotW * i / _xTicks).roundToDouble();
+    // Adaptive X ticks (web chooseTicks: ~120px per tick, clamped 4..8).
+    final xTicks = (plotW / 120).floor().clamp(4, 8);
+    for (var i = 0; i <= xTicks; i++) {
+      final x = pLeft + (plotW * i / xTicks).roundToDouble();
       canvas.drawLine(Offset(x, pTop), Offset(x, pTop + plotH), gridPaint);
     }
     final axis = logAxis;
@@ -1608,9 +1654,9 @@ class _SpectroPainter extends CustomPainter {
     // 5) Time (x) axis labels.
     final timeStyle = _timeStyle;
     final withDate = (toMs != null && fromMs != null) && (toMs - fromMs > 24 * 3600 * 1000);
-    for (var i = 0; i <= _xTicks; i++) {
-      final label = _timeLabelFor(i, _xTicks, fromMs, toMs, withDate);
-      final x = pLeft + plotW * i / _xTicks;
+    for (var i = 0; i <= xTicks; i++) {
+      final label = _timeLabelFor(i, xTicks, fromMs, toMs, withDate);
+      final x = pLeft + plotW * i / xTicks;
       final tp = TextPainter(
         text: TextSpan(text: label, style: timeStyle),
         textDirection: TextDirection.ltr,
@@ -1654,14 +1700,36 @@ class _SpectroPainter extends CustomPainter {
         final y = item[1];
         // Short tick at the plot edge (web drawLogFrequencyAxisLabels).
         canvas.drawLine(Offset(pLeft - 4, y), Offset(pLeft, y), _axisPaint);
-        final fp = _getFreqLabelPainter(hz);
+        final fp = _getFreqLabelPainter('$hz Hz');
         fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
       }
     } else {
+      // Linear view labels — web parity (spectrogram.js 3109–3133):
+      //  (A) frequencyBins row values when available;
+      //  (B) linear interpolation max..max(min, 30);
+      //  (C) fallback: Arabic bin index.
+      final bins = frequencyBins;
+      final hasBins = bins != null && bins.length > 1 && dataRowCount > 0;
+      final binCount = hasBins ? bins.length : dataRowCount;
+      final axisFloor = minFrequency > 0 ? minFrequency : 30.0;
+      final span = maxFrequency - axisFloor;
       for (var i = 0; i <= _yTicks; i++) {
-        final hz = ((_yTicks - i) * maxFrequency / _yTicks).round();
+        final yF = i / _yTicks; // 0 = top, 1 = bottom
         final y = pTop + plotH * i / _yTicks;
-        final fp = _getFreqLabelPainter(hz);
+        final String label;
+        if (hasBins) {
+          // Screen top = highest frequency = last bin (ascending bins).
+          final idx =
+              (bins.length - 1 - (yF * (bins.length - 1)).round()).clamp(0, bins.length - 1);
+          label = '${bins[idx].round()} Hz';
+        } else if (binCount > 0 && span > 0) {
+          final hz = maxFrequency - yF * span;
+          label = '${hz.round().clamp(0, 99999)} Hz';
+        } else {
+          final bin = ((1 - yF) * (binCount > 0 ? binCount - 1 : 0)).round();
+          label = 'نطاق $bin';
+        }
+        final fp = _getFreqLabelPainter(label);
         fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
       }
     }

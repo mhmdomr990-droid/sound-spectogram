@@ -175,6 +175,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                         showStatusBar: true,
                         compactStatusBar: true,
                         maxFrequency: c?.selected.value?.maxFrequency ?? widget.maxFrequency,
+                        minFrequency: c?.selected.value?.minFrequency,
                         logFrequencyView: _logFrequencyView,
                         focusHz: c?.focusHz.value ?? widget.focusHz,
                         colorMapName: c?.colorMapName.value ?? kDefaultColorMap,

@@ -439,6 +439,7 @@ class DashboardScreen extends StatelessWidget {
                 requestEndTime: c.requestEndTime.value,
                 markers: c.markers,
                 maxFrequency: c.selected.value?.maxFrequency,
+                minFrequency: c.selected.value?.minFrequency,
                 logFrequencyView: c.logFrequencyView.value,
                 focusHz: c.focusHz.value,
                 colorMapName: c.colorMapName.value,
