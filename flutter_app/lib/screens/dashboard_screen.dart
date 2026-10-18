@@ -170,7 +170,7 @@ class DashboardScreen extends StatelessWidget {
 
     return Container(
       color: const Color(0xFF0E0E0E),
-      child: Column(
+      child: Obx(() => Column(
         children: [
           SizedBox(
             height: 38,
@@ -209,146 +209,170 @@ class DashboardScreen extends StatelessWidget {
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
-            child: ValueListenableBuilder<double>(
-              valueListenable: c.gainNotifier,
-              builder: (context, gainVal, _) {
-                return Row(
-                  children: [
-                    const Icon(Icons.volume_up, size: 18, color: Colors.white70),
-                    const SizedBox(width: 6),
-                    Text(
-                      'الكسب: ${gainVal.toStringAsFixed(0)} dB',
-                      style: const TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                    Expanded(
-                      child: SliderTheme(
-                        data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5)),
-                        child: Slider(
-                          value: gainVal,
-                          min: -24,
-                          max: 24,
-                          divisions: 48,
-                          onChanged: (v) {
-                            c.gainDb.value = v;
-                            c.gainNotifier.value = v;
-                          },
-                          onChangeEnd: (_) => c.canvasKey.currentState?.applyGain(),
+          // Collapsible control rows (gain / colour map+noise / log+focus+
+          // export). Hidden by default so the spectrogram reclaims the space.
+          if (c.showControls.value) ...[
+            Padding(
+              padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
+              child: ValueListenableBuilder<double>(
+                valueListenable: c.gainNotifier,
+                builder: (context, gainVal, _) {
+                  return Row(
+                    children: [
+                      const Icon(Icons.volume_up, size: 18, color: Colors.white70),
+                      const SizedBox(width: 6),
+                      Text(
+                        'الكسب: ${gainVal.toStringAsFixed(0)} dB',
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5)),
+                          child: Slider(
+                            value: gainVal,
+                            min: -24,
+                            max: 24,
+                            divisions: 48,
+                            onChanged: (v) {
+                              c.gainDb.value = v;
+                              c.gainNotifier.value = v;
+                            },
+                            onChangeEnd: (_) => c.canvasKey.currentState?.applyGain(),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
-            child: Obx(() => Row(
-                  children: [
-                    const Icon(Icons.palette, size: 18, color: Colors.white70),
-                    const SizedBox(width: 6),
-                    Container(
-                      height: 28,
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: DropdownButton<String>(
-                        value: c.colorMapName.value,
-                        isDense: true,
-                        underline: const SizedBox.shrink(),
-                        style: const TextStyle(color: Colors.white70, fontSize: 13),
-                        dropdownColor: const Color(0xFF1A1A2E),
-                        items: kColorMapOrder.map((key) => DropdownMenuItem<String>(
-                              value: key,
-                              child: Text(kColorMapLabels[key] ?? key,
-                                  style: const TextStyle(fontSize: 13)),
-                            )).toList(),
-                        onChanged: (v) {
-                          if (v != null) c.setColorMap(v);
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    const Icon(Icons.grain, size: 16, color: Colors.white70),
-                    const SizedBox(width: 4),
-                    Text(
-                      'الضوضاء: ${c.noiseLevel.value}',
-                      style: const TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                    Expanded(
-                      child: SliderTheme(
-                        data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4)),
-                        child: Slider(
-                          value: c.noiseLevel.value.toDouble(),
-                          min: 0,
-                          max: 10,
-                          divisions: 10,
-                          onChanged: (v) => c.setNoiseLevel(v.round()),
-                        ),
-                      ),
-                    ),
-                  ],
-                )),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
-            child: Obx(() => Row(
-                  children: [
-                    Switch(
-                      value: c.logFrequencyView.value,
-                      onChanged: c.setLogFrequencyView,
-                      activeColor: scheme.primary,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    const SizedBox(width: 4),
-                    const Text('عرض لوغاريتمي',
-                        style: TextStyle(color: Colors.white70, fontSize: 12)),
-                    const SizedBox(width: 16),
-                    const Text('تركيز حتى',
-                        style: TextStyle(color: Colors.white70, fontSize: 12)),
-                    const SizedBox(width: 6),
-                    _FocusHzField(controller: c),
-                    const SizedBox(width: 4),
-                    const Text('Hz',
-                        style: TextStyle(color: Colors.white38, fontSize: 12)),
-                    const Spacer(),
-                    IconButton(
-                      tooltip: 'تصدير لقطة',
-                      icon: const Icon(Icons.save_alt,
-                          color: Colors.white70, size: 18),
-                      visualDensity: VisualDensity.compact,
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      constraints:
-                          const BoxConstraints(minWidth: 30, minHeight: 30),
-                      onPressed: () => ExportService.exportPng(
-                        _exportBoundaryKey,
-                        devicePixelRatio:
-                            MediaQuery.of(context).devicePixelRatio,
-                        deviceName: c.selected.value?.name ?? 'device',
-                        histories: c.histories,
-                      ),
-                    ),
-                  ],
-                )),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
-            child: SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => _openFullscreen(context, c),
-                icon: const Icon(Icons.fullscreen, size: 18),
-                label: const Text('ملء الشاشة', style: TextStyle(fontSize: 12)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white70,
-                  side: const BorderSide(color: Colors.white24),
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                ),
+                    ],
+                  );
+                },
               ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
+              child: Obx(() => Row(
+                    children: [
+                      const Icon(Icons.palette, size: 18, color: Colors.white70),
+                      const SizedBox(width: 6),
+                      Container(
+                        height: 28,
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: DropdownButton<String>(
+                          value: c.colorMapName.value,
+                          isDense: true,
+                          underline: const SizedBox.shrink(),
+                          style: const TextStyle(color: Colors.white70, fontSize: 13),
+                          dropdownColor: const Color(0xFF1A1A2E),
+                          items: kColorMapOrder.map((key) => DropdownMenuItem<String>(
+                                value: key,
+                                child: Text(kColorMapLabels[key] ?? key,
+                                    style: const TextStyle(fontSize: 13)),
+                              )).toList(),
+                          onChanged: (v) {
+                            if (v != null) c.setColorMap(v);
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      const Icon(Icons.grain, size: 16, color: Colors.white70),
+                      const SizedBox(width: 4),
+                      Text(
+                        'الضوضاء: ${c.noiseLevel.value}',
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4)),
+                          child: Slider(
+                            value: c.noiseLevel.value.toDouble(),
+                            min: 0,
+                            max: 10,
+                            divisions: 10,
+                            onChanged: (v) => c.setNoiseLevel(v.round()),
+                          ),
+                        ),
+                      ),
+                    ],
+                  )),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
+              child: Obx(() => Row(
+                    children: [
+                      Switch(
+                        value: c.logFrequencyView.value,
+                        onChanged: c.setLogFrequencyView,
+                        activeColor: scheme.primary,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      const SizedBox(width: 4),
+                      const Text('عرض لوغاريتمي',
+                          style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      const SizedBox(width: 16),
+                      const Text('تركيز حتى',
+                          style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      const SizedBox(width: 6),
+                      _FocusHzField(controller: c),
+                      const SizedBox(width: 4),
+                      const Text('Hz',
+                          style: TextStyle(color: Colors.white38, fontSize: 12)),
+                      const Spacer(),
+                      IconButton(
+                        tooltip: 'تصدير لقطة',
+                        icon: const Icon(Icons.save_alt,
+                            color: Colors.white70, size: 18),
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        constraints:
+                            const BoxConstraints(minWidth: 30, minHeight: 30),
+                        onPressed: () => ExportService.exportPng(
+                          _exportBoundaryKey,
+                          devicePixelRatio:
+                              MediaQuery.of(context).devicePixelRatio,
+                          deviceName: c.selected.value?.name ?? 'device',
+                          histories: c.histories,
+                        ),
+                      ),
+                    ],
+                  )),
+            ),
+          ],
+          Padding(
+            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _openFullscreen(context, c),
+                    icon: const Icon(Icons.fullscreen, size: 18),
+                    label: const Text('ملء الشاشة', style: TextStyle(fontSize: 12)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white70,
+                      side: const BorderSide(color: Colors.white24),
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Obx(() {
+                  final open = c.showControls.value;
+                  return IconButton(
+                    tooltip: open ? 'إخفاء أدوات التحكم' : 'إظهار أدوات التحكم',
+                    icon: Icon(
+                      open ? Icons.expand_less : Icons.tune,
+                      color: open ? scheme.primary : Colors.white70,
+                      size: 20,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    constraints:
+                        const BoxConstraints(minWidth: 34, minHeight: 34),
+                    onPressed: () => c.setShowControls(!open),
+                  );
+                }),
+              ],
             ),
           ),
         ],
-      ),
+      )),
     );
   }
 

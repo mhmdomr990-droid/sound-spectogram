@@ -65,6 +65,11 @@ class DashboardController extends GetxController {
   static const _colorMapStorageKey = 'colorMap';
   static const _noiseLevelStorageKey = 'noiseLevel';
 
+  // Collapsible control rows (gain / colour map / noise / log-focus).
+  // Hidden by default so the spectrogram gets the space.
+  final showControls = false.obs;
+  static const _showControlsStorageKey = 'showControls';
+
   final canvasKey = GlobalKey<SpectrogramCanvasState>();
 
   StreamSubscription<DeviceHistory>? _dataSub;
@@ -375,6 +380,18 @@ class DashboardController extends GetxController {
       if (noise != null) {
         noiseLevel.value = noise.clamp(0, 10);
       }
+      showControls.value = prefs.getString(_showControlsStorageKey) == '1';
+    } catch (_) {}
+  }
+
+  /// Toggle the collapsible control rows (gain / colour map / noise /
+  /// log-focus). Hidden unless explicitly persisted as visible.
+  Future<void> setShowControls(bool visible) async {
+    if (showControls.value == visible) return;
+    showControls.value = visible;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_showControlsStorageKey, visible ? '1' : '0');
     } catch (_) {}
   }
 
