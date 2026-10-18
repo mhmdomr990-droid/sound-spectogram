@@ -42,6 +42,30 @@ class CanvasSeedSnapshot {
   });
 }
 
+/// Cached intensity plane for one drawing mode (normal / sonic). The intensity
+/// bytes depend on the data + noise + input scaling — never on the colour-map
+/// name within the same mode — so a sonic <-> filled switch can swap planes
+/// instead of re-running the full isolate render.
+class _IntensityCache {
+  final Uint8List intensity;
+  final int width;
+  final int height;
+  final double gamma;
+  final bool sonic;
+  final int dstH;
+  final String key;
+
+  const _IntensityCache({
+    required this.intensity,
+    required this.width,
+    required this.height,
+    required this.gamma,
+    required this.sonic,
+    required this.dstH,
+    required this.key,
+  });
+}
+
 /// Renders a frequency x time matrix as a spectrogram using ui.Image + RGBA
 /// bytes generated in an isolate (avoids blocking the UI thread).
 ///
@@ -480,6 +504,13 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _cachedIntensityHeight = 0;
   double _cachedGamma = 1.0;
 
+  // --- Per-mode intensity caches (plan A+B): switching sonic <-> a filled
+  // colour map adopts the other mode's stored plane (instant) instead of a
+  // full isolate re-render. Both are dropped whenever data/noise/scaling
+  // inputs change; dstH keys the sonic plane (sonicScale = dstHeight ~/ rows).
+  _IntensityCache? _cacheNormal;
+  _IntensityCache? _cacheSonic;
+
   Uint8List? _gainLut;
   double _gainLutGainDb = double.nan;
   double _gainLutGamma = double.nan;
@@ -540,6 +571,74 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     if (!identical(lg, _image)) _disposeImg(lg);
   }
 
+  // --- Per-mode intensity caches (plan A+B, instant colour-map switching).
+  void _invalidateModeCaches() {
+    _cacheNormal = null;
+    _cacheSonic = null;
+  }
+
+  /// Inputs the intensity plane is derived from — everything except the
+  /// colour-map name (the plane bytes are colour-agnostic within a mode;
+  /// colouring happens later in the gain LUT).
+  String _planeKey() => '${_dataToken()}'
+      '|${widget.requestStartTime}|${widget.requestEndTime}'
+      '|${widget.startTime ?? widget.histories?.firstOrNull?.startTime}'
+      '|${widget.endTime ?? widget.histories?.lastOrNull?.endTime}'
+      '|${widget.intensityType ?? widget.histories?.firstOrNull?.intensityType}'
+      '|${widget.noiseLevel}|${widget.noiseThreshold}'
+      '|${widget.inputValueMax}|${widget.gamma}';
+
+  void _storeModeCache(Uint8List intensity, int w, int h, double gamma,
+      bool sonic, int dstH, String key) {
+    final cache = _IntensityCache(
+        intensity: intensity,
+        width: w,
+        height: h,
+        gamma: gamma,
+        sonic: sonic,
+        dstH: dstH,
+        key: key);
+    if (sonic) {
+      _cacheSonic = cache;
+    } else {
+      _cacheNormal = cache;
+    }
+  }
+
+  /// Adopts the cached plane of mode [sonic] into the live intensity fields.
+  /// Returns false when there is no entry valid for the current inputs — the
+  /// caller then falls back to a full isolate render.
+  bool _adoptModeCache(bool sonic) {
+    final cache = sonic ? _cacheSonic : _cacheNormal;
+    if (cache == null || cache.key != _planeKey()) return false;
+    // The sonic plane is rendered at plot height (sonicScale = dstH ~/ rows);
+    // a layout/insets change invalidates it. The filled-map plane is data-res.
+    if (sonic && cache.dstH != _plotDstHeight) return false;
+    _cachedIntensity = cache.intensity;
+    _cachedIntensityWidth = cache.width;
+    _cachedIntensityHeight = cache.height;
+    _cachedGamma = cache.gamma;
+    // seedSnapshot feeds the fullscreen handoff — keep its plane in sync.
+    final snap = seedSnapshot;
+    if (snap != null) {
+      seedSnapshot = CanvasSeedSnapshot(
+        image: snap.image,
+        cachedCombined: snap.cachedCombined,
+        cachedWidth: snap.cachedWidth,
+        cachedHeight: snap.cachedHeight,
+        frequencyBins: snap.frequencyBins,
+        colCount: snap.colCount,
+        startTime: snap.startTime,
+        endTime: snap.endTime,
+        cachedIntensity: cache.intensity,
+        intensityWidth: cache.width,
+        intensityHeight: cache.height,
+        cachedGamma: cache.gamma,
+      );
+    }
+    return true;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -563,7 +662,6 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final renderingChanged = oldWidget.matrix != widget.matrix ||
         oldWidget.gamma != widget.gamma ||
         oldWidget.inputValueMax != widget.inputValueMax ||
-        oldWidget.colorMapName != widget.colorMapName ||
         oldWidget.noiseLevel != widget.noiseLevel;
     final gainChanged = oldWidget.gainDb != widget.gainDb;
     // GetX RxList's `operator ==` is `value == o` (plain list vs RxList) and is
@@ -589,10 +687,29 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _coverageCacheKey = null;
     }
     if (renderingChanged || dataChanged) {
+      // Any input that reshapes the intensity plane invalidates both
+      // per-mode caches (they are keyed by _planeKey() anyway).
+      _invalidateModeCaches();
       _renderDebounce?.cancel();
       _renderDebounce = Timer(const Duration(milliseconds: 100), () {
         if (mounted) _render();
       });
+    } else if (oldWidget.colorMapName != widget.colorMapName) {
+      // Instant colour-map switch. The intensity bytes are colour-agnostic:
+      // plan A (same drawing mode) recolours the existing plane through the
+      // gain LUT only; plan B (sonic <-> filled) adopts the other mode's
+      // stored plane when still valid. Only a cold miss pays a full render —
+      // and even that runs immediately, without the 100 ms data debounce.
+      final oldSonic = isSonicColorMap(oldWidget.colorMapName);
+      final newSonic = isSonicColorMap(widget.colorMapName);
+      if (oldSonic == newSonic) {
+        _queueGainBuild();
+      } else if (_adoptModeCache(newSonic)) {
+        _queueGainBuild();
+      } else {
+        _renderDebounce?.cancel();
+        _render();
+      }
     }
     if (gainChanged && _cachedIntensity != null && _cachedIntensityWidth > 0 && _cachedIntensityHeight > 0) {
       _queueGainBuild();
@@ -1051,6 +1168,11 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     print('[DbgRx] _render#$id START window=${widget.requestStartTime} -> ${widget.requestEndTime} '
         'hist=${histories.length} emptyBlocks=${histories.where((e) => e.data.isEmpty).length}');
     final sw = Stopwatch()..start();
+    // Captured at dispatch: the in-flight result must be stored under the
+    // inputs it was rendered with, not whatever the widget shows on return.
+    final reqCacheKey = _planeKey();
+    final reqColorMap = widget.colorMapName;
+    final reqDstH = _plotDstHeight;
     try {
       if (id != _jobId) return; // superseded before dispatch
       final result = await renderSpectrogramIsolate(
@@ -1086,6 +1208,19 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       if (!mounted || id != _jobId) {
         // ignore: avoid_print
         print('[DbgRx] _render#$id SUPERSEDED after isolate (${sw.elapsedMilliseconds}ms)');
+        return;
+      }
+      // Keep the freshly rendered plane in its mode's cache so a later
+      // switch back adopts it instantly.
+      final resultIntensity = result.intensity;
+      if (resultIntensity != null) {
+        _storeModeCache(resultIntensity, result.width, result.height,
+            result.gamma, isSonicColorMap(reqColorMap), reqDstH, reqCacheKey);
+      }
+      if (isSonicColorMap(reqColorMap) != isSonicColorMap(widget.colorMapName)) {
+        // The colour map switched while this render was in flight — the live
+        // plane (adopted cache or newer render) must not be clobbered.
+        _queueGainBuild();
         return;
       }
       _cachedIntensity = result.intensity;
