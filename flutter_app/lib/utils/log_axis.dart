@@ -22,6 +22,11 @@ class LogAxis {
   final double dHz;
   final bool topLinear;
 
+  /// A ready-made log picture (web `axis.type === "log10"`): the data rows
+  /// are already evenly spaced on a log10 axis, so the picture is drawn as-is
+  /// and every mapping uses the pure log10 fraction — no focus segment.
+  final bool pureLog10;
+
   /// focusFrac = (focusHz - minHz) / range, precomputed for the warp.
   final double focusFrac;
 
@@ -42,6 +47,7 @@ class LogAxis {
     required this.focusFrac,
     required this.k2Frac,
     required this.logD,
+    this.pureLog10 = false,
   });
 
   @override
@@ -53,10 +59,12 @@ class LogAxis {
       other.share == share &&
       other.k2 == k2 &&
       other.dHz == dHz &&
-      other.topLinear == topLinear;
+      other.topLinear == topLinear &&
+      other.pureLog10 == pureLog10;
 
   @override
-  int get hashCode => Object.hash(minHz, maxHz, focusHz, share, k2, dHz, topLinear);
+  int get hashCode =>
+      Object.hash(minHz, maxHz, focusHz, share, k2, dHz, topLinear, pureLog10);
 }
 
 /// FOCUS_SHARE of the plot height is dedicated to min..focus (matches web).
@@ -66,11 +74,91 @@ const double kLogFocusShare = 0.75;
 const double kLogDefaultFocusHz = 200.0;
 
 /// Candidate tick values (matches web CANDIDATE_VALUES in
-/// log-frequency-labels.js).
+/// log-frequency-labels.js) for the hybrid focus+log axis.
 const List<double> kLogLabelCandidates = [
   0, 10, 20, 50, 75, 100, 125, 150, 175, 200, 250, 300, 400, 500, 600, 800,
   1000, 1500, 2000, 3000, 4000, 5000, 8000, 10000, 20000,
 ];
+
+/// Row-spacing analysis — port of web dashboard.js analyzeRowScale: are the
+/// rows (frequencyBins, one per picture row) evenly spaced on a log axis (a
+/// ready-made picture) or evenly spaced in Hz (raw spectrum)? Returns "log"
+/// or "linear".
+String analyzeRowScale(List<double> bins) {
+  final n = bins.length;
+  if (n < 3) return 'linear';
+  final lo = bins[0];
+  final hi = bins[n - 1];
+  if (!(hi > lo)) return 'linear';
+  var linearDev = 0.0;
+  for (var i = 0; i < n; i++) {
+    final d = (bins[i] - (lo + (hi - lo) * i / (n - 1))).abs();
+    if (d > linearDev) linearDev = d;
+  }
+  if (lo > 0) {
+    final ratio = math.log(hi / lo);
+    var logDev = 0.0;
+    for (var k = 0; k < n; k++) {
+      final centre = lo * math.exp(ratio * (k + 0.5) / n);
+      final e = (bins[k] - centre).abs();
+      if (e > logDev) logDev = e;
+    }
+    if (logDev <= 1.01 && logDev * 4 < linearDev) return 'log';
+  }
+  return 'linear';
+}
+
+/// Adaptive round-number tick values for a pure log10 axis — port of the
+/// log10 branch of web log-frequency-labels.js drawLogFrequencyAxisLabels:
+/// every 10 Hz where there is room (low end of the axis), then 20, 50, 100 …
+/// higher up, so the labels never crowd (each step is the smallest round step
+/// that keeps them about [labelStepPx] apart). Includes minHz first and
+/// maxHz last.
+List<double> adaptiveLog10LabelValues({
+  required double minHz,
+  required double maxHz,
+  required double plotHeight,
+  required double Function(double hz) positionOf,
+  double labelStepPx = 32,
+  double minGapPx = 14,
+}) {
+  if (!(maxHz > minHz) || plotHeight <= 0 || minHz <= 0) return const [];
+  double pxAt(double f) {
+    final c = f > maxHz ? maxHz : f;
+    return positionOf(c) * plotHeight;
+  }
+
+  const steps = [10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0];
+  double stepAt(double f) {
+    for (final s in steps) {
+      if (pxAt(f + s) - pxAt(f) >= labelStepPx) return s;
+    }
+    return steps.last;
+  }
+
+  var hz = (minHz / 10).ceil() * 10.0;
+  if (hz <= minHz || pxAt(hz) - pxAt(minHz) < minGapPx) {
+    hz += 10;
+  }
+  final candidates = <double>[];
+  while (hz < maxHz && candidates.length < 200) {
+    candidates.add(hz);
+    final step = stepAt(hz);
+    var next = ((hz / step).floor() + 1) * step;
+    while (next < maxHz && pxAt(next) - pxAt(hz) < labelStepPx * 0.75) {
+      next += step;
+    }
+    if (!(pxAt(next) - pxAt(hz) > 0)) break;
+    hz = next;
+  }
+
+  final values = <double>[minHz];
+  for (final c in candidates) {
+    if (c > minHz && c < maxHz) values.add(c);
+  }
+  values.add(maxHz);
+  return values;
+}
 
 /// Solve k * ln(1 + D / k) = C for k (the function is increasing in k).
 /// Matches web solveLogScale.
@@ -131,9 +219,43 @@ LogAxis buildLogAxis(double minHz, double maxHz, double focusHz) {
   );
 }
 
+/// Pure log10 axis over [minHz, maxHz] — a ready-made log picture (web
+/// `axis.type === "log10"`, setNativeLogRenderInfo): position is the plain
+/// log10 fraction, no focus segment. `topLinear` stays true so a warp with
+/// this axis is the identity (the picture must NOT be stretched again).
+LogAxis pureLog10Axis(double minHz, double maxHz) {
+  var min = minHz;
+  var max = maxHz;
+  if (!(max > min)) {
+    max = min + 1;
+  }
+  return LogAxis(
+    minHz: min,
+    maxHz: max,
+    focusHz: min,
+    share: 1.0,
+    k2: 1.0,
+    dHz: max - min,
+    topLinear: true,
+    focusFrac: 0.0,
+    k2Frac: 0.0,
+    logD: 0.0,
+    pureLog10: true,
+  );
+}
+
 /// Frequency -> 0..1 position measured from the LOW-frequency edge of the plot.
-/// Matches web frequencyToPosition.
+/// Matches web frequencyToPosition / axisPosition (log10 branch for a
+/// ready-made picture).
 double frequencyToPosition(LogAxis axis, double frequency) {
+  if (axis.pureLog10) {
+    if (!(axis.maxHz > axis.minHz) || axis.minHz <= 0) return 0.0;
+    final g = frequency.clamp(axis.minHz, axis.maxHz).toDouble();
+    return ((math.log(g) - math.log(axis.minHz)) /
+            (math.log(axis.maxHz) - math.log(axis.minHz)))
+        .clamp(0.0, 1.0)
+        .toDouble();
+  }
   final f = frequency.clamp(axis.minHz, axis.maxHz).toDouble();
   double position;
   if (f <= axis.focusHz) {
@@ -151,9 +273,15 @@ double frequencyToPosition(LogAxis axis, double frequency) {
 }
 
 /// Inverse of [frequencyToPosition]: 0..1 position measured from the
-/// LOW-frequency edge -> frequency in Hz. Matches web positionToFrequency.
+/// LOW-frequency edge -> frequency in Hz. Matches web positionToFrequency
+/// (log10 branch = pictureAxisHz for a ready-made picture).
 double positionToFrequency(LogAxis axis, double position) {
   final p = position.clamp(0.0, 1.0).toDouble();
+  if (axis.pureLog10) {
+    if (!(axis.maxHz > axis.minHz) || axis.minHz <= 0) return axis.minHz;
+    return math.exp(math.log(axis.minHz) +
+        p * (math.log(axis.maxHz) - math.log(axis.minHz)));
+  }
   if (p <= axis.share) {
     return axis.minHz + (p / axis.share) * (axis.focusHz - axis.minHz);
   }

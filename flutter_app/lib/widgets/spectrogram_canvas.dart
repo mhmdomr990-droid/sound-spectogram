@@ -285,6 +285,41 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     return 30.0;
   }
 
+  /// Server frequencyBins that are evenly spaced on a log axis (a ready-made
+  /// log picture) — port of web analyzeRowScale + findNativeLogScale. The
+  /// picture is then drawn as-is on a pure log10 axis (no warp) and labelled
+  /// with the adaptive round numbers, exactly like the web image mode.
+  LogAxis? _computeNativeLogAxis() {
+    final histories = widget.histories;
+    if (histories == null) return null;
+    for (final h in histories) {
+      var bins = h.frequencyBins;
+      if (bins == null || bins.length < 3 || bins.length != h.data.length) {
+        continue;
+      }
+      if (bins.first > bins.last) {
+        // Descending server rows: analyse ascending (web normalizePacketRows
+        // reverses the row list the same way).
+        bins = bins.reversed.toList();
+      }
+      if (analyzeRowScale(bins) == 'log') {
+        return pureLog10Axis(bins.first, bins.last);
+      }
+    }
+    return null;
+  }
+
+  LogAxis? _nativeLogAxisCache;
+  bool _nativeLogAxisCached = false;
+
+  LogAxis? _nativeLogAxis() {
+    if (!_nativeLogAxisCached) {
+      _nativeLogAxisCache = _computeNativeLogAxis();
+      _nativeLogAxisCached = true;
+    }
+    return _nativeLogAxisCache;
+  }
+
   /// Plot left inset — same as the linear view so the plot width never changes.
   double get _pLeft => 40.0;
 
@@ -542,6 +577,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         token != _lastDataToken;
     if (dataChanged) {
       _lastDataToken = token;
+      _nativeLogAxisCached = false;
       // ignore: avoid_print
       print('[DbgRx] didUpdateWidget dataChanged '
           '${oldWidget.requestStartTime} -> ${widget.requestStartTime} | '
@@ -678,7 +714,11 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final w = _cachedIntensityWidth;
     final h = _cachedIntensityHeight;
     final gamma = _cachedGamma;
-    final log = logOverride ?? widget.logFrequencyView;
+    final nativeLog = _nativeLogAxis();
+    // A ready-made log picture (server rows evenly spaced on a log axis) is
+    // drawn as-is — web image mode never stretches it again — so the warp
+    // only runs for linear data with the log toggle on.
+    final log = (logOverride ?? widget.logFrequencyView) && nativeLog == null;
     final focus = widget.focusHz;
     final minFreq = _axisMinFrequency();
     final maxFreq = _effectiveMaxFreq();
@@ -769,8 +809,11 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       }
     }
     // Pre-build the opposite view's PLANE off the critical path so the first
-    // toggle after a data/axis change never waits on the isolate.
-    _prewarmAlternatePlane(intensity, w, h, outW, outH, focus, minFreq, maxFreq, log);
+    // toggle after a data/axis change never waits on the isolate. Pointless
+    // for a native-log picture (there is no second view).
+    if (nativeLog == null) {
+      _prewarmAlternatePlane(intensity, w, h, outW, outH, focus, minFreq, maxFreq, log);
+    }
     return img;
   }
 
@@ -1362,10 +1405,14 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
                     frequencyBins: _effectiveFrequencyBins(),
                     dataRowCount: dispHistories?.firstOrNull?.data.length ?? 0,
                     freqGuideY: _freqGuideY,
-                    logAxis: widget.logFrequencyView
-                        ? buildLogAxis(
-                            _axisMinFrequency(), _effectiveMaxFreq(), widget.focusHz)
-                        : null,
+                    // A native-log picture always uses its own pure log10
+                    // axis (web: useLogView = toggle || nativeLog); otherwise
+                    // the hybrid focus+log axis follows the toggle.
+                    logAxis: _nativeLogAxis() ??
+                        (widget.logFrequencyView
+                            ? buildLogAxis(
+                                _axisMinFrequency(), _effectiveMaxFreq(), widget.focusHz)
+                            : null),
                   ),
                 ),
               ),
@@ -1652,7 +1699,12 @@ class _SpectroPainter extends CustomPainter {
     for (var i = 0; i <= _yTicks; i++) {
       final yFrac = i / _yTicks;
       final double y;
-      if (axis != null) {
+      if (axis != null && axis.pureLog10) {
+        // [image] web spectrogram.js 2980–2987: equal-Hz fifths placed at
+        // their frequency on the picture's own log axis.
+        final gridHz = axis.maxHz - yFrac * (axis.maxHz - axis.minHz);
+        y = pTop + plotH * (1.0 - frequencyToPosition(axis, gridHz));
+      } else if (axis != null) {
         // Same frequency as the axis label of this tick, warped onto the
         // curved axis — grid lines always sit under their own numbering.
         final pos = frequencyToPosition(axis, _axisLabelHz(yFrac));
@@ -1685,39 +1737,73 @@ class _SpectroPainter extends CustomPainter {
       tp.paint(canvas, Offset(x - tp.width / 2, pTop + plotH + 6));
     }
 
-    // 6) Frequency (y) axis labels — ONE numbering key for both views:
-    //    (A) frequencyBins row values when available;
-    //    (B) linear interpolation max..max(min, 30);
-    //    (C) fallback: Arabic bin index.
-    //    The linear view places those values at equal fifths; the log view
-    //    warps every value to its true position on the curved axis, so the
-    //    numbers stay identical to the linear view in both modes.
-    final bins = frequencyBins;
-    final hasBins = bins != null && bins.length > 1 && dataRowCount > 0;
-    final binCount = hasBins ? bins.length : dataRowCount;
-    final axisFloor = minFrequency > 0 ? minFrequency : 30.0;
-    final freqSpan = maxFrequency - axisFloor;
-    final useBinIndexLabels = !hasBins && !(binCount > 0 && freqSpan > 0);
+    // 6) Frequency (y) axis labels — web parity (log-frequency-labels.js):
+    //  • pure log10 picture: adaptive round numbers (10, 20, 50, 100 … chosen
+    //    so labels stay ~32px apart), plus minHz and maxHz from the server.
+    //  • hybrid focus+log warp: the static CANDIDATE_VALUES list.
+    //  • linear view: the server frequencyBins numbering (spectrogram.js
+    //    3109–3133): (A) bins rows, (B) max..axisFloor, (C) bin index.
     var lastLabelY = double.negativeInfinity;
-    for (var i = 0; i <= _yTicks; i++) {
-      final yFrac = i / _yTicks;
-      final String label;
-      if (useBinIndexLabels) {
-        final bin = ((1 - yFrac) * (binCount > 0 ? binCount - 1 : 0)).round();
-        label = 'نطاق $bin';
-      } else {
-        label = '${_axisLabelHz(yFrac).round().clamp(0, 99999)} Hz';
+    if (axis != null) {
+      final values = axis.pureLog10
+          ? adaptiveLog10LabelValues(
+              minHz: axis.minHz,
+              maxHz: axis.maxHz,
+              plotHeight: plotH,
+              positionOf: (hz) => frequencyToPosition(axis, hz),
+            )
+          : <double>[
+              axis.minHz,
+              for (final c in kLogLabelCandidates)
+                if (c > axis.minHz && c < axis.maxHz) c,
+              axis.maxHz,
+            ];
+      final positioned = <List<double>>[]; // [value, y]
+      for (final v in values) {
+        positioned.add([v, pTop + plotH * (1.0 - frequencyToPosition(axis, v))]);
       }
-      final double y;
-      if (axis != null && !useBinIndexLabels) {
-        y = pTop + plotH * (1.0 - frequencyToPosition(axis, _axisLabelHz(yFrac)));
-      } else {
-        y = pTop + plotH * yFrac;
+      // Drop labels closer than 14px to the previous one, but always keep
+      // the maximum-frequency label (web MIN_LABEL_GAP_PX behaviour).
+      final kept = <List<double>>[];
+      for (var k = 0; k < positioned.length; k++) {
+        final item = positioned[k];
+        final isLast = k == positioned.length - 1;
+        if (kept.isNotEmpty && (kept.last[1] - item[1]).abs() < 14.0) {
+          if (isLast) kept[kept.length - 1] = item;
+          continue;
+        }
+        kept.add(item);
       }
-      if (y - lastLabelY < 10.0) continue; // never overlap the previous label
-      final fp = _getFreqLabelPainter(label);
-      fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
-      lastLabelY = y;
+      for (final item in kept) {
+        final y = item[1];
+        // Short tick at the plot edge (web drawLogFrequencyAxisLabels).
+        canvas.drawLine(Offset(pLeft - 4, y), Offset(pLeft, y), _axisPaint);
+        final fp = _getFreqLabelPainter('${item[0].round()} Hz');
+        fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
+        lastLabelY = y;
+      }
+    } else {
+      final bins = frequencyBins;
+      final hasBins = bins != null && bins.length > 1 && dataRowCount > 0;
+      final binCount = hasBins ? bins.length : dataRowCount;
+      final axisFloor = minFrequency > 0 ? minFrequency : 30.0;
+      final freqSpan = maxFrequency - axisFloor;
+      final useBinIndexLabels = !hasBins && !(binCount > 0 && freqSpan > 0);
+      for (var i = 0; i <= _yTicks; i++) {
+        final yFrac = i / _yTicks;
+        final String label;
+        if (useBinIndexLabels) {
+          final bin = ((1 - yFrac) * (binCount > 0 ? binCount - 1 : 0)).round();
+          label = 'نطاق $bin';
+        } else {
+          label = '${_axisLabelHz(yFrac).round().clamp(0, 99999)} Hz';
+        }
+        final y = pTop + plotH * yFrac;
+        if (y - lastLabelY < 10.0) continue; // never overlap the previous label
+        final fp = _getFreqLabelPainter(label);
+        fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
+        lastLabelY = y;
+      }
     }
 
     // 6b) Long-press frequency guide (dashed horizontal line + Hz label).
