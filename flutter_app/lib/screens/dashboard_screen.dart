@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -295,20 +293,6 @@ class DashboardScreen extends StatelessWidget {
                           },
                         ),
                       ),
-                    ],
-                  )),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
-              child: Row(
-                    children: [
-                      const Text('تركيز حتى',
-                          style: TextStyle(color: Colors.white70, fontSize: 12)),
-                      const SizedBox(width: 6),
-                      _FocusHzField(controller: c),
-                      const SizedBox(width: 4),
-                      const Text('Hz',
-                          style: TextStyle(color: Colors.white38, fontSize: 12)),
                       const Spacer(),
                       IconButton(
                         tooltip: 'تصدير لقطة',
@@ -327,7 +311,7 @@ class DashboardScreen extends StatelessWidget {
                         ),
                       ),
                     ],
-                  ),
+                  )),
             ),
           ],
           Padding(
@@ -1110,92 +1094,3 @@ class _AIReportDialogState extends State<_AIReportDialog> {
   }
 }
 
-/// Numeric "focus until N Hz" field (web `logFocusHzInput` parity).
-/// Applies after a 400ms typing pause or on submit; invalid values fall back
-/// to the controller default (200 Hz).
-class _FocusHzField extends StatefulWidget {
-  final DashboardController controller;
-  const _FocusHzField({required this.controller});
-
-  @override
-  State<_FocusHzField> createState() => _FocusHzFieldState();
-}
-
-class _FocusHzFieldState extends State<_FocusHzField> {
-  late final TextEditingController _ctrl;
-  final FocusNode _focusNode = FocusNode();
-  Timer? _debounce;
-  Worker? _syncWorker;
-  bool _focused = false;
-
-  static String _format(double v) =>
-      v == v.roundToDouble() ? v.toInt().toString() : '$v';
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = TextEditingController(text: _format(widget.controller.focusHz.value));
-    _focusNode.addListener(() {
-      final f = _focusNode.hasFocus;
-      if (_focused != f) {
-        _focused = f;
-        if (!f) _submit();
-      }
-    });
-    _syncWorker = ever(widget.controller.focusHz, (double v) {
-      if (!_focused && _ctrl.text != _format(v)) {
-        _ctrl.text = _format(v);
-      }
-    });
-  }
-
-  void _apply(String raw) {
-    final parsed = double.tryParse(raw.trim().replaceAll(',', '.'));
-    widget.controller.setFocusHz(parsed ?? 0);
-  }
-
-  void _submit() {
-    _debounce?.cancel();
-    _apply(_ctrl.text);
-  }
-
-  @override
-  void dispose() {
-    _debounce?.cancel();
-    _syncWorker?.dispose();
-    _ctrl.dispose();
-    _focusNode.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 64,
-      child: TextField(
-        controller: _ctrl,
-        focusNode: _focusNode,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        textAlign: TextAlign.center,
-        style: const TextStyle(color: Colors.white, fontSize: 12),
-        decoration: InputDecoration(
-          isDense: true,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-          hintText: '200',
-          hintStyle: const TextStyle(color: Colors.white24, fontSize: 12),
-          enabledBorder: const OutlineInputBorder(
-            borderSide: BorderSide(color: Colors.white24),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: Theme.of(context).colorScheme.primary),
-          ),
-        ),
-        onChanged: (v) {
-          _debounce?.cancel();
-          _debounce = Timer(const Duration(milliseconds: 400), () => _apply(v));
-        },
-        onSubmitted: (_) => _submit(),
-      ),
-    );
-  }
-}

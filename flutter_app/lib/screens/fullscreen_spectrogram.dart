@@ -76,6 +76,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
   late final ValueNotifier<double> _gainNotifier;
   late List<MarkerData> _markers;
   late bool _logFrequencyView;
+  int _lineThickness = 2;
   bool _controlsVisible = true;
   final _canvasKey = GlobalKey<SpectrogramCanvasState>();
   final _fsExportBoundaryKey = GlobalKey();
@@ -100,6 +101,11 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
     _gainNotifier = ValueNotifier<double>(_gainDb);
     _markers = List<MarkerData>.from(widget.markers);
     _logFrequencyView = widget.logFrequencyView;
+    _lineThickness = (Get.isRegistered<DashboardController>()
+                ? Get.find<DashboardController>()
+                : null)
+            ?.lineThickness.value ??
+        2;
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
@@ -287,18 +293,33 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                               child: Row(
                                 children: [
-                                  Switch(
-                                    value: _logFrequencyView,
-                                    onChanged: (v) => setState(() => _logFrequencyView = v),
-                                    activeThumbColor: Theme.of(context).colorScheme.primary,
-                                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                  ),
+                                  const Icon(Icons.line_weight,
+                                      size: 11, color: Colors.white70),
                                   const SizedBox(width: 4),
-                                  const Expanded(
-                                    child: Text(
-                                      'عرض لوغاريتمي',
-                                      style: TextStyle(color: Colors.white70, fontSize: 9),
-                                    ),
+                                  DropdownButton<int>(
+                                    value: _lineThickness,
+                                    isDense: true,
+                                    underline: const SizedBox.shrink(),
+                                    style: const TextStyle(
+                                        color: Colors.white70, fontSize: 9),
+                                    dropdownColor: const Color(0xFF1A1A2E),
+                                    items: const [1, 2, 3, 4, 5]
+                                        .map((v) => DropdownMenuItem<int>(
+                                              value: v,
+                                              child: Text('${v}px',
+                                                  style: const TextStyle(
+                                                      fontSize: 9)),
+                                            ))
+                                        .toList(),
+                                    onChanged: (v) {
+                                      if (v == null) return;
+                                      setState(() => _lineThickness = v);
+                                      final c = Get.isRegistered<
+                                                  DashboardController>()
+                                              ? Get.find<DashboardController>()
+                                              : null;
+                                      c?.setLineThickness(v);
+                                    },
                                   ),
                                 ],
                               ),
