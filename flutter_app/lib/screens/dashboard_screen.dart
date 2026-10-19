@@ -246,8 +246,33 @@ class DashboardScreen extends StatelessWidget {
             ),
             Padding(
               padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
-              child: Obx(() => Row(
+              child: Obx(() {
+                final atDefault = c.lineThickness.value == 2 &&
+                    c.gainDb.value == 0 &&
+                    c.colorMapName.value == kDefaultColorMap;
+                return Row(
                     children: [
+                      OutlinedButton(
+                        onPressed: () {
+                          c.setLineThickness(2);
+                          c.updateGain(0);
+                          c.canvasKey.currentState?.applyGain();
+                          c.setColorMap(kDefaultColorMap);
+                        },
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor:
+                              atDefault ? scheme.primary : Colors.white38,
+                          side: BorderSide(
+                              color: atDefault ? scheme.primary : Colors.white24),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          visualDensity: VisualDensity.compact,
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: const Text('Default',
+                            style: TextStyle(fontSize: 11)),
+                      ),
+                      const SizedBox(width: 6),
                       const Icon(Icons.line_weight, size: 18, color: Colors.white70),
                       const SizedBox(width: 6),
                       Container(
@@ -311,7 +336,8 @@ class DashboardScreen extends StatelessWidget {
                         ),
                       ),
                     ],
-                  )),
+                  );
+              }),
             ),
           ],
           Padding(

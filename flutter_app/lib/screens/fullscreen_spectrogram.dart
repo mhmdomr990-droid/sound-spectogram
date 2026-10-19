@@ -94,6 +94,28 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
     );
   }
 
+  DashboardController? get _c => Get.isRegistered<DashboardController>()
+      ? Get.find<DashboardController>()
+      : null;
+
+  bool _atDefault() =>
+      _gainDb == 0 &&
+      _lineThickness == 2 &&
+      (_c?.colorMapName.value ?? kDefaultColorMap) == kDefaultColorMap;
+
+  void _resetDefaults() {
+    final c = _c;
+    c?.updateGain(0);
+    c?.setLineThickness(2);
+    c?.setColorMap(kDefaultColorMap);
+    _gainNotifier.value = 0;
+    _canvasKey.currentState?.applyGain();
+    setState(() {
+      _gainDb = 0;
+      _lineThickness = 2;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -320,6 +342,25 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                               : null;
                                       c?.setLineThickness(v);
                                     },
+                                  ),
+                                  const SizedBox(width: 6),
+                                  TextButton(
+                                    onPressed: _resetDefaults,
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: _atDefault()
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .primary
+                                          : Colors.white38,
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6),
+                                      visualDensity: VisualDensity.compact,
+                                      minimumSize: Size.zero,
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                    ),
+                                    child: const Text('Default',
+                                        style: TextStyle(fontSize: 9)),
                                   ),
                                 ],
                               ),
