@@ -1913,7 +1913,7 @@ class _SpectroPainter extends CustomPainter {
         final y = item[1];
         // Short tick at the plot edge (web drawLogFrequencyAxisLabels).
         canvas.drawLine(Offset(pLeft - 4, y), Offset(pLeft, y), _axisPaint);
-        final fp = _getFreqLabelPainter('${item[0].round()} Hz');
+        final fp = _getFreqLabelPainter('${item[0].round()}');
         fp.paint(canvas, Offset(pLeft - 6 - fp.width, y - fp.height / 2));
         lastLabelY = y;
       }
@@ -1931,7 +1931,7 @@ class _SpectroPainter extends CustomPainter {
           final bin = ((1 - yFrac) * (binCount > 0 ? binCount - 1 : 0)).round();
           label = 'نطاق $bin';
         } else {
-          label = '${_axisLabelHz(yFrac).round().clamp(0, 99999)} Hz';
+          label = '${_axisLabelHz(yFrac).round().clamp(0, 99999)}';
         }
         final y = pTop + plotH * yFrac;
         if (y - lastLabelY < 10.0) continue; // never overlap the previous label
