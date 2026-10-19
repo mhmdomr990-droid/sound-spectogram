@@ -59,16 +59,11 @@ class DashboardController extends GetxController {
   static const _logViewStorageKey = 'logFrequencyView';
   static const _focusStorageKey = 'logFocusHz';
 
-  // Spectrogram appearance (web parity: colorMap / noiseLevel / lineSoftness).
+  // Spectrogram appearance (web parity: colorMap / noiseLevel).
   final colorMapName = kDefaultColorMap.obs;
   final noiseLevel = 0.obs;
   static const _colorMapStorageKey = 'colorMap';
   static const _noiseLevelStorageKey = 'noiseLevel';
-
-  /// Intensity upscale blend: 0 = nearest (crisp), 1 = bilinear (soft/wide —
-  /// the web's gl.LINEAR texture filter). Default crisp.
-  final lineSoftness = 0.0.obs;
-  static const _lineSoftnessStorageKey = 'lineSoftness';
 
   // Collapsible control rows (gain / colour map / noise / log-focus).
   // Hidden by default so the spectrogram gets the space.
@@ -385,10 +380,6 @@ class DashboardController extends GetxController {
       if (noise != null) {
         noiseLevel.value = noise.clamp(0, 10);
       }
-      final soft = double.tryParse(prefs.getString(_lineSoftnessStorageKey) ?? '');
-      if (soft != null && soft.isFinite) {
-        lineSoftness.value = soft.clamp(0.0, 1.0);
-      }
       showControls.value = prefs.getString(_showControlsStorageKey) == '1';
     } catch (_) {}
   }
@@ -444,18 +435,6 @@ class DashboardController extends GetxController {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_noiseLevelStorageKey, '$safe');
-    } catch (_) {}
-  }
-
-  /// Set the line-softness blend 0..1 (0 nearest/crisp, 1 bilinear/soft like
-  /// the web). Persisted.
-  Future<void> setLineSoftness(double value) async {
-    final safe = value.clamp(0.0, 1.0);
-    if (lineSoftness.value == safe) return;
-    lineSoftness.value = safe;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_lineSoftnessStorageKey, '$safe');
     } catch (_) {}
   }
 
