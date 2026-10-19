@@ -344,7 +344,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                     },
                                   ),
                                   const SizedBox(width: 6),
-                                  TextButton(
+                                  TextButton.icon(
                                     onPressed: _resetDefaults,
                                     style: TextButton.styleFrom(
                                       foregroundColor: _atDefault()
@@ -359,7 +359,12 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                       tapTargetSize:
                                           MaterialTapTargetSize.shrinkWrap,
                                     ),
-                                    child: const Text('Default',
+                                    icon: Icon(
+                                        _atDefault()
+                                            ? Icons.check
+                                            : Icons.close,
+                                        size: 10),
+                                    label: const Text('Default',
                                         style: TextStyle(fontSize: 9)),
                                   ),
                                 ],

@@ -252,7 +252,7 @@ class DashboardScreen extends StatelessWidget {
                     c.colorMapName.value == kDefaultColorMap;
                 return Row(
                     children: [
-                      OutlinedButton(
+                      OutlinedButton.icon(
                         onPressed: () {
                           c.setLineThickness(2);
                           c.updateGain(0);
@@ -269,7 +269,9 @@ class DashboardScreen extends StatelessWidget {
                           minimumSize: Size.zero,
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                        child: const Text('Default',
+                        icon: Icon(
+                            atDefault ? Icons.check : Icons.close, size: 12),
+                        label: const Text('Default',
                             style: TextStyle(fontSize: 11)),
                       ),
                       const SizedBox(width: 6),
