@@ -294,6 +294,31 @@ class DashboardScreen extends StatelessWidget {
                   )),
             ),
             Padding(
+              padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
+              child: Obx(() => Row(
+                    children: [
+                      const Icon(Icons.blur_on, size: 18, color: Colors.white70),
+                      const SizedBox(width: 6),
+                      Text(
+                        'نعومة الخط: ${(c.lineSoftness.value * 100).round()}%',
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4)),
+                          child: Slider(
+                            value: c.lineSoftness.value,
+                            min: 0,
+                            max: 1,
+                            divisions: 20,
+                            onChanged: (v) => c.setLineSoftness(v),
+                          ),
+                        ),
+                      ),
+                    ],
+                  )),
+            ),
+            Padding(
               padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
               child: Obx(() => Row(
                     children: [
@@ -468,6 +493,7 @@ class DashboardScreen extends StatelessWidget {
                 focusHz: c.focusHz.value,
                 colorMapName: c.colorMapName.value,
                 noiseLevel: c.noiseLevel.value,
+                lineSoftness: c.lineSoftness.value,
                 onMarkerAdd: (timeMs) => c.addMarker(timeMs),
                 onMarkerRemove: (index) => c.removeMarker(index),
                 onMarkerMove: (index, newTimeMs) => c.moveMarker(index, newTimeMs),

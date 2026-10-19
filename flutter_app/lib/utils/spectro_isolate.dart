@@ -7,11 +7,12 @@ import 'dart:ui' as ui;
 import 'spectro.dart';
 import 'log_axis.dart';
 
-/// Stage-1 view build: nearest-upscale the raw intensity plane to the
-/// on-screen plot resolution (+ log-axis warp when requested), executed on
-/// the render isolate so the UI thread never freezes. The gain LUT is applied
-/// AFTER this step on the UI thread (a cheap per-pixel lookup), so gain
-/// changes never re-run the warp.
+/// Stage-1 view build: max-downscale the raw intensity plane to the on-screen
+/// plot resolution (+ log-axis warp when requested), executed on the render
+/// isolate so the UI thread never freezes. The max bucket keeps thin bright
+/// peaks at full strength (web parity). The gain LUT is applied AFTER this
+/// step on the UI thread (a cheap per-pixel lookup), so gain changes never
+/// re-run the warp.
 class WarpRequest {
   final Uint8List intensity;
   final int width;
@@ -26,11 +27,15 @@ class WarpRequest {
   final double focusHz;
 
   /// Target size in device pixels (plot rect × devicePixelRatio). The plane
-  /// is nearest-upscaled to this size so both views share the exact pixel
-  /// grid of the on-screen rendering — the same "render linear first, warp
-  /// those pixels" pipeline the web uses. Values <= 0 keep data resolution.
+  /// is upscaled to this size so both views share the exact pixel grid of the
+  /// on-screen rendering — the same "render linear first, warp those pixels"
+  /// pipeline the web uses. Values <= 0 keep data resolution.
   final int dstWidth;
   final int dstHeight;
+
+  /// Blend between nearest (0, crisp/thin) and bilinear (1, soft/wide — the
+  /// web's gl.LINEAR texture filter) when upscaling to display resolution.
+  final double softness;
 
   const WarpRequest({
     required this.intensity,
@@ -42,6 +47,7 @@ class WarpRequest {
     required this.focusHz,
     this.dstWidth = 0,
     this.dstHeight = 0,
+    this.softness = 0.0,
   });
 }
 
@@ -58,6 +64,7 @@ class RenderRequest {
   final int neighborhoodSize;
   final int minActiveNeighbors;
   final String? intensityType;
+  final String intensityMode;
   final double dbMin;
   final double dbMax;
   final bool debug;
@@ -86,6 +93,7 @@ class RenderRequest {
     this.neighborhoodSize = 3,
     this.minActiveNeighbors = 1,
     this.intensityType,
+    this.intensityMode = 'linear',
     this.dbMin = -95.0,
     this.dbMax = -20.0,
     this.debug = false,
@@ -302,6 +310,7 @@ void _isolateEntry(SendPort mainSendPort) {
         neighborhoodSize: req.neighborhoodSize,
         minActiveNeighbors: req.minActiveNeighbors,
         intensityType: req.intensityType,
+        intensityMode: req.intensityMode,
         dbMin: req.dbMin,
         dbMax: req.dbMax,
         debug: req.debug,
@@ -341,7 +350,7 @@ Uint8List _upscaleAndWarp(WarpRequest req) {
   final dw = req.dstWidth;
   final dh = req.dstHeight;
   if (dw > 0 && dh > 0 && (dw != w || dh != h)) {
-    plane = _nearestUpscaleI8(intensity, w, h, dw, dh);
+    plane = _upscaleI8(intensity, w, h, dw, dh, req.softness);
     pw = dw;
     ph = dh;
   }
@@ -370,24 +379,101 @@ double _avg(Uint8List b) {
   return s / n;
 }
 
-/// Nearest-neighbour upscale matching Flutter's
-/// `drawImageRect(..., FilterQuality.none)` sampling:
-/// `src = floor((dst + 0.5) * srcSize / dstSize)`, clamped to the source.
-Uint8List _nearestUpscaleI8(
+/// Max-bucket downscale — the web's intensityBuffer fill: each destination
+/// pixel takes the maximum over the source region that maps to it, so a thin
+/// bright peak never dims (web parity for line brightness/thickness).
+Uint8List _maxReduceI8(
     Uint8List src, int srcW, int srcH, int dstW, int dstH) {
   final out = Uint8List(dstW * dstH);
-  final xMap = Int32List(dstW);
-  for (var x = 0; x < dstW; x++) {
-    final sx = ((2 * x + 1) * srcW) ~/ (2 * dstW);
-    xMap[x] = sx >= srcW ? srcW - 1 : sx;
-  }
   for (var y = 0; y < dstH; y++) {
-    var sy = ((2 * y + 1) * srcH) ~/ (2 * dstH);
-    if (sy >= srcH) sy = srcH - 1;
-    final srcRow = sy * srcW;
+    final sy0 = (y * srcH) ~/ dstH;
+    var sy1 = ((y + 1) * srcH) ~/ dstH;
+    if (sy1 <= sy0) sy1 = sy0 + 1;
+    if (sy1 > srcH) sy1 = srcH;
     final dstRow = y * dstW;
     for (var x = 0; x < dstW; x++) {
-      out[dstRow + x] = src[srcRow + xMap[x]];
+      final sx0 = (x * srcW) ~/ dstW;
+      var sx1 = ((x + 1) * srcW) ~/ dstW;
+      if (sx1 <= sx0) sx1 = sx0 + 1;
+      if (sx1 > srcW) sx1 = srcW;
+      var m = 0;
+      for (var sy = sy0; sy < sy1; sy++) {
+        final rowOff = sy * srcW;
+        for (var sx = sx0; sx < sx1; sx++) {
+          final v = src[rowOff + sx];
+          if (v > m) m = v;
+        }
+      }
+      out[dstRow + x] = m;
+    }
+  }
+  return out;
+}
+
+/// Softness-aware downscale: 0 = max-bucket (bright, web parity — a peak is
+/// never missed or dimmed), 1 = bilinear (soft/wide, the web's gl.LINEAR
+/// filter), in between = a linear blend of the two.
+Uint8List _upscaleI8(
+    Uint8List src, int srcW, int srcH, int dstW, int dstH, double softness) {
+  final t = softness <= 0 ? 0.0 : (softness >= 1 ? 1.0 : softness);
+  if (t <= 0) return _maxReduceI8(src, srcW, srcH, dstW, dstH);
+  final maxR = _maxReduceI8(src, srcW, srcH, dstW, dstH);
+  if (t >= 1) return _bilinearUpscaleI8(src, srcW, srcH, dstW, dstH);
+  final bil = _bilinearUpscaleI8(src, srcW, srcH, dstW, dstH);
+  final out = Uint8List(maxR.length);
+  for (var i = 0; i < out.length; i++) {
+    out[i] = (maxR[i] + (bil[i] - maxR[i]) * t).round().clamp(0, 255);
+  }
+  return out;
+}
+
+/// Bilinear upscale matching a GPU gl.LINEAR texture sample: each destination
+/// pixel samples the four nearest source texels with fractional weights, so a
+/// thin bright peak spreads into a wider, softer glow (web parity).
+Uint8List _bilinearUpscaleI8(
+    Uint8List src, int srcW, int srcH, int dstW, int dstH) {
+  final out = Uint8List(dstW * dstH);
+  // Precompute the horizontal source texel pairs + fractional weight per column.
+  final x0s = Int32List(dstW);
+  final x1s = Int32List(dstW);
+  final xW = Float64List(dstW);
+  for (var x = 0; x < dstW; x++) {
+    final fx = (x + 0.5) * srcW / dstW - 0.5;
+    var x0 = fx.floor();
+    final frac = fx - x0;
+    var x1 = x0 + 1;
+    if (x0 < 0) x0 = 0;
+    if (x0 >= srcW) x0 = srcW - 1;
+    if (x1 < 0) x1 = 0;
+    if (x1 >= srcW) x1 = srcW - 1;
+    x0s[x] = x0;
+    x1s[x] = x1;
+    xW[x] = frac < 0 ? 0.0 : (frac > 1 ? 1.0 : frac);
+  }
+  for (var y = 0; y < dstH; y++) {
+    final fy = (y + 0.5) * srcH / dstH - 0.5;
+    var y0 = fy.floor();
+    final fyFrac = fy - y0;
+    var y1 = y0 + 1;
+    if (y0 < 0) y0 = 0;
+    if (y0 >= srcH) y0 = srcH - 1;
+    if (y1 < 0) y1 = 0;
+    if (y1 >= srcH) y1 = srcH - 1;
+    final row0 = y0 * srcW;
+    final row1 = y1 * srcW;
+    final dstRow = y * dstW;
+    final wy = fyFrac < 0 ? 0.0 : (fyFrac > 1 ? 1.0 : fyFrac);
+    for (var x = 0; x < dstW; x++) {
+      final x0 = x0s[x];
+      final x1 = x1s[x];
+      final wx = xW[x];
+      final p00 = src[row0 + x0];
+      final p10 = src[row0 + x1];
+      final p01 = src[row1 + x0];
+      final p11 = src[row1 + x1];
+      final top = p00 + (p10 - p00) * wx;
+      final bot = p01 + (p11 - p01) * wx;
+      out[dstRow + x] = (top + (bot - top) * wy).round().clamp(0, 255);
     }
   }
   return out;

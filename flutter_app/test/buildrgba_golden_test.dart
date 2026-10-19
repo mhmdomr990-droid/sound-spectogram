@@ -119,6 +119,24 @@ void main() {
         'iso': false,
         'morph': false,
       },
+      // Non-linear db modes must still work when explicitly requested (the
+      // default is linear, matching the web's intensityMode: "linear").
+      'c12-db-percentile': {
+        'm': makeMatrix(48, 300, 12, maxV: 900),
+        'width': 300,
+        'height': 48,
+        'intensityType': 'magnitude',
+        'intensityMode': 'db-percentile',
+      },
+      'c13-db-fixed': {
+        'm': makeMatrix(48, 300, 13, maxV: 900),
+        'width': 300,
+        'height': 48,
+        'intensityType': 'magnitude',
+        'intensityMode': 'db-fixed',
+        'dbMin': -100,
+        'dbMax': -10,
+      },
     };
 
     final results = <String, String>{};
@@ -135,6 +153,7 @@ void main() {
         neighborhoodSize: (cfg['neighborhoodSize'] as int?) ?? 3,
         minActiveNeighbors: (cfg['minActiveNeighbors'] as int?) ?? 1,
         intensityType: cfg['intensityType'] as String?,
+        intensityMode: (cfg['intensityMode'] as String?) ?? 'linear',
         dbMin: (cfg['dbMin'] as num?) ?? -95,
         dbMax: (cfg['dbMax'] as num?) ?? -20,
         gainDb: (cfg['gainDb'] as num?) ?? 0.0,

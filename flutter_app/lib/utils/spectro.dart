@@ -496,6 +496,7 @@ SpectroRgbaResult buildRgba(
   int neighborhoodSize = 3,
   int minActiveNeighbors = 1,
   String? intensityType,
+  String intensityMode = 'linear',
   num dbMin = -95,
   num dbMax = -20,
   bool debug = false,
@@ -698,7 +699,9 @@ SpectroRgbaResult buildRgba(
     // Build an intensity mapper similar to web's buildIntensityMapper.
       // build intensity mapper using the raw input matrix (matches web's collectDbSamples)
       final intensityMapper = _buildIntensityMapper(matrix,
-        intensityType: effectiveIntensityType, dbMin: dbMin, dbMax: dbMax);
+        intensityType: effectiveIntensityType,
+        intensityMode: intensityMode,
+        dbMin: dbMin, dbMax: dbMax);
 
     // helper matching web's aggregateBucketValue behaviour (supports 'hybrid').
     double _aggregateBucketValue(double maxValue, double sumValue, int countValue, {String bucketAggregation = 'hybrid'}) {
@@ -864,6 +867,7 @@ typedef _IntensityMapFn = double Function(num value);
 
 _IntensityMapFn _buildIntensityMapper(List<List<num>> blocks,
   {String? intensityType,
+  String intensityMode = 'linear',
   num inputValueMax = 255,
   num dbMin = -95,
   num dbMax = -20,
@@ -873,7 +877,21 @@ _IntensityMapFn _buildIntensityMapper(List<List<num>> blocks,
   final type = intensityType ?? 'uint8';
   final allowsDb = (type == 'magnitude' || type == 'db');
 
-  if (!allowsDb) {
+  // Mirror web buildIntensityMapper (spectrogram.js:917-941): the only
+  // non-linear modes are db-fixed / db-percentile, and a non-db type can never
+  // use them. The web default is intensityMode "linear" (spectrogram.js:7).
+  var mode = intensityMode.toLowerCase();
+  if (mode != 'db-fixed' && mode != 'db-percentile') {
+    mode = 'linear';
+  }
+  if (!allowsDb && mode != 'linear') {
+    mode = 'linear';
+  }
+
+  // Web linear path (spectrogram.js:929-941): proportional v/inputValueMax for
+  // EVERY intensity type, magnitude/db included. This is what keeps loud tones
+  // calm (orange) instead of saturating them to yellow.
+  if (mode == 'linear') {
     return (num v) => normalizeIntensity(v, inputValueMax: inputValueMax);
   }
 
@@ -882,47 +900,46 @@ _IntensityMapFn _buildIntensityMapper(List<List<num>> blocks,
   if (!minDb.isFinite) minDb = -95.0;
   if (!maxDb.isFinite || maxDb <= minDb) maxDb = minDb + 75.0;
 
-  // If percentiles requested, collect db samples from blocks (subsample) similar to web.
-  try {
-    final samples = <double>[];
-    for (var r = 0; r < blocks.length; r += 1) {
-      final row = blocks[r];
-      if (row == null || row.isEmpty) continue;
-      final rows = blocks.length;
-      final cols = row.length;
-      final rowStep = max(1, (rows / 48).floor());
-      final colStep = max(1, (cols / 48).floor());
-      for (var rr = 0; rr < rows; rr += rowStep) {
-        for (var cc = 0; cc < cols; cc += colStep) {
-          final raw = blocks[rr][cc];
-          final db = _dbFromMagnitude(raw);
-          if (db.isFinite) {
-            samples.add(db);
-            if (samples.length >= maxSamples) break;
+  // db-percentile overrides the range with the 5th/99th percentiles of sampled
+  // dB values (web spectrogram.js:961-981). db-fixed keeps dbMin/dbMax as-is.
+  if (mode == 'db-percentile') {
+    try {
+      final samples = <double>[];
+      for (var r = 0; r < blocks.length; r += 1) {
+        final row = blocks[r];
+        if (row == null || row.isEmpty) continue;
+        final rows = blocks.length;
+        final cols = row.length;
+        final rowStep = max(1, (rows / 48).floor());
+        final colStep = max(1, (cols / 48).floor());
+        for (var rr = 0; rr < rows; rr += rowStep) {
+          for (var cc = 0; cc < cols; cc += colStep) {
+            final raw = blocks[rr][cc];
+            final db = _dbFromMagnitude(raw);
+            if (db.isFinite) {
+              samples.add(db);
+              if (samples.length >= maxSamples) break;
+            }
           }
+          if (samples.length >= maxSamples) break;
         }
         if (samples.length >= maxSamples) break;
       }
-      if (samples.length >= maxSamples) break;
-    }
 
-    if (samples.isNotEmpty) {
-      samples.sort();
-      final lowIdx = ((samples.length - 1) * (percentileLow / 100.0)).floor().clamp(0, samples.length - 1);
-      final highIdx = ((samples.length - 1) * (percentileHigh / 100.0)).floor().clamp(0, samples.length - 1);
-      final qLow = samples[lowIdx];
-      final qHigh = samples[highIdx];
-      if (qHigh.isFinite && qLow.isFinite && qHigh > qLow) {
-        minDb = qLow;
-        maxDb = qHigh;
+      if (samples.isNotEmpty) {
+        samples.sort();
+        final lowIdx = ((samples.length - 1) * (percentileLow / 100.0)).floor().clamp(0, samples.length - 1);
+        final highIdx = ((samples.length - 1) * (percentileHigh / 100.0)).floor().clamp(0, samples.length - 1);
+        final qLow = samples[lowIdx];
+        final qHigh = samples[highIdx];
+        if (qHigh.isFinite && qLow.isFinite && qHigh > qLow) {
+          minDb = qLow;
+          maxDb = qHigh;
+        }
       }
-      // Emit debug info so we can compare Flutter's chosen percentiles with web
-      try {
-        print('SPECTRO DEBUG: intensityMapper samples=${samples.length} qLow=${qLow.toStringAsFixed(3)} qHigh=${qHigh.toStringAsFixed(3)} minDb=${minDb.toStringAsFixed(3)} maxDb=${maxDb.toStringAsFixed(3)}');
-      } catch (_) {}
+    } catch (_) {
+      // ignore and fall back to defaults
     }
-  } catch (_) {
-    // ignore and fall back to defaults
   }
 
   return (num v) {

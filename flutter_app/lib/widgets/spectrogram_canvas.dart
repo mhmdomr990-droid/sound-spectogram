@@ -94,6 +94,11 @@ class SpectrogramCanvas extends StatefulWidget {
   final num noiseLevel;
 
   final double noiseThreshold;
+
+  /// Blend when upscaling the intensity plane to display resolution:
+  /// 0 = nearest (crisp/thin), 1 = bilinear (soft/wide — the web's gl.LINEAR
+  /// texture filter, which widens thin bright peaks like the yellow lines).
+  final double lineSoftness;
   final ui.Image? seedImage;
   final List<List<double>>? seedCachedCombined;
   final int seedCachedWidth;
@@ -155,6 +160,7 @@ class SpectrogramCanvas extends StatefulWidget {
     this.colorMapName = kDefaultColorMap,
     this.noiseLevel = 0,
     this.noiseThreshold = 0.06,
+    this.lineSoftness = 0.0,
     this.seedImage,
     this.seedCachedCombined,
     this.seedCachedWidth = 0,
@@ -533,6 +539,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   // key: a layout/dpr/inset change makes the cached sizes stale.
   int _viewDstW = 0;
   int _viewDstH = 0;
+  // Softness the view images were built with — part of the cache key so a
+  // slider change re-warps the plane instead of returning the stale image.
+  double _viewSoftness = double.nan;
 
   // Content-token snapshot accepted by the last dataChanged decision — RxList
   // mutates in place (old/new widgets share one object), so the widgets cannot
@@ -714,6 +723,15 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     if (gainChanged && _cachedIntensity != null && _cachedIntensityWidth > 0 && _cachedIntensityHeight > 0) {
       _queueGainBuild();
     }
+    final softnessChanged = oldWidget.lineSoftness != widget.lineSoftness;
+    if (softnessChanged &&
+        _cachedIntensity != null &&
+        _cachedIntensityWidth > 0 &&
+        _cachedIntensityHeight > 0) {
+      // Re-upscale the plane with the new nearest<->bilinear blend (the plane
+      // cache is keyed by softness, so this re-warps once on the isolate).
+      _queueGainBuild();
+    }
     final axisChanged = oldWidget.logFrequencyView != widget.logFrequencyView ||
         oldWidget.focusHz != widget.focusHz ||
         oldWidget.minFrequency != widget.minFrequency ||
@@ -853,7 +871,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         _viewGamma != gamma ||
         _viewColorMap != widget.colorMapName ||
         _viewDstW != outW ||
-        _viewDstH != outH) {
+        _viewDstH != outH ||
+        _viewSoftness != widget.lineSoftness) {
       _invalidateViewCache();
       _viewIntensity = intensity;
       _viewGainDb = gainDb;
@@ -864,6 +883,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _viewMaxFreq = double.nan;
       _viewDstW = outW;
       _viewDstH = outH;
+      _viewSoftness = widget.lineSoftness;
     }
 
     // Warm cache: axis toggle needs no work at all.
@@ -941,6 +961,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   Uint8List? _planeLinearIntensity;
   int _planeLinDstW = 0;
   int _planeLinDstH = 0;
+  double _planeLinSoftness = double.nan;
 
   Uint8List? _planeLog;
   Uint8List? _planeLogIntensity;
@@ -949,6 +970,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   double _planeLogMaxFreq = double.nan;
   int _planeLogDstW = 0;
   int _planeLogDstH = 0;
+  double _planeLogSoftness = double.nan;
 
   Future<Uint8List?> _ensurePlane(
       bool log,
@@ -965,6 +987,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
           identical(_planeLogIntensity, intensity) &&
           _planeLogDstW == outW &&
           _planeLogDstH == outH &&
+          _planeLogSoftness == widget.lineSoftness &&
           _planeLogFocus == focus &&
           _planeLogMinFreq == minFreq &&
           _planeLogMaxFreq == maxFreq) {
@@ -977,7 +1000,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       if (_planeLinear != null &&
           identical(_planeLinearIntensity, intensity) &&
           _planeLinDstW == outW &&
-          _planeLinDstH == outH) {
+          _planeLinDstH == outH &&
+          _planeLinSoftness == widget.lineSoftness) {
         return _planeLinear;
       }
     }
@@ -991,6 +1015,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       focusHz: focus,
       dstWidth: outW,
       dstHeight: outH,
+      softness: widget.lineSoftness,
     ));
     if (bytes.isEmpty) return null;
     if (!mounted || !identical(_cachedIntensity, intensity)) {
@@ -1003,6 +1028,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _planeLogIntensity = intensity;
       _planeLogDstW = outW;
       _planeLogDstH = outH;
+      _planeLogSoftness = widget.lineSoftness;
       _planeLogFocus = focus;
       _planeLogMinFreq = minFreq;
       _planeLogMaxFreq = maxFreq;
@@ -1011,6 +1037,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _planeLinearIntensity = intensity;
       _planeLinDstW = outW;
       _planeLinDstH = outH;
+      _planeLinSoftness = widget.lineSoftness;
     }
     return bytes;
   }
