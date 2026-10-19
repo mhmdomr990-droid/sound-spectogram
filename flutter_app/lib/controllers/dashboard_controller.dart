@@ -70,6 +70,10 @@ class DashboardController extends GetxController {
   final showControls = false.obs;
   static const _showControlsStorageKey = 'showControls';
 
+  // Bright-line thickness in pixels (1 = untouched ... 5 = thickest).
+  final lineThickness = 2.obs;
+  static const _lineThicknessStorageKey = 'lineThickness';
+
   final canvasKey = GlobalKey<SpectrogramCanvasState>();
 
   StreamSubscription<DeviceHistory>? _dataSub;
@@ -381,6 +385,8 @@ class DashboardController extends GetxController {
         noiseLevel.value = noise.clamp(0, 10);
       }
       showControls.value = prefs.getString(_showControlsStorageKey) == '1';
+      final thick = int.tryParse(prefs.getString(_lineThicknessStorageKey) ?? '');
+      lineThickness.value = thick != null ? thick.clamp(1, 5) : 2;
     } catch (_) {}
   }
 
@@ -435,6 +441,18 @@ class DashboardController extends GetxController {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_noiseLevelStorageKey, '$safe');
+    } catch (_) {}
+  }
+
+  /// Set the bright-line thickness in pixels (1 = untouched, 2 = default,
+  /// ... 5 = thickest).
+  Future<void> setLineThickness(int px) async {
+    final safe = px.clamp(1, 5);
+    if (lineThickness.value == safe) return;
+    lineThickness.value = safe;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_lineThicknessStorageKey, '$safe');
     } catch (_) {}
   }
 

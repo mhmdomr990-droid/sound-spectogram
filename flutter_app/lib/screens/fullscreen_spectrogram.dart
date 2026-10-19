@@ -180,6 +180,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                         focusHz: c?.focusHz.value ?? widget.focusHz,
                         colorMapName: c?.colorMapName.value ?? kDefaultColorMap,
                         noiseLevel: c?.noiseLevel.value ?? 0,
+                        lineThickness: c?.lineThickness.value ?? 2,
                         markers: _markers,
                         onMarkerAdd: (timeMs) => setState(() => _markers = [..._markers, MarkerData(timeMs: timeMs)]),
                         onMarkerRemove: (index) => setState(() {

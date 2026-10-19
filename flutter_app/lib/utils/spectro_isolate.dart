@@ -37,10 +37,10 @@ class WarpRequest {
   /// web's gl.LINEAR texture filter) when upscaling to display resolution.
   final double softness;
 
-  /// Widen bright (yellow/scarlet) lines to 2px: each hot pixel copies its
-  /// full value into the row directly below it on the final plane. The dark
-  /// noise floor (< threshold) is untouched.
-  final bool thickenBright;
+  /// Bright-line thickening: rows added below each hot pixel on the final
+  /// plane (0 = off / 1px, 1 = 2px total, ...). The dark noise floor
+  /// (< threshold) is untouched.
+  final int thickenRows;
 
   const WarpRequest({
     required this.intensity,
@@ -53,7 +53,7 @@ class WarpRequest {
     this.dstWidth = 0,
     this.dstHeight = 0,
     this.softness = 0.0,
-    this.thickenBright = false,
+    this.thickenRows = 0,
   });
 }
 
@@ -361,7 +361,12 @@ Uint8List _upscaleAndWarp(WarpRequest req) {
     ph = dh;
   }
   if (!req.logView) {
-    if (req.thickenBright) _thickenBrightVertical(plane, pw, ph);
+    if (req.thickenRows > 0) {
+      // Never dilate the caller's source buffer in place — the equal-dims
+      // path aliases req.intensity (shared with the widget's plane cache).
+      if (identical(plane, intensity)) plane = Uint8List.fromList(plane);
+      _thickenBrightVertical(plane, pw, ph, req.thickenRows);
+    }
     return plane;
   }
   final warped = warpSpectrogramIntensity(
@@ -370,29 +375,33 @@ Uint8List _upscaleAndWarp(WarpRequest req) {
     ph,
     buildLogAxis(req.minFreq, req.maxFreq, req.focusHz),
   );
-  if (req.thickenBright) _thickenBrightVertical(warped, pw, ph);
+  if (req.thickenRows > 0) _thickenBrightVertical(warped, pw, ph, req.thickenRows);
   // ignore: avoid_print
   print('[TIMING] iso plane ${pw}x$ph log=${req.logView} '
       'inAvg=${_avg(plane)} outAvg=${_avg(warped)} outLen=${warped.length}');
   return warped;
 }
 
-/// Bright-line thickening to 2px: every hot pixel (>= threshold — the
-/// yellow/scarlet tone zone) copies its full value into the row directly
-/// below it, so a 1px line renders 2px tall while the dark noise floor stays
-/// untouched. Reads from a snapshot so a bright row cannot flood its column.
-void _thickenBrightVertical(Uint8List plane, int w, int h) {
-  if (w <= 0 || h <= 1) return;
+/// Bright-line thickening: every hot pixel (>= threshold — the yellow/scarlet
+/// tone zone) copies its full value into the `extraRows` rows directly below
+/// it, so a 1px line renders (1 + extraRows)px tall while the dark noise floor
+/// stays untouched. Reads from a snapshot so a bright row cannot flood its
+/// column.
+void _thickenBrightVertical(Uint8List plane, int w, int h, int extraRows) {
+  if (w <= 0 || h <= 1 || extraRows <= 0) return;
   const threshold = 160;
   final orig = Uint8List.fromList(plane);
-  for (var y = 0; y < h - 1; y++) {
+  final lastY = h - 1;
+  for (var y = 0; y < lastY; y++) {
     final srcOff = y * w;
-    final dstOff = srcOff + w;
+    final maxY = y + extraRows < lastY ? y + extraRows : lastY;
     for (var x = 0; x < w; x++) {
       final v = orig[srcOff + x];
       if (v < threshold) continue;
-      final i = dstOff + x;
-      if (plane[i] < v) plane[i] = v;
+      for (var yy = y + 1; yy <= maxY; yy++) {
+        final i = yy * w + x;
+        if (plane[i] < v) plane[i] = v;
+      }
     }
   }
 }

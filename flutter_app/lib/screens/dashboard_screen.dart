@@ -250,6 +250,32 @@ class DashboardScreen extends StatelessWidget {
               padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
               child: Obx(() => Row(
                     children: [
+                      const Icon(Icons.line_weight, size: 18, color: Colors.white70),
+                      const SizedBox(width: 6),
+                      Text(
+                        'سماكة الخط: ${c.lineThickness.value}px',
+                        style: const TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5)),
+                          child: Slider(
+                            value: c.lineThickness.value.toDouble(),
+                            min: 1,
+                            max: 5,
+                            divisions: 4,
+                            label: '${c.lineThickness.value}px',
+                            onChanged: (v) => c.setLineThickness(v.round()),
+                          ),
+                        ),
+                      ),
+                    ],
+                  )),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
+              child: Obx(() => Row(
+                    children: [
                       const Icon(Icons.palette, size: 18, color: Colors.white70),
                       const SizedBox(width: 6),
                       Container(
@@ -468,6 +494,7 @@ class DashboardScreen extends StatelessWidget {
                 focusHz: c.focusHz.value,
                 colorMapName: c.colorMapName.value,
                 noiseLevel: c.noiseLevel.value,
+                lineThickness: c.lineThickness.value,
                 onMarkerAdd: (timeMs) => c.addMarker(timeMs),
                 onMarkerRemove: (index) => c.removeMarker(index),
                 onMarkerMove: (index, newTimeMs) => c.moveMarker(index, newTimeMs),
