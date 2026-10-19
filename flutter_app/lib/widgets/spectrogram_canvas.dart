@@ -1016,6 +1016,7 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       dstWidth: outW,
       dstHeight: outH,
       softness: widget.lineSoftness,
+      thickenBright: true,
     ));
     if (bytes.isEmpty) return null;
     if (!mounted || !identical(_cachedIntensity, intensity)) {

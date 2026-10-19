@@ -99,4 +99,28 @@ void main() {
     expect(mid[47 * dstW], greaterThan(0));
     expect(bil[47 * dstW], greaterThan(mid[47 * dstW]));
   });
+
+  test('thickenBright extends the bright block by exactly one row (2px)',
+      () async {
+    final out = await warpSpectrogramIsolate(WarpRequest(
+      intensity: planeWithBrightRow(16),
+      width: srcW,
+      height: srcH,
+      logView: false,
+      minFreq: 0,
+      maxFreq: 500,
+      focusHz: 200,
+      dstWidth: dstW,
+      dstHeight: dstH,
+      softness: 0.0,
+      thickenBright: true,
+    ));
+    expect(out.length, dstW * dstH);
+    // Max upscale block sits on rows 48..50; dilation copies row 50 down to 51.
+    expect(out[49 * dstW], 255);
+    expect(out[51 * dstW], 255);
+    // Exactly one extra row: no flood past it, nothing added above.
+    expect(out[52 * dstW], 0);
+    expect(out[47 * dstW], 0);
+  });
 }
