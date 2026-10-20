@@ -604,6 +604,8 @@ class _AIReportDialogState extends State<_AIReportDialog> {
   int _selectedRange = 3;
   int _elapsedSec = 0;
   Timer? _elapsedTimer;
+  DateTime? _resultAt;
+  bool _silentRefresh = false;
 
   @override
   void initState() {
@@ -611,6 +613,7 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     _from = widget.initialFrom;
     _to = widget.initialTo;
     _device = widget.initialDevice;
+    _prefetch();
   }
 
   @override
@@ -644,6 +647,19 @@ class _AIReportDialogState extends State<_AIReportDialog> {
         _to = picked;
       }
     });
+    _prefetch();
+  }
+
+  /// Quantized ISO (5-minute bucket) so quick-range presses share one cache key.
+  String _isoQ(DateTime dt) {
+    final q = DateTime(dt.year, dt.month, dt.day, dt.hour, (dt.minute ~/ 5) * 5);
+    return _iso(q);
+  }
+
+  void _prefetch() {
+    final d = _device;
+    if (d == null) return;
+    Get.find<DashboardController>().prefetchAiReport(d.id, _isoQ(_from), _isoQ(_to));
   }
 
   String _fmt(DateTime dt) {
@@ -674,11 +690,55 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     return '$y-$m-${d}T$h:$min:$s';
   }
 
-  Future<void> _fetch({bool allowRetry = true}) async {
+  Future<void> _fetch() async {
+    final controller = Get.find<DashboardController>();
+    final d = _device;
+    if (d == null) return;
+    final fromIso = _isoQ(_from);
+    final toIso = _isoQ(_to);
+
+    // 1) Fresh cache (< 3 min) → instant, no network.
+    final fresh = controller.aiReportIfFresh(d.id, fromIso, toIso, const Duration(minutes: 3));
+    if (fresh != null) {
+      setState(() {
+        _loading = false;
+        _error = null;
+        _silentRefresh = false;
+        _result = fresh;
+        _resultAt = controller.aiReportCacheAt;
+      });
+      return;
+    }
+
+    // 2) Stale cache for the same request → show it now + refresh silently.
+    final stale = controller.aiReportAnyAge(d.id, fromIso, toIso);
+    if (stale != null) {
+      setState(() {
+        _loading = false;
+        _error = null;
+        _silentRefresh = true;
+        _result = stale;
+        _resultAt = controller.aiReportCacheAt;
+      });
+      final response = await controller.fetchAiReportCached(d.id, fromIso, toIso);
+      if (!mounted) return;
+      setState(() {
+        _silentRefresh = false;
+        if (response != null && response['ok'] == true) {
+          _result = response;
+          _resultAt = controller.aiReportCacheAt;
+        }
+      });
+      return;
+    }
+
+    // 3) Nothing cached → normal loading path with the seconds counter.
     setState(() {
       _loading = true;
       _error = null;
+      _silentRefresh = false;
       _result = null;
+      _resultAt = null;
       _elapsedSec = 0;
     });
     _elapsedTimer?.cancel();
@@ -690,55 +750,14 @@ class _AIReportDialogState extends State<_AIReportDialog> {
       setState(() => _elapsedSec++);
     });
 
-    final socket = Get.find<SocketService>();
-    final controller = Get.find<DashboardController>();
-
-    if (socket.status != SocketStatus.connected) {
-      final connected = await controller.ensureConnected();
-      if (!connected) {
-        if (!mounted) return;
-        setState(() {
-          _loading = false;
-          _error = 'انقطع الاتصال بالخادم — تحقق من الشبكة';
-        });
-        return;
-      }
-    }
-
-    final swAi = Stopwatch()..start();
-    var response = await socket.emitCheckAiStatus(
-      deviceId: _device!.id,
-      startTime: _iso(_from),
-      endTime: _iso(_to),
-    );
-    // ignore: avoid_print
-    print('[AIReport] check_ai_status ${swAi.elapsedMilliseconds}ms '
-        'null=${response == null} ok=${response?['ok']}');
-
-    // One automatic retry: covers ack loss during a connection blip.
-    if (response == null && allowRetry && mounted) {
-      if (socket.status != SocketStatus.connected) {
-        await controller.ensureConnected();
-      }
-      if (socket.status == SocketStatus.connected) {
-        final swRetry = Stopwatch()..start();
-        response = await socket.emitCheckAiStatus(
-          deviceId: _device!.id,
-          startTime: _iso(_from),
-          endTime: _iso(_to),
-        );
-        // ignore: avoid_print
-        print('[AIReport] check_ai_status retry ${swRetry.elapsedMilliseconds}ms '
-            'null=${response == null} ok=${response?['ok']}');
-      }
-    }
-
+    // Joins the in-flight prefetch when one is already running for this key.
+    final response = await controller.fetchAiReportCached(d.id, fromIso, toIso);
     if (!mounted) return;
 
     if (response == null) {
       setState(() {
         _loading = false;
-        _error = socket.status == SocketStatus.connected
+        _error = controller.socket.status == SocketStatus.connected
             ? 'استغرق الخادم وقتاً طويلاً — أعد المحاولة'
             : 'انقطع الاتصال بالخادم — تحقق من الشبكة';
       });
@@ -746,10 +765,9 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     }
 
     if (response['ok'] == false) {
-      final message = response['message'] ?? 'خطأ غير معروف';
       setState(() {
         _loading = false;
-        _error = message;
+        _error = response['message'] ?? 'خطأ غير معروف';
       });
       return;
     }
@@ -757,6 +775,7 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     setState(() {
       _loading = false;
       _result = response;
+      _resultAt = controller.aiReportCacheAt ?? DateTime.now();
     });
   }
 
@@ -815,12 +834,49 @@ class _AIReportDialogState extends State<_AIReportDialog> {
                 const SizedBox(height: 16),
                 const Divider(color: Colors.white24),
                 const SizedBox(height: 8),
+                _buildResultMeta(),
                 _buildResults(),
               ],
             ],
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildResultMeta() {
+    // Rebuilds only this row every 15s so the "last update" label stays live.
+    return StreamBuilder<DateTime>(
+      stream: Stream.periodic(const Duration(seconds: 15), (_) => DateTime.now()),
+      builder: (context, _) {
+        final ago = _timeAgo(_resultAt);
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(
+            children: [
+              if (_silentRefresh) ...[
+                const SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFFF59E0B)),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _resultAt != null ? 'نسخة $ago — جارٍ التحديث…' : 'جارٍ التحديث…',
+                  style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11),
+                ),
+              ] else ...[
+                const Icon(Icons.history, size: 12, color: Colors.white38),
+                const SizedBox(width: 4),
+                Text(
+                  _resultAt != null ? 'آخر تحديث $ago' : '',
+                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -886,6 +942,7 @@ class _AIReportDialogState extends State<_AIReportDialog> {
             final found = widget.devices.where((d) => d.id == id);
             if (found.isNotEmpty) {
               setState(() => _device = found.first);
+              _prefetch();
             }
           },
         ),

@@ -208,6 +208,115 @@ class DashboardController extends GetxController {
     return socket.status == SocketStatus.connected;
   }
 
+  // ---- AI report cache: prefetch + stale-while-revalidate (client-side only) ----
+  Map<String, dynamic>? _aiReportCache;
+  String? _aiReportCacheKey;
+  DateTime? _aiReportCacheAt;
+  Future<Map<String, dynamic>?>? _aiReportInFlight;
+  String? _aiReportInFlightKey;
+
+  String _aiReportKey(int deviceId, String fromIso, String toIso) =>
+      '$deviceId|$fromIso|$toIso';
+
+  /// Last stored result for this exact request, regardless of age.
+  Map<String, dynamic>? aiReportAnyAge(int deviceId, String fromIso, String toIso) {
+    final key = _aiReportKey(deviceId, fromIso, toIso);
+    return _aiReportCacheKey == key ? _aiReportCache : null;
+  }
+
+  DateTime? get aiReportCacheAt => _aiReportCacheAt;
+
+  /// Stored result only when younger than [maxAge].
+  Map<String, dynamic>? aiReportIfFresh(
+    int deviceId,
+    String fromIso,
+    String toIso,
+    Duration maxAge,
+  ) {
+    final cache = aiReportAnyAge(deviceId, fromIso, toIso);
+    final at = _aiReportCacheAt;
+    if (cache == null || at == null) return null;
+    return DateTime.now().difference(at) <= maxAge ? cache : null;
+  }
+
+  /// Fire-and-forget background prefetch; reuses fresh cache / in-flight request.
+  void prefetchAiReport(int deviceId, String fromIso, String toIso) {
+    fetchAiReportCached(deviceId, fromIso, toIso);
+  }
+
+  /// Cache-aware fetch: fresh cache → instant; same request in-flight → join it;
+  /// otherwise fetch from the server and store the successful result.
+  Future<Map<String, dynamic>?> fetchAiReportCached(
+    int deviceId,
+    String fromIso,
+    String toIso,
+  ) {
+    final key = _aiReportKey(deviceId, fromIso, toIso);
+    final fresh = aiReportIfFresh(deviceId, fromIso, toIso, const Duration(minutes: 3));
+    if (fresh != null) return Future.value(fresh);
+    final inFlight = _aiReportInFlight;
+    if (inFlight != null && _aiReportInFlightKey == key) return inFlight;
+
+    late final Future<Map<String, dynamic>?> request;
+    request = fetchAiReportFromServer(deviceId, fromIso, toIso).then((response) {
+      if (response != null && response['ok'] == true) {
+        _aiReportCache = response;
+        _aiReportCacheKey = key;
+        _aiReportCacheAt = DateTime.now();
+      }
+      if (identical(_aiReportInFlight, request)) {
+        _aiReportInFlight = null;
+        _aiReportInFlightKey = null;
+      }
+      return response;
+    });
+    _aiReportInFlight = request;
+    _aiReportInFlightKey = key;
+    return request;
+  }
+
+  /// Raw network fetch: connect if needed + emit check_ai_status + one retry.
+  Future<Map<String, dynamic>?> fetchAiReportFromServer(
+    int deviceId,
+    String fromIso,
+    String toIso,
+  ) async {
+    if (socket.status != SocketStatus.connected) {
+      final connected = await ensureConnected();
+      if (!connected) return null;
+    }
+
+    final swAi = Stopwatch()..start();
+    var response = await socket.emitCheckAiStatus(
+      deviceId: deviceId,
+      startTime: fromIso,
+      endTime: toIso,
+    );
+    // ignore: avoid_print
+    print('[AIReport] check_ai_status ${swAi.elapsedMilliseconds}ms '
+        'null=${response == null} ok=${response?['ok']}');
+
+    // One automatic retry: covers ack loss during a connection blip.
+    if (response == null) {
+      if (socket.status != SocketStatus.connected) {
+        await ensureConnected();
+      }
+      if (socket.status == SocketStatus.connected) {
+        final swRetry = Stopwatch()..start();
+        response = await socket.emitCheckAiStatus(
+          deviceId: deviceId,
+          startTime: fromIso,
+          endTime: toIso,
+        );
+        // ignore: avoid_print
+        print('[AIReport] check_ai_status retry ${swRetry.elapsedMilliseconds}ms '
+            'null=${response == null} ok=${response?['ok']}');
+      }
+    }
+
+    return response;
+  }
+
   bool _wasDisconnected = false;
 
   void _onSocketStatusChanged(SocketStatus s) {
