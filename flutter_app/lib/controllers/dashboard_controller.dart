@@ -24,7 +24,15 @@ class DeviceStatusInfo {
   double? battery;
   double? temperature;
   String? uptime;
-  DeviceStatusInfo({this.internet, this.battery, this.temperature, this.uptime});
+  /// Source that last set [internet]. Only the live ping stream is allowed to
+  /// write it (see the onDeviceStatus listener).
+  DeviceStatusSource? source;
+  DeviceStatusInfo(
+      {this.internet,
+      this.battery,
+      this.temperature,
+      this.uptime,
+      this.source});
 }
 
 class DashboardController extends GetxController {
@@ -166,7 +174,13 @@ class DashboardController extends GetxController {
     _deviceStatusSub = socket.onDeviceStatus.listen((entries) {
       for (final e in entries) {
         final info = deviceStatusMap[e.deviceId] ?? DeviceStatusInfo();
-        if (e.internet != null) info.internet = e.internet;
+        // On/off state comes ONLY from the live ping stream: telemetry and
+        // snapshot values are the device's LAST sample and stay 'UP' for a
+        // device that has since gone down (the green-then-red flicker).
+        if (e.internet != null && e.source == DeviceStatusSource.ping) {
+          info.internet = e.internet;
+          info.source = e.source;
+        }
         if (e.battery != null) info.battery = e.battery;
         if (e.temperature != null) info.temperature = e.temperature;
         if (e.uptime != null) info.uptime = e.uptime;
@@ -417,12 +431,13 @@ class DashboardController extends GetxController {
       final temperature = (data['temperature'] as num?)?.toDouble();
       final battery = (data['battery'] as num?)?.toDouble();
       final uptime = data['uptime']?.toString();
-      final internet = data['internet']?.toString();
       final info = deviceStatusMap[deviceId] ?? DeviceStatusInfo();
       if (battery != null) info.battery = battery;
       if (temperature != null) info.temperature = temperature;
       if (uptime != null) info.uptime = uptime;
-      if (internet != null) info.internet = internet;
+      // internet intentionally ignored: the snapshot is the device's LAST
+      // telemetry sample — stale 'UP' for a device that has since gone down.
+      // Only the live ping stream may set the on/off state.
       deviceStatusMap[deviceId] = info;
       if (name.isNotEmpty) {
         deviceStatusMap[name] = info;
@@ -465,8 +480,10 @@ class DashboardController extends GetxController {
       final map = jsonDecode(raw) as Map<String, dynamic>;
       for (final e in map.entries) {
         final v = e.value as Map<String, dynamic>;
+        // internet is deliberately NOT restored: a persisted 'UP' from a past
+        // session is as stale as the snapshot. The dot stays grey (unknown)
+        // until the first live ping update arrives (≤ ~60s).
         deviceStatusMap[e.key] = DeviceStatusInfo(
-          internet: v['internet']?.toString(),
           battery: (v['battery'] as num?)?.toDouble(),
           temperature: (v['temperature'] as num?)?.toDouble(),
           uptime: v['uptime']?.toString(),
