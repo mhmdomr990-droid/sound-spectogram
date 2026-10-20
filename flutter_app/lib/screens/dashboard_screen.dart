@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -600,6 +602,8 @@ class _AIReportDialogState extends State<_AIReportDialog> {
   Map<String, dynamic>? _result;
   String? _error;
   int _selectedRange = 3;
+  int _elapsedSec = 0;
+  Timer? _elapsedTimer;
 
   @override
   void initState() {
@@ -607,6 +611,12 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     _from = widget.initialFrom;
     _to = widget.initialTo;
     _device = widget.initialDevice;
+  }
+
+  @override
+  void dispose() {
+    _elapsedTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _pickDate({required bool isFrom}) async {
@@ -669,6 +679,15 @@ class _AIReportDialogState extends State<_AIReportDialog> {
       _loading = true;
       _error = null;
       _result = null;
+      _elapsedSec = 0;
+    });
+    _elapsedTimer?.cancel();
+    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || !_loading) {
+        _elapsedTimer?.cancel();
+        return;
+      }
+      setState(() => _elapsedSec++);
     });
 
     final socket = Get.find<SocketService>();
@@ -686,11 +705,15 @@ class _AIReportDialogState extends State<_AIReportDialog> {
       }
     }
 
+    final swAi = Stopwatch()..start();
     var response = await socket.emitCheckAiStatus(
       deviceId: _device!.id,
       startTime: _iso(_from),
       endTime: _iso(_to),
     );
+    // ignore: avoid_print
+    print('[AIReport] check_ai_status ${swAi.elapsedMilliseconds}ms '
+        'null=${response == null} ok=${response?['ok']}');
 
     // One automatic retry: covers ack loss during a connection blip.
     if (response == null && allowRetry && mounted) {
@@ -698,11 +721,15 @@ class _AIReportDialogState extends State<_AIReportDialog> {
         await controller.ensureConnected();
       }
       if (socket.status == SocketStatus.connected) {
+        final swRetry = Stopwatch()..start();
         response = await socket.emitCheckAiStatus(
           deviceId: _device!.id,
           startTime: _iso(_from),
           endTime: _iso(_to),
         );
+        // ignore: avoid_print
+        print('[AIReport] check_ai_status retry ${swRetry.elapsedMilliseconds}ms '
+            'null=${response == null} ok=${response?['ok']}');
       }
     }
 
@@ -773,6 +800,13 @@ class _AIReportDialogState extends State<_AIReportDialog> {
                       : const Text('جلب التقرير', style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
               ),
+              if (_loading) ...[
+                const SizedBox(height: 10),
+                Text(
+                  'انتظر… $_elapsedSec ثانية',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Text(_error!, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 13)),

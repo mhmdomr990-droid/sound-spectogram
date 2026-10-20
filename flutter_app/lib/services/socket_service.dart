@@ -272,9 +272,9 @@ class SocketService {
     });
 
     return completer.future.timeout(
-      const Duration(seconds: 30),
+      const Duration(seconds: 120),
       onTimeout: () {
-        if (kDebugMode) print('[Socket] check_ai_status: ack timeout 30s');
+        if (kDebugMode) print('[Socket] check_ai_status: ack timeout 120s');
         return null;
       },
     );
