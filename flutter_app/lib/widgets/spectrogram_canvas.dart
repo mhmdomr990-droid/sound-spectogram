@@ -515,12 +515,16 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   int _cachedIntensityHeight = 0;
   double _cachedGamma = 1.0;
 
-  // --- Per-mode intensity caches (plan A+B): switching sonic <-> a filled
-  // colour map adopts the other mode's stored plane (instant) instead of a
-  // full isolate re-render. Both are dropped whenever data/noise/scaling
-  // inputs change; dstH keys the sonic plane (sonicScale = dstHeight ~/ rows).
-  _IntensityCache? _cacheNormal;
-  _IntensityCache? _cacheSonic;
+  // --- Per-mode intensity LRU: switching back to a recently rendered
+  // device/window adopts the stored plane instantly instead of a full
+  // isolate re-render. Entries are keyed by mode + _planeKey() (which already
+  // covers data, window, noise and scaling inputs), so a stale entry simply
+  // misses the lookup — no blanket invalidation. dstH keys the sonic plane
+  // (sonicScale = dstHeight ~/ rows). ~5.2MB per entry; capped at 4.
+  // STATIC: the canvas is unmounted/remounted by the device-switch loading
+  // spinner, so an instance field would lose the cache on every switch.
+  static const int _planeCacheMax = 4;
+  static final Map<String, _IntensityCache> _planeLru = {};
 
   Uint8List? _gainLut;
   double _gainLutGainDb = double.nan;
@@ -565,7 +569,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     for (final b in hs) {
       if (b.data.isEmpty) empty++;
     }
-    return '${hs.length}|$empty|${hs.first.startTime}|${hs.last.endTime}';
+    // deviceId guards against two time-synced devices sharing identical
+    // packet boundaries (same window strings would otherwise collide).
+    return '${hs.first.deviceId}|${hs.length}|$empty|${hs.first.startTime}|${hs.last.endTime}';
   }
 
   bool _isViewCached(ui.Image img) =>
@@ -590,11 +596,6 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   }
 
   // --- Per-mode intensity caches (plan A+B, instant colour-map switching).
-  void _invalidateModeCaches() {
-    _cacheNormal = null;
-    _cacheSonic = null;
-  }
-
   /// Inputs the intensity plane is derived from — everything except the
   /// colour-map name (the plane bytes are colour-agnostic within a mode;
   /// colouring happens later in the gain LUT).
@@ -616,10 +617,11 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         sonic: sonic,
         dstH: dstH,
         key: key);
-    if (sonic) {
-      _cacheSonic = cache;
-    } else {
-      _cacheNormal = cache;
+    final mapKey = '${sonic ? "S" : "N"}|${sonic ? dstH : 0}|$key';
+    _planeLru.remove(mapKey);
+    _planeLru[mapKey] = cache;
+    while (_planeLru.length > _planeCacheMax) {
+      _planeLru.remove(_planeLru.keys.first);
     }
   }
 
@@ -627,11 +629,16 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
   /// Returns false when there is no entry valid for the current inputs — the
   /// caller then falls back to a full isolate render.
   bool _adoptModeCache(bool sonic) {
-    final cache = sonic ? _cacheSonic : _cacheNormal;
-    if (cache == null || cache.key != _planeKey()) return false;
+    final mapKey =
+        '${sonic ? "S" : "N"}|${sonic ? _plotDstHeight : 0}|${_planeKey()}';
+    final cache = _planeLru[mapKey];
+    if (cache == null) return false;
     // The sonic plane is rendered at plot height (sonicScale = dstH ~/ rows);
     // a layout/insets change invalidates it. The filled-map plane is data-res.
     if (sonic && cache.dstH != _plotDstHeight) return false;
+    // Refresh recency so the live device is the last to be evicted.
+    _planeLru.remove(mapKey);
+    _planeLru[mapKey] = cache;
     _cachedIntensity = cache.intensity;
     _cachedIntensityWidth = cache.width;
     _cachedIntensityHeight = cache.height;
@@ -705,9 +712,9 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
       _coverageCacheKey = null;
     }
     if (renderingChanged || dataChanged) {
-      // Any input that reshapes the intensity plane invalidates both
-      // per-mode caches (they are keyed by _planeKey() anyway).
-      _invalidateModeCaches();
+      // Mode caches are keyed by _planeKey() (data, window, noise, scaling),
+      // so a stale entry misses the key check on its own — no blanket
+      // invalidation; a switch back to a recent device adopts it instantly.
       _renderDebounce?.cancel();
       _renderDebounce = Timer(const Duration(milliseconds: 100), () {
         if (mounted) _render();
@@ -1187,6 +1194,48 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     return combined;
   }
 
+  void _syncSeedSnapshot(ui.Image image, int w, int h, double gamma) {
+    final hs = widget.histories;
+    seedSnapshot = CanvasSeedSnapshot(
+      image: image,
+      cachedCombined: null,
+      cachedWidth: w,
+      cachedHeight: h,
+      frequencyBins: null,
+      colCount: w,
+      startTime: hs?.firstOrNull?.startTime != null
+          ? DateTime.tryParse(hs!.first.startTime!)
+          : null,
+      endTime: hs != null && hs.isNotEmpty && hs.last.endTime != null
+          ? DateTime.tryParse(hs.last.endTime!)
+          : null,
+      cachedIntensity: _cachedIntensity,
+      intensityWidth: w,
+      intensityHeight: h,
+      cachedGamma: gamma,
+    );
+  }
+
+  void _publishImage(ui.Image image, int id, Stopwatch sw) {
+    final oldImage = _image;
+    final oldOwned = _imageOwned;
+    _imageOwned = true;
+    _image = image;
+    // Atomic with _image: the axis/coverage will read exactly this state.
+    _imgHistories = widget.histories;
+    _imgWindowStart = widget.requestStartTime;
+    _imgWindowEnd = widget.requestEndTime;
+    setState(() {});
+    // ignore: avoid_print
+    print('[DbgRx] _render#$id DONE ${sw.elapsedMilliseconds}ms '
+        'img=${_cachedIntensityWidth}x$_cachedIntensityHeight');
+    if (oldOwned && oldImage != null && oldImage != image && !_isViewCached(oldImage)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        try { oldImage.dispose(); } catch (_) {}
+      });
+    }
+  }
+
   Future<void> _render() async {
     if (!mounted) return;
     if (!_routeIsCurrentSafely()) {
@@ -1220,6 +1269,18 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
     final reqCacheKey = _planeKey();
     final reqColorMap = widget.colorMapName;
     final reqDstH = _plotDstHeight;
+    // Adopt a previously rendered plane for these exact inputs (e.g. switching
+    // back to a device): skips the isolate entirely — only the gain LUT and
+    // decode run. A stale entry misses the key check inside _adoptModeCache.
+    if (_adoptModeCache(isSonicColorMap(reqColorMap))) {
+      final adoptGain = widget.gainNotifier?.value ?? widget.gainDb;
+      final adoptImage = await _applyGainAndBuildImage(adoptGain);
+      if (!mounted || id != _jobId) return;
+      _syncSeedSnapshot(
+          adoptImage, _cachedIntensityWidth, _cachedIntensityHeight, _cachedGamma);
+      _publishImage(adoptImage, id, sw);
+      return;
+    }
     try {
       if (id != _jobId) return; // superseded before dispatch
       final result = await renderSpectrogramIsolate(
@@ -1281,40 +1342,8 @@ class SpectrogramCanvasState extends State<SpectrogramCanvas> {
         print('[DbgRx] _render#$id SUPERSEDED after gain (${sw.elapsedMilliseconds}ms)');
         return;
       }
-      seedSnapshot = CanvasSeedSnapshot(
-        image: image,
-        cachedCombined: null,
-        cachedWidth: result.width,
-        cachedHeight: result.height,
-        frequencyBins: null,
-        colCount: result.width,
-        startTime: histories.firstOrNull?.startTime != null
-            ? DateTime.tryParse(histories.first.startTime!)
-            : null,
-        endTime: histories.isNotEmpty && histories.last.endTime != null
-            ? DateTime.tryParse(histories.last.endTime!)
-            : null,
-        cachedIntensity: result.intensity,
-        intensityWidth: result.width,
-        intensityHeight: result.height,
-        cachedGamma: result.gamma,
-      );
-      final oldImage = _image;
-      final oldOwned = _imageOwned;
-      _imageOwned = true;
-      _image = image;
-      // Atomic with _image: the axis/coverage will read exactly this state.
-      _imgHistories = histories;
-      _imgWindowStart = widget.requestStartTime;
-      _imgWindowEnd = widget.requestEndTime;
-      setState(() {});
-      // ignore: avoid_print
-      print('[DbgRx] _render#$id DONE ${sw.elapsedMilliseconds}ms img=${result.width}x${result.height}');
-      if (oldOwned && oldImage != null && oldImage != image && !_isViewCached(oldImage)) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          try { oldImage.dispose(); } catch (_) {}
-        });
-      }
+      _syncSeedSnapshot(image, result.width, result.height, result.gamma);
+      _publishImage(image, id, sw);
     } catch (_) {
       if (!mounted || id != _jobId) return;
       setState(() {

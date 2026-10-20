@@ -374,9 +374,19 @@ SonicPeaks processSonicMatrix(
   void load(int c, int slot) {
     final v = vals[slot];
     final cd = cand[slot];
-    for (var r = 0; r < rows; r++) {
-      final line = matrix[r];
-      v[r] = normalizeScalar(c < line.length ? line[c] : 0);
+    if (isUint8) {
+      // Specialised uint8 path (the common live-packet type): same math as
+      // normalizeScalar's uint8 branch, minus the per-element closure call.
+      for (var r = 0; r < rows; r++) {
+        final line = matrix[r];
+        final n = (c < line.length ? line[c] : 0).toDouble();
+        v[r] = n.isFinite ? clamp01(n / 255) : 0;
+      }
+    } else {
+      for (var r = 0; r < rows; r++) {
+        final line = matrix[r];
+        v[r] = normalizeScalar(c < line.length ? line[c] : 0);
+      }
     }
     for (var i = 0; i < rows; i++) {
       cd[i] = 0;
@@ -516,11 +526,19 @@ SpectroRgbaResult buildRgba(
   final bgR = (backgroundColor >> 16) & 0xFF;
   final bgG = (backgroundColor >> 8) & 0xFF;
   final bgB = backgroundColor & 0xFF;
-  for (var i = 0; i < rgba.length; i += 4) {
-    rgba[i] = bgR;
-    rgba[i + 1] = bgG;
-    rgba[i + 2] = bgB;
-    rgba[i + 3] = 0xFF;
+  final hostLittle = Endian.host == Endian.little;
+  if (hostLittle && rgba.length >= 4) {
+    // RGBA byte order on a little-endian host packs into 0xAABBGGRR; a 32-bit
+    // fill is ~4x faster than per-byte stores over millions of pixels.
+    final packed = 0xFF000000 | (bgB << 16) | (bgG << 8) | bgR;
+    Uint32List.view(rgba.buffer).fillRange(0, rgba.length ~/ 4, packed);
+  } else {
+    for (var i = 0; i < rgba.length; i += 4) {
+      rgba[i] = bgR;
+      rgba[i + 1] = bgG;
+      rgba[i + 2] = bgB;
+      rgba[i + 3] = 0xFF;
+    }
   }
 
   if (rows == 0 || cols == 0) {
@@ -612,13 +630,24 @@ SpectroRgbaResult buildRgba(
 
     final paletteLut = buildPaletteLut(colorMap, gammaArg);
     final sonicRgba = Uint8List(width * surfH * 4);
-    for (var i = 0; i < intensity.length; i++) {
-      final rgb = paletteLut[intensity[i]];
-      final offset = i * 4;
-      sonicRgba[offset] = (rgb >> 16) & 0xFF;
-      sonicRgba[offset + 1] = (rgb >> 8) & 0xFF;
-      sonicRgba[offset + 2] = rgb & 0xFF;
-      sonicRgba[offset + 3] = 0xFF;
+    if (hostLittle) {
+      final u32 = Uint32List.view(sonicRgba.buffer);
+      for (var i = 0; i < intensity.length; i++) {
+        final rgb = paletteLut[intensity[i]];
+        u32[i] = 0xFF000000 |
+            ((rgb & 0xFF) << 16) |
+            (rgb & 0xFF00) |
+            ((rgb >> 16) & 0xFF);
+      }
+    } else {
+      for (var i = 0; i < intensity.length; i++) {
+        final rgb = paletteLut[intensity[i]];
+        final offset = i * 4;
+        sonicRgba[offset] = (rgb >> 16) & 0xFF;
+        sonicRgba[offset + 1] = (rgb >> 8) & 0xFF;
+        sonicRgba[offset + 2] = rgb & 0xFF;
+        sonicRgba[offset + 3] = 0xFF;
+      }
     }
     return SpectroRgbaResult(sonicRgba, width, surfH,
         intensity: intensity, gamma: gammaArg);
@@ -844,13 +873,24 @@ SpectroRgbaResult buildRgba(
   // Palette lookup: use the selected colour map's 256-entry LUT (same
   // construction the web uses for its palette texture).
   final paletteLut = buildPaletteLut(colorMap, gammaArg);
-  for (var i = 0; i < intensity.length; i++) {
-    final rgb = paletteLut[intensity[i]];
-    final offset = i * 4;
-    rgba[offset] = (rgb >> 16) & 0xFF;
-    rgba[offset + 1] = (rgb >> 8) & 0xFF;
-    rgba[offset + 2] = rgb & 0xFF;
-    rgba[offset + 3] = 0xFF;
+  if (hostLittle) {
+    final u32 = Uint32List.view(rgba.buffer);
+    for (var i = 0; i < intensity.length; i++) {
+      final rgb = paletteLut[intensity[i]];
+      u32[i] = 0xFF000000 |
+          ((rgb & 0xFF) << 16) |
+          (rgb & 0xFF00) |
+          ((rgb >> 16) & 0xFF);
+    }
+  } else {
+    for (var i = 0; i < intensity.length; i++) {
+      final rgb = paletteLut[intensity[i]];
+      final offset = i * 4;
+      rgba[offset] = (rgb >> 16) & 0xFF;
+      rgba[offset + 1] = (rgb >> 8) & 0xFF;
+      rgba[offset + 2] = rgb & 0xFF;
+      rgba[offset + 3] = 0xFF;
+    }
   }
 
   if (debug) {
