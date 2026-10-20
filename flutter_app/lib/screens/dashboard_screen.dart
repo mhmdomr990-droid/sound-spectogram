@@ -254,75 +254,102 @@ class DashboardScreen extends StatelessWidget {
                     c.colorMapName.value == kDefaultColorMap;
                 return Row(
                     children: [
-                      OutlinedButton.icon(
-                        onPressed: () {
-                          c.setLineThickness(2);
-                          c.updateGain(0);
-                          c.canvasKey.currentState?.applyGain();
-                          c.setColorMap(kDefaultColorMap);
-                        },
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor:
-                              atDefault ? scheme.primary : Colors.white38,
-                          side: BorderSide(
-                              color: atDefault ? scheme.primary : Colors.white24),
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          visualDensity: VisualDensity.compact,
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      Expanded(
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed: () {
+                                  c.setLineThickness(2);
+                                  c.updateGain(0);
+                                  c.canvasKey.currentState?.applyGain();
+                                  c.setColorMap(kDefaultColorMap);
+                                },
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor:
+                                      atDefault ? scheme.primary : Colors.white38,
+                                  side: BorderSide(
+                                      width: 1.2,
+                                      color: atDefault
+                                          ? scheme.primary
+                                          : Colors.white54),
+                                  backgroundColor: Colors.white10,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 6),
+                                  visualDensity: VisualDensity.compact,
+                                  minimumSize: Size.zero,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                icon: Icon(
+                                    atDefault ? Icons.check : Icons.close,
+                                    size: 14),
+                                label: const Text('Default',
+                                    style: TextStyle(fontSize: 12)),
+                              ),
+                              const SizedBox(width: 6),
+                              const Icon(Icons.line_weight,
+                                  size: 18, color: Colors.white70),
+                              const SizedBox(width: 6),
+                              Container(
+                                height: 28,
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 4),
+                                child: DropdownButton<int>(
+                                  value: c.lineThickness.value,
+                                  isDense: true,
+                                  underline: const SizedBox.shrink(),
+                                  style: const TextStyle(
+                                      color: Colors.white70, fontSize: 13),
+                                  dropdownColor: const Color(0xFF1A1A2E),
+                                  items: const [1, 2, 3, 4, 5]
+                                      .map((v) => DropdownMenuItem<int>(
+                                            value: v,
+                                            child: Text('${v}px',
+                                                style: const TextStyle(
+                                                    fontSize: 13)),
+                                          ))
+                                      .toList(),
+                                  onChanged: (v) {
+                                    if (v != null) c.setLineThickness(v);
+                                  },
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              const Icon(Icons.palette,
+                                  size: 18, color: Colors.white70),
+                              const SizedBox(width: 6),
+                              Container(
+                                height: 28,
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 4),
+                                child: DropdownButton<String>(
+                                  value: c.colorMapName.value,
+                                  isDense: true,
+                                  underline: const SizedBox.shrink(),
+                                  style: const TextStyle(
+                                      color: Colors.white70, fontSize: 13),
+                                  dropdownColor: const Color(0xFF1A1A2E),
+                                  items: kColorMapOrder.map((key) =>
+                                      DropdownMenuItem<String>(
+                                        value: key,
+                                        child: Text(
+                                            kColorMapLabels[key] ?? key,
+                                            style: const TextStyle(
+                                                fontSize: 13)),
+                                      )).toList(),
+                                  onChanged: (v) {
+                                    if (v != null) c.setColorMap(v);
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        icon: Icon(
-                            atDefault ? Icons.check : Icons.close, size: 12),
-                        label: const Text('Default',
-                            style: TextStyle(fontSize: 11)),
                       ),
-                      const SizedBox(width: 6),
-                      const Icon(Icons.line_weight, size: 18, color: Colors.white70),
-                      const SizedBox(width: 6),
-                      Container(
-                        height: 28,
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: DropdownButton<int>(
-                          value: c.lineThickness.value,
-                          isDense: true,
-                          underline: const SizedBox.shrink(),
-                          style: const TextStyle(color: Colors.white70, fontSize: 13),
-                          dropdownColor: const Color(0xFF1A1A2E),
-                          items: const [1, 2, 3, 4, 5]
-                              .map((v) => DropdownMenuItem<int>(
-                                    value: v,
-                                    child: Text('${v}px',
-                                        style: const TextStyle(fontSize: 13)),
-                                  ))
-                              .toList(),
-                          onChanged: (v) {
-                            if (v != null) c.setLineThickness(v);
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      const Icon(Icons.palette, size: 18, color: Colors.white70),
-                      const SizedBox(width: 6),
-                      Container(
-                        height: 28,
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: DropdownButton<String>(
-                          value: c.colorMapName.value,
-                          isDense: true,
-                          underline: const SizedBox.shrink(),
-                          style: const TextStyle(color: Colors.white70, fontSize: 13),
-                          dropdownColor: const Color(0xFF1A1A2E),
-                          items: kColorMapOrder.map((key) => DropdownMenuItem<String>(
-                                value: key,
-                                child: Text(kColorMapLabels[key] ?? key,
-                                    style: const TextStyle(fontSize: 13)),
-                              )).toList(),
-                          onChanged: (v) {
-                            if (v != null) c.setColorMap(v);
-                          },
-                        ),
-                      ),
-                      const Spacer(),
+                      const SizedBox(width: 8),
                       IconButton(
                         tooltip: 'تصدير لقطة',
                         icon: const Icon(Icons.save_alt,

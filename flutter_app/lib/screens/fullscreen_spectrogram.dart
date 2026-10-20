@@ -259,7 +259,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                   child: Align(
                     alignment: Alignment.topCenter,
                     child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 420),
+                      constraints: const BoxConstraints(maxWidth: 470),
                       child: Container(
                         margin: const EdgeInsets.fromLTRB(8, 8, 8, 0),
                         decoration: BoxDecoration(
@@ -275,21 +275,21 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                 color: const Color(0xFF111111),
                                 borderRadius: BorderRadius.circular(6),
                               ),
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                               child: Row(
                                 children: [
                                   Expanded(
                                     child: Row(
                                       children: [
-                                        const Icon(Icons.volume_up, size: 11, color: Colors.white70),
-                                        const SizedBox(width: 2),
+                                        const Icon(Icons.volume_up, size: 14, color: Colors.white70),
+                                        const SizedBox(width: 4),
                                         Text(
                                           '${_gainDb.toStringAsFixed(0)} dB',
-                                          style: const TextStyle(color: Colors.white70, fontSize: 8),
+                                          style: const TextStyle(color: Colors.white70, fontSize: 11),
                                         ),
                                         Expanded(
                                           child: SliderTheme(
-                                            data: SliderThemeData(trackHeight: 1, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 3)),
+                                            data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4)),
                                             child: Slider(
                                               value: _gainDb,
                                               min: -24,
@@ -306,31 +306,31 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                 ],
                               ),
                             ),
-                            const SizedBox(height: 1),
+                            const SizedBox(height: 4),
                             Container(
                               decoration: BoxDecoration(
                                 color: const Color(0xFF111111),
                                 borderRadius: BorderRadius.circular(6),
                               ),
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                               child: Row(
                                 children: [
                                   const Icon(Icons.line_weight,
-                                      size: 11, color: Colors.white70),
-                                  const SizedBox(width: 4),
+                                      size: 14, color: Colors.white70),
+                                  const SizedBox(width: 6),
                                   DropdownButton<int>(
                                     value: _lineThickness,
                                     isDense: true,
                                     underline: const SizedBox.shrink(),
                                     style: const TextStyle(
-                                        color: Colors.white70, fontSize: 9),
+                                        color: Colors.white70, fontSize: 12),
                                     dropdownColor: const Color(0xFF1A1A2E),
                                     items: const [1, 2, 3, 4, 5]
                                         .map((v) => DropdownMenuItem<int>(
                                               value: v,
                                               child: Text('${v}px',
                                                   style: const TextStyle(
-                                                      fontSize: 9)),
+                                                      fontSize: 12)),
                                             ))
                                         .toList(),
                                     onChanged: (v) {
@@ -343,7 +343,7 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                       c?.setLineThickness(v);
                                     },
                                   ),
-                                  const SizedBox(width: 6),
+                                  const SizedBox(width: 8),
                                   TextButton.icon(
                                     onPressed: _resetDefaults,
                                     style: TextButton.styleFrom(
@@ -352,8 +352,16 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                               .colorScheme
                                               .primary
                                           : Colors.white38,
+                                      side: BorderSide(
+                                          width: 1.2,
+                                          color: _atDefault()
+                                              ? Theme.of(context)
+                                                  .colorScheme
+                                                  .primary
+                                              : Colors.white54),
+                                      backgroundColor: Colors.white10,
                                       padding: const EdgeInsets.symmetric(
-                                          horizontal: 6),
+                                          horizontal: 8, vertical: 5),
                                       visualDensity: VisualDensity.compact,
                                       minimumSize: Size.zero,
                                       tapTargetSize:
@@ -363,30 +371,30 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                         _atDefault()
                                             ? Icons.check
                                             : Icons.close,
-                                        size: 10),
+                                        size: 14),
                                     label: const Text('Default',
-                                        style: TextStyle(fontSize: 9)),
+                                        style: TextStyle(fontSize: 12)),
                                   ),
                                 ],
                               ),
                             ),
-                            const SizedBox(height: 1),
+                            const SizedBox(height: 3),
                             Container(
                               decoration: BoxDecoration(
                                 color: const Color(0xFF111111),
                                 borderRadius: BorderRadius.circular(6),
                               ),
-                              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+                              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
                               child: Row(
                                 children: [
                                   Expanded(child: _fsBtn(Icons.fit_screen, null, () => _canvasKey.currentState?.fitToScreen())),
-                                  const SizedBox(width: 1),
+                                  const SizedBox(width: 3),
                                   Expanded(child: _fsBtn(Icons.save_alt, null, _export)),
-                                  const SizedBox(width: 1),
+                                  const SizedBox(width: 3),
                                   if (_markers.isNotEmpty)
                                     Expanded(child: _fsBtn(Icons.delete_outline, null, () => setState(() => _markers.clear()))),
                                   if (_markers.isNotEmpty)
-                                    const SizedBox(width: 1),
+                                    const SizedBox(width: 3),
                                   Expanded(child: _fsBtn(Icons.fullscreen_exit, null, _exit)),
                                 ],
                               ),
@@ -412,19 +420,19 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
         borderRadius: BorderRadius.circular(4),
         onTap: onTap,
         child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, color: Colors.white70, size: 18),
-                if (label != null) ...[
-                  const SizedBox(height: 2),
-                  Text(label, style: const TextStyle(color: Colors.white70, fontSize: 8)),
-                ],
-              ],
-            ),
-          ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 7),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, color: Colors.white70, size: 20),
+                    if (label != null) ...[
+                      const SizedBox(height: 2),
+                      Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+                    ],
+                  ],
+                ),
+              ),
         ),
       ),
     );
