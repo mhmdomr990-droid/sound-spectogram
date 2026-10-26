@@ -15,6 +15,7 @@ import '../services/notification_service.dart';
 import '../utils/colormaps.dart';
 import '../utils/export_service.dart';
 import '../widgets/spectrogram_canvas.dart';
+import '../widgets/target_link_button.dart';
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
@@ -37,7 +38,15 @@ class DashboardScreen extends StatelessWidget {
             Icon(Icons.graphic_eq, color: scheme.primary, size: 18),
             const SizedBox(width: 4),
             const Flexible(
-              child: Text('Sound Spectogram', style: TextStyle(fontSize: 12, letterSpacing: 1, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
+              child: Text(
+                'Sound Spectogram',
+                style: TextStyle(
+                  fontSize: 12,
+                  letterSpacing: 1,
+                  fontWeight: FontWeight.bold,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),
@@ -57,6 +66,13 @@ class DashboardScreen extends StatelessWidget {
             tooltip: 'تقرير الأهداف',
             icon: const Icon(Icons.assessment, color: Colors.white70),
             onPressed: () => _showAIReport(context, controller),
+          ),
+          Obx(
+            () => TargetLinkButton(
+              selectedDeviceId: controller.selected.value?.id,
+              selectedDeviceName: controller.selected.value?.name,
+              api: Get.find<ApiClient>(),
+            ),
           ),
           IconButton(
             tooltip: 'تسجيل الخروج',
@@ -82,7 +98,11 @@ class DashboardScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildBody(BuildContext context, DashboardController c, ColorScheme scheme) {
+  Widget _buildBody(
+    BuildContext context,
+    DashboardController c,
+    ColorScheme scheme,
+  ) {
     return Column(
       children: [
         _buildDeviceBar(c, scheme),
@@ -113,7 +133,11 @@ class DashboardScreen extends StatelessWidget {
                           label: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.circle, size: 8, color: _deviceStatusColor(c, d.name)),
+                              Icon(
+                                Icons.circle,
+                                size: 8,
+                                color: _deviceStatusColor(c, d.name),
+                              ),
                               const SizedBox(width: 4),
                               Text(d.name),
                             ],
@@ -123,7 +147,9 @@ class DashboardScreen extends StatelessWidget {
                           selectedColor: scheme.primary,
                           backgroundColor: const Color(0xFF1A1A1A),
                           labelStyle: TextStyle(
-                            color: c.selected.value?.id == d.id ? Colors.black : Colors.white70,
+                            color: c.selected.value?.id == d.id
+                                ? Colors.black
+                                : Colors.white70,
                           ),
                         ),
                       ),
@@ -137,11 +163,22 @@ class DashboardScreen extends StatelessWidget {
   Color _deviceStatusColor(DashboardController c, String deviceName) {
     final status = c.deviceStatusMap[deviceName];
     if (status == null || status.internet == null) return Colors.white24;
-    return status.internet!.toUpperCase() == 'UP' ? Colors.greenAccent : Colors.redAccent;
+    return status.internet!.toUpperCase() == 'UP'
+        ? Colors.greenAccent
+        : Colors.redAccent;
   }
 
-  Widget _buildRangeControls(BuildContext context, DashboardController c, ColorScheme scheme) {
-    Widget btn(String label, IconData? icon, VoidCallback onTap, {bool active = false}) {
+  Widget _buildRangeControls(
+    BuildContext context,
+    DashboardController c,
+    ColorScheme scheme,
+  ) {
+    Widget btn(
+      String label,
+      IconData? icon,
+      VoidCallback onTap, {
+      bool active = false,
+    }) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4),
         child: OutlinedButton(
@@ -170,89 +207,159 @@ class DashboardScreen extends StatelessWidget {
 
     return Container(
       color: const Color(0xFF0E0E0E),
-      child: Obx(() => Column(
-        children: [
-          SizedBox(
-            height: 38,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-              children: [
-                Obx(() => btn('آخر باكت', Icons.flash_on, () => c.setRange(RangeMode.latestPacket), active: mode(RangeMode.latestPacket))),
-                Obx(() => btn('متابعة البث', Icons.play_circle, () => c.setRange(RangeMode.followLive), active: mode(RangeMode.followLive))),
-                Container(
-                  height: 28,
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Obx(() => DropdownButton<int>(
-                    value: c.liveWindowMinutes.value,
-                    isDense: true,
-                    underline: const SizedBox.shrink(),
-                    style: const TextStyle(color: Colors.white70, fontSize: 13),
-                    dropdownColor: const Color(0xFF1A1A2E),
-                    items: [5, 10, 15, 20, 30].map((m) =>
-                      DropdownMenuItem(value: m, child: Text('$m د', style: const TextStyle(fontSize: 13)))
-                    ).toList(),
-                    onChanged: (v) {
-                      if (v != null) {
-                        c.liveWindowMinutes.value = v;
-                        if (c.rangeMode.value == RangeMode.followLive) c.setFollowLive();
-                      }
-                    },
-                  )),
-                ),
-                Obx(() => btn('آخر ساعة', Icons.timer, () => c.setRange(RangeMode.lastHour), active: mode(RangeMode.lastHour))),
-                Obx(() => btn('آخر ساعتين', Icons.history, () => c.setRange(RangeMode.last5h), active: mode(RangeMode.last5h))),
-                Obx(() => btn('تحميل النطاق', Icons.date_range, () => c.pickCustomRange(context), active: mode(RangeMode.custom))),
-                Obx(() => c.markers.isNotEmpty
-                    ? btn('إزالة العلامات', Icons.clear, () => c.clearMarkers())
-                    : const SizedBox.shrink()),
-              ],
-            ),
-          ),
-          // Collapsible control rows (gain / colour map+noise / log+focus+
-          // export). Hidden by default so the spectrogram reclaims the space.
-          if (c.showControls.value) ...[
-            Padding(
-              padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
-              child: ValueListenableBuilder<double>(
-                valueListenable: c.gainNotifier,
-                builder: (context, gainVal, _) {
-                  return Row(
-                    children: [
-                      const Icon(Icons.volume_up, size: 18, color: Colors.white70),
-                      const SizedBox(width: 6),
-                      Text(
-                        'الكسب: ${gainVal.toStringAsFixed(0)} dB',
-                        style: const TextStyle(color: Colors.white70, fontSize: 12),
-                      ),
-                      Expanded(
-                        child: SliderTheme(
-                          data: SliderThemeData(trackHeight: 2, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5)),
-                          child: Slider(
-                            value: gainVal,
-                            min: -24,
-                            max: 24,
-                            divisions: 48,
-                            onChanged: (v) {
-                              c.gainDb.value = v;
-                              c.gainNotifier.value = v;
-                            },
-                            onChangeEnd: (_) => c.canvasKey.currentState?.applyGain(),
-                          ),
+      child: Obx(
+        () => Column(
+          children: [
+            SizedBox(
+              height: 38,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                children: [
+                  Obx(
+                    () => btn(
+                      'آخر باكت',
+                      Icons.flash_on,
+                      () => c.setRange(RangeMode.latestPacket),
+                      active: mode(RangeMode.latestPacket),
+                    ),
+                  ),
+                  Obx(
+                    () => btn(
+                      'متابعة البث',
+                      Icons.play_circle,
+                      () => c.setRange(RangeMode.followLive),
+                      active: mode(RangeMode.followLive),
+                    ),
+                  ),
+                  Container(
+                    height: 28,
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Obx(
+                      () => DropdownButton<int>(
+                        value: c.liveWindowMinutes.value,
+                        isDense: true,
+                        underline: const SizedBox.shrink(),
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 13,
                         ),
+                        dropdownColor: const Color(0xFF1A1A2E),
+                        items: [5, 10, 15, 20, 30]
+                            .map(
+                              (m) => DropdownMenuItem(
+                                value: m,
+                                child: Text(
+                                  '$m د',
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) {
+                          if (v != null) {
+                            c.liveWindowMinutes.value = v;
+                            if (c.rangeMode.value == RangeMode.followLive)
+                              c.setFollowLive();
+                          }
+                        },
                       ),
-                    ],
-                  );
-                },
+                    ),
+                  ),
+                  Obx(
+                    () => btn(
+                      'آخر ساعة',
+                      Icons.timer,
+                      () => c.setRange(RangeMode.lastHour),
+                      active: mode(RangeMode.lastHour),
+                    ),
+                  ),
+                  Obx(
+                    () => btn(
+                      'آخر ساعتين',
+                      Icons.history,
+                      () => c.setRange(RangeMode.last5h),
+                      active: mode(RangeMode.last5h),
+                    ),
+                  ),
+                  Obx(
+                    () => btn(
+                      'تحميل النطاق',
+                      Icons.date_range,
+                      () => c.pickCustomRange(context),
+                      active: mode(RangeMode.custom),
+                    ),
+                  ),
+                  Obx(
+                    () => c.markers.isNotEmpty
+                        ? btn(
+                            'إزالة العلامات',
+                            Icons.clear,
+                            () => c.clearMarkers(),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
-              child: Obx(() {
-                final atDefault = c.lineThickness.value == 2 &&
-                    c.gainDb.value == 0 &&
-                    c.colorMapName.value == kDefaultColorMap;
-                return Row(
+            // Collapsible control rows (gain / colour map+noise / log+focus+
+            // export). Hidden by default so the spectrogram reclaims the space.
+            if (c.showControls.value) ...[
+              Padding(
+                padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
+                child: ValueListenableBuilder<double>(
+                  valueListenable: c.gainNotifier,
+                  builder: (context, gainVal, _) {
+                    return Row(
+                      children: [
+                        const Icon(
+                          Icons.volume_up,
+                          size: 18,
+                          color: Colors.white70,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'الكسب: ${gainVal.toStringAsFixed(0)} dB',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                        Expanded(
+                          child: SliderTheme(
+                            data: SliderThemeData(
+                              trackHeight: 2,
+                              thumbShape: const RoundSliderThumbShape(
+                                enabledThumbRadius: 5,
+                              ),
+                            ),
+                            child: Slider(
+                              value: gainVal,
+                              min: -24,
+                              max: 24,
+                              divisions: 48,
+                              onChanged: (v) {
+                                c.gainDb.value = v;
+                                c.gainNotifier.value = v;
+                              },
+                              onChangeEnd: (_) =>
+                                  c.canvasKey.currentState?.applyGain(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
+                child: Obx(() {
+                  final atDefault =
+                      c.lineThickness.value == 2 &&
+                      c.gainDb.value == 0 &&
+                      c.colorMapName.value == kDefaultColorMap;
+                  return Row(
                     children: [
                       Expanded(
                         child: SingleChildScrollView(
@@ -268,49 +375,67 @@ class DashboardScreen extends StatelessWidget {
                                   c.setColorMap(kDefaultColorMap);
                                 },
                                 style: OutlinedButton.styleFrom(
-                                  foregroundColor:
-                                      atDefault ? scheme.primary : Colors.white38,
+                                  foregroundColor: atDefault
+                                      ? scheme.primary
+                                      : Colors.white38,
                                   side: BorderSide(
-                                      width: 1.2,
-                                      color: atDefault
-                                          ? scheme.primary
-                                          : Colors.white54),
+                                    width: 1.2,
+                                    color: atDefault
+                                        ? scheme.primary
+                                        : Colors.white54,
+                                  ),
                                   backgroundColor: Colors.white10,
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 6),
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
                                   visualDensity: VisualDensity.compact,
                                   minimumSize: Size.zero,
                                   tapTargetSize:
                                       MaterialTapTargetSize.shrinkWrap,
                                 ),
                                 icon: Icon(
-                                    atDefault ? Icons.check : Icons.close,
-                                    size: 14),
-                                label: const Text('Default',
-                                    style: TextStyle(fontSize: 12)),
+                                  atDefault ? Icons.check : Icons.close,
+                                  size: 14,
+                                ),
+                                label: const Text(
+                                  'Default',
+                                  style: TextStyle(fontSize: 12),
+                                ),
                               ),
                               const SizedBox(width: 6),
-                              const Icon(Icons.line_weight,
-                                  size: 18, color: Colors.white70),
+                              const Icon(
+                                Icons.line_weight,
+                                size: 18,
+                                color: Colors.white70,
+                              ),
                               const SizedBox(width: 6),
                               Container(
                                 height: 28,
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                ),
                                 child: DropdownButton<int>(
                                   value: c.lineThickness.value,
                                   isDense: true,
                                   underline: const SizedBox.shrink(),
                                   style: const TextStyle(
-                                      color: Colors.white70, fontSize: 13),
+                                    color: Colors.white70,
+                                    fontSize: 13,
+                                  ),
                                   dropdownColor: const Color(0xFF1A1A2E),
                                   items: const [1, 2, 3, 4, 5]
-                                      .map((v) => DropdownMenuItem<int>(
-                                            value: v,
-                                            child: Text('${v}px',
-                                                style: const TextStyle(
-                                                    fontSize: 13)),
-                                          ))
+                                      .map(
+                                        (v) => DropdownMenuItem<int>(
+                                          value: v,
+                                          child: Text(
+                                            '${v}px',
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ),
+                                      )
                                       .toList(),
                                   onChanged: (v) {
                                     if (v != null) c.setLineThickness(v);
@@ -318,28 +443,39 @@ class DashboardScreen extends StatelessWidget {
                                 ),
                               ),
                               const SizedBox(width: 8),
-                              const Icon(Icons.palette,
-                                  size: 18, color: Colors.white70),
+                              const Icon(
+                                Icons.palette,
+                                size: 18,
+                                color: Colors.white70,
+                              ),
                               const SizedBox(width: 6),
                               Container(
                                 height: 28,
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 4),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                ),
                                 child: DropdownButton<String>(
                                   value: c.colorMapName.value,
                                   isDense: true,
                                   underline: const SizedBox.shrink(),
                                   style: const TextStyle(
-                                      color: Colors.white70, fontSize: 13),
+                                    color: Colors.white70,
+                                    fontSize: 13,
+                                  ),
                                   dropdownColor: const Color(0xFF1A1A2E),
-                                  items: kColorMapOrder.map((key) =>
-                                      DropdownMenuItem<String>(
-                                        value: key,
-                                        child: Text(
+                                  items: kColorMapOrder
+                                      .map(
+                                        (key) => DropdownMenuItem<String>(
+                                          value: key,
+                                          child: Text(
                                             kColorMapLabels[key] ?? key,
                                             style: const TextStyle(
-                                                fontSize: 13)),
-                                      )).toList(),
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ),
+                                      )
+                                      .toList(),
                                   onChanged: (v) {
                                     if (v != null) c.setColorMap(v);
                                   },
@@ -352,63 +488,76 @@ class DashboardScreen extends StatelessWidget {
                       const SizedBox(width: 8),
                       IconButton(
                         tooltip: 'تصدير لقطة',
-                        icon: const Icon(Icons.save_alt,
-                            color: Colors.white70, size: 18),
+                        icon: const Icon(
+                          Icons.save_alt,
+                          color: Colors.white70,
+                          size: 18,
+                        ),
                         visualDensity: VisualDensity.compact,
                         padding: const EdgeInsets.symmetric(horizontal: 4),
-                        constraints:
-                            const BoxConstraints(minWidth: 30, minHeight: 30),
+                        constraints: const BoxConstraints(
+                          minWidth: 30,
+                          minHeight: 30,
+                        ),
                         onPressed: () => ExportService.exportPng(
                           _exportBoundaryKey,
-                          devicePixelRatio:
-                              MediaQuery.of(context).devicePixelRatio,
+                          devicePixelRatio: MediaQuery.of(context)
+                              .devicePixelRatio,
                           deviceName: c.selected.value?.name ?? 'device',
                           histories: c.histories,
                         ),
                       ),
                     ],
                   );
-              }),
-            ),
-          ],
-          Padding(
-            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _openFullscreen(context, c),
-                    icon: const Icon(Icons.fullscreen, size: 18),
-                    label: const Text('ملء الشاشة', style: TextStyle(fontSize: 12)),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white70,
-                      side: const BorderSide(color: Colors.white24),
-                      padding: const EdgeInsets.symmetric(vertical: 6),
+                }),
+              ),
+            ],
+            Padding(
+              padding: const EdgeInsets.only(left: 12, right: 12, bottom: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _openFullscreen(context, c),
+                      icon: const Icon(Icons.fullscreen, size: 18),
+                      label: const Text(
+                        'ملء الشاشة',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white70,
+                        side: const BorderSide(color: Colors.white24),
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Obx(() {
-                  final open = c.showControls.value;
-                  return IconButton(
-                    tooltip: open ? 'إخفاء أدوات التحكم' : 'إظهار أدوات التحكم',
-                    icon: Icon(
-                      open ? Icons.expand_less : Icons.tune,
-                      color: open ? scheme.primary : Colors.white70,
-                      size: 20,
-                    ),
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    constraints:
-                        const BoxConstraints(minWidth: 34, minHeight: 34),
-                    onPressed: () => c.setShowControls(!open),
-                  );
-                }),
-              ],
+                  const SizedBox(width: 8),
+                  Obx(() {
+                    final open = c.showControls.value;
+                    return IconButton(
+                      tooltip: open
+                          ? 'إخفاء أدوات التحكم'
+                          : 'إظهار أدوات التحكم',
+                      icon: Icon(
+                        open ? Icons.expand_less : Icons.tune,
+                        color: open ? scheme.primary : Colors.white70,
+                        size: 20,
+                      ),
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      constraints: const BoxConstraints(
+                        minWidth: 34,
+                        minHeight: 34,
+                      ),
+                      onPressed: () => c.setShowControls(!open),
+                    );
+                  }),
+                ],
+              ),
             ),
-          ),
-        ],
-      )),
+          ],
+        ),
+      ),
     );
   }
 
@@ -460,9 +609,16 @@ class DashboardScreen extends StatelessWidget {
               children: [
                 const Icon(Icons.cloud_off, color: Colors.white38, size: 48),
                 const SizedBox(height: 12),
-                Text(c.error.value!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.redAccent)),
+                Text(
+                  c.error.value!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.redAccent),
+                ),
                 const SizedBox(height: 16),
-                FilledButton(onPressed: () => c.recoverView(), child: const Text('إعادة المحاولة')),
+                FilledButton(
+                  onPressed: () => c.recoverView(),
+                  child: const Text('إعادة المحاولة'),
+                ),
               ],
             ),
           ),
@@ -474,7 +630,9 @@ class DashboardScreen extends StatelessWidget {
       }
 
       if (c.selected.value == null) {
-        return const Center(child: Text('اختر جهازاً', style: TextStyle(color: Colors.white38)));
+        return const Center(
+          child: Text('اختر جهازاً', style: TextStyle(color: Colors.white38)),
+        );
       }
 
       // Force Obx to track markers for reactive rebuild.
@@ -507,7 +665,8 @@ class DashboardScreen extends StatelessWidget {
                 lineThickness: c.lineThickness.value,
                 onMarkerAdd: (timeMs) => c.addMarker(timeMs),
                 onMarkerRemove: (index) => c.removeMarker(index),
-                onMarkerMove: (index, newTimeMs) => c.moveMarker(index, newTimeMs),
+                onMarkerMove: (index, newTimeMs) =>
+                    c.moveMarker(index, newTimeMs),
               ),
             ),
           ),
@@ -518,7 +677,10 @@ class DashboardScreen extends StatelessWidget {
               child: GestureDetector(
                 onTap: () => c.clearMarkers(),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black.withOpacity(0.7),
                     borderRadius: BorderRadius.circular(6),
@@ -527,9 +689,16 @@ class DashboardScreen extends StatelessWidget {
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.delete_outline, color: Colors.redAccent, size: 16),
+                      Icon(
+                        Icons.delete_outline,
+                        color: Colors.redAccent,
+                        size: 16,
+                      ),
                       SizedBox(width: 4),
-                      Text('مسح العلامات', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      Text(
+                        'مسح العلامات',
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
                     ],
                   ),
                 ),
@@ -554,7 +723,11 @@ class DashboardScreen extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12),
         child: Row(
           children: [
-            Icon(Icons.circle, size: 8, color: connected ? Colors.greenAccent : Colors.orangeAccent),
+            Icon(
+              Icons.circle,
+              size: 8,
+              color: connected ? Colors.greenAccent : Colors.orangeAccent,
+            ),
             const SizedBox(width: 6),
             Text(
               connected ? 'متصل' : 'غير متصل',
@@ -568,13 +741,19 @@ class DashboardScreen extends StatelessWidget {
             if (temp != null) ...[
               Icon(Icons.thermostat, size: 12, color: Colors.white38),
               const SizedBox(width: 2),
-              Text('${temp.toStringAsFixed(0)}°C', style: const TextStyle(color: Colors.white38, fontSize: 11)),
+              Text(
+                '${temp.toStringAsFixed(0)}°C',
+                style: const TextStyle(color: Colors.white38, fontSize: 11),
+              ),
               const SizedBox(width: 10),
             ],
             if (batt != null) ...[
               Icon(Icons.battery_std, size: 12, color: Colors.white38),
               const SizedBox(width: 2),
-              Text('${batt.toStringAsFixed(0)}%', style: const TextStyle(color: Colors.white38, fontSize: 11)),
+              Text(
+                '${batt.toStringAsFixed(0)}%',
+                style: const TextStyle(color: Colors.white38, fontSize: 11),
+              ),
               const SizedBox(width: 10),
             ],
             Text(
@@ -665,7 +844,13 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     );
     if (time == null) return;
 
-    final picked = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    final picked = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+    );
     setState(() {
       _selectedRange = -1;
       if (isFrom) {
@@ -679,14 +864,24 @@ class _AIReportDialogState extends State<_AIReportDialog> {
 
   /// Quantized ISO (5-minute bucket) so quick-range presses share one cache key.
   String _isoQ(DateTime dt) {
-    final q = DateTime(dt.year, dt.month, dt.day, dt.hour, (dt.minute ~/ 5) * 5);
+    final q = DateTime(
+      dt.year,
+      dt.month,
+      dt.day,
+      dt.hour,
+      (dt.minute ~/ 5) * 5,
+    );
     return _iso(q);
   }
 
   void _prefetch() {
     final d = _device;
     if (d == null) return;
-    Get.find<DashboardController>().prefetchAiReport(d.id, _isoQ(_from), _isoQ(_to));
+    Get.find<DashboardController>().prefetchAiReport(
+      d.id,
+      _isoQ(_from),
+      _isoQ(_to),
+    );
   }
 
   String _fmt(DateTime dt) {
@@ -725,7 +920,12 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     final toIso = _isoQ(_to);
 
     // 1) Fresh cache (< 3 min) → instant, no network.
-    final fresh = controller.aiReportIfFresh(d.id, fromIso, toIso, const Duration(minutes: 3));
+    final fresh = controller.aiReportIfFresh(
+      d.id,
+      fromIso,
+      toIso,
+      const Duration(minutes: 3),
+    );
     if (fresh != null) {
       setState(() {
         _loading = false;
@@ -747,7 +947,11 @@ class _AIReportDialogState extends State<_AIReportDialog> {
         _result = stale;
         _resultAt = controller.aiReportCacheAt;
       });
-      final response = await controller.fetchAiReportCached(d.id, fromIso, toIso);
+      final response = await controller.fetchAiReportCached(
+        d.id,
+        fromIso,
+        toIso,
+      );
       if (!mounted) return;
       setState(() {
         _silentRefresh = false;
@@ -820,7 +1024,11 @@ class _AIReportDialogState extends State<_AIReportDialog> {
             children: [
               const Text(
                 'تقرير الأهداف',
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 16),
               _buildDeviceDropdown(),
@@ -839,11 +1047,23 @@ class _AIReportDialogState extends State<_AIReportDialog> {
                     backgroundColor: const Color(0xFF3B82F6),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
                   child: _loading
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : const Text('جلب التقرير', style: TextStyle(fontWeight: FontWeight.bold)),
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          'جلب التقرير',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
                 ),
               ),
               if (_loading) ...[
@@ -855,7 +1075,13 @@ class _AIReportDialogState extends State<_AIReportDialog> {
               ],
               if (_error != null) ...[
                 const SizedBox(height: 12),
-                Text(_error!, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 13)),
+                Text(
+                  _error!,
+                  style: const TextStyle(
+                    color: Color(0xFFEF4444),
+                    fontSize: 13,
+                  ),
+                ),
               ],
               if (_result != null) ...[
                 const SizedBox(height: 16),
@@ -874,7 +1100,10 @@ class _AIReportDialogState extends State<_AIReportDialog> {
   Widget _buildResultMeta() {
     // Rebuilds only this row every 15s so the "last update" label stays live.
     return StreamBuilder<DateTime>(
-      stream: Stream.periodic(const Duration(seconds: 15), (_) => DateTime.now()),
+      stream: Stream.periodic(
+        const Duration(seconds: 15),
+        (_) => DateTime.now(),
+      ),
       builder: (context, _) {
         final ago = _timeAgo(_resultAt);
         return Padding(
@@ -885,12 +1114,20 @@ class _AIReportDialogState extends State<_AIReportDialog> {
                 const SizedBox(
                   width: 12,
                   height: 12,
-                  child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFFF59E0B)),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: Color(0xFFF59E0B),
+                  ),
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  _resultAt != null ? 'نسخة $ago — جارٍ التحديث…' : 'جارٍ التحديث…',
-                  style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11),
+                  _resultAt != null
+                      ? 'نسخة $ago — جارٍ التحديث…'
+                      : 'جارٍ التحديث…',
+                  style: const TextStyle(
+                    color: Color(0xFFF59E0B),
+                    fontSize: 11,
+                  ),
                 ),
               ] else ...[
                 const Icon(Icons.history, size: 12, color: Colors.white38),
@@ -932,10 +1169,14 @@ class _AIReportDialogState extends State<_AIReportDialog> {
                 _fetch();
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: selected ? const Color(0xFF21A366) : const Color(0xFF16213E),
+                backgroundColor: selected
+                    ? const Color(0xFF21A366)
+                    : const Color(0xFF16213E),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(6),
+                ),
               ),
               child: Text(r.$1, style: const TextStyle(fontSize: 11)),
             ),
@@ -960,10 +1201,9 @@ class _AIReportDialogState extends State<_AIReportDialog> {
           dropdownColor: const Color(0xFF16213E),
           icon: const Icon(Icons.arrow_drop_down, color: Colors.white54),
           style: const TextStyle(color: Colors.white, fontSize: 13),
-          items: widget.devices.map((d) => DropdownMenuItem(
-            value: d.id,
-            child: Text(d.name),
-          )).toList(),
+          items: widget.devices
+              .map((d) => DropdownMenuItem(value: d.id, child: Text(d.name)))
+              .toList(),
           onChanged: (id) {
             if (id == null) return;
             final found = widget.devices.where((d) => d.id == id);
@@ -990,11 +1230,17 @@ class _AIReportDialogState extends State<_AIReportDialog> {
         ),
         child: Row(
           children: [
-            Text(label, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+            Text(
+              label,
+              style: const TextStyle(color: Colors.white70, fontSize: 13),
+            ),
             const SizedBox(width: 8),
             const Icon(Icons.calendar_today, size: 14, color: Colors.white54),
             const SizedBox(width: 4),
-            Text(_fmt(value), style: const TextStyle(color: Colors.white, fontSize: 13)),
+            Text(
+              _fmt(value),
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+            ),
           ],
         ),
       ),
@@ -1003,16 +1249,28 @@ class _AIReportDialogState extends State<_AIReportDialog> {
 
   Widget _buildResults() {
     final data = _result!['data'];
-    if (data == null) return const Text('لا توجد بيانات', style: TextStyle(color: Colors.white54));
+    if (data == null)
+      return const Text(
+        'لا توجد بيانات',
+        style: TextStyle(color: Colors.white54),
+      );
 
     final items = data['items'];
     if (items is! List || items.isEmpty) {
-      return const Text('لا توجد أهداف في هذه الفترة', style: TextStyle(color: Colors.white54));
+      return const Text(
+        'لا توجد أهداف في هذه الفترة',
+        style: TextStyle(color: Colors.white54),
+      );
     }
 
-    final filteredItems = items.where((item) => item['deviceId'] == _device?.id).toList();
+    final filteredItems = items
+        .where((item) => item['deviceId'] == _device?.id)
+        .toList();
     if (filteredItems.isEmpty) {
-      return const Text('لا توجد أهداف لهذا الجهاز في هذه الفترة', style: TextStyle(color: Colors.white54));
+      return const Text(
+        'لا توجد أهداف لهذا الجهاز في هذه الفترة',
+        style: TextStyle(color: Colors.white54),
+      );
     }
 
     final List<MapEntry<DateTime, double?>> detectedList = [];
@@ -1025,7 +1283,9 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     for (final item in filteredItems) {
       final aiStatus = item['aiStatus'];
       final confidence = item['confidence'];
-      final conf = confidence is num ? confidence.toDouble() : double.tryParse('$confidence');
+      final conf = confidence is num
+          ? confidence.toDouble()
+          : double.tryParse('$confidence');
 
       final endTimeStr = item['endTime'] as String?;
       final endTime = endTimeStr != null ? DateTime.tryParse(endTimeStr) : null;
@@ -1054,7 +1314,14 @@ class _AIReportDialogState extends State<_AIReportDialog> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (lastDetected.isNotEmpty) ...[
-          const Text('آخر أهداف مكتشفة:', style: TextStyle(color: Color(0xFFD13438), fontSize: 13, fontWeight: FontWeight.bold)),
+          const Text(
+            'آخر أهداف مكتشفة:',
+            style: TextStyle(
+              color: Color(0xFFD13438),
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
           const SizedBox(height: 6),
           for (final e in lastDetected)
             _buildStatusRow(
@@ -1065,10 +1332,21 @@ class _AIReportDialogState extends State<_AIReportDialog> {
             ),
         ],
         if (lastDetected.isEmpty)
-          _buildStatusRow(color: const Color(0xFFD13438), time: 'لا توجد', label: 'آخر هدف مكتشف'),
+          _buildStatusRow(
+            color: const Color(0xFFD13438),
+            time: 'لا توجد',
+            label: 'آخر هدف مكتشف',
+          ),
         const SizedBox(height: 10),
         if (lastPossible.isNotEmpty) ...[
-          const Text('آخر أهداف محتملة:', style: TextStyle(color: Color(0xFFF59E0B), fontSize: 13, fontWeight: FontWeight.bold)),
+          const Text(
+            'آخر أهداف محتملة:',
+            style: TextStyle(
+              color: Color(0xFFF59E0B),
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
           const SizedBox(height: 6),
           for (final e in lastPossible)
             _buildStatusRow(
@@ -1079,19 +1357,46 @@ class _AIReportDialogState extends State<_AIReportDialog> {
             ),
         ],
         if (lastPossible.isEmpty)
-          _buildStatusRow(color: const Color(0xFFF59E0B), time: 'لا توجد', label: 'آخر هدف محتمل'),
+          _buildStatusRow(
+            color: const Color(0xFFF59E0B),
+            time: 'لا توجد',
+            label: 'آخر هدف محتمل',
+          ),
         const SizedBox(height: 14),
         const Divider(color: Colors.white24),
         const SizedBox(height: 8),
-        const Text('إحصائيات الفترة:', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
+        const Text(
+          'إحصائيات الفترة:',
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
         const SizedBox(height: 8),
-        _buildStatRow(color: const Color(0xFFD13438), label: 'مكتشفة', count: detectedCount),
+        _buildStatRow(
+          color: const Color(0xFFD13438),
+          label: 'مكتشفة',
+          count: detectedCount,
+        ),
         const SizedBox(height: 4),
-        _buildStatRow(color: const Color(0xFFF59E0B), label: 'محتملة', count: possibleCount),
+        _buildStatRow(
+          color: const Color(0xFFF59E0B),
+          label: 'محتملة',
+          count: possibleCount,
+        ),
         const SizedBox(height: 4),
-        _buildStatRow(color: const Color(0xFF21A366), label: 'غير مكتشفة', count: notDetectedCount),
+        _buildStatRow(
+          color: const Color(0xFF21A366),
+          label: 'غير مكتشفة',
+          count: notDetectedCount,
+        ),
         const SizedBox(height: 4),
-        _buildStatRow(color: Colors.white54, label: 'إجمالي الباكتات', count: filteredItems.length),
+        _buildStatRow(
+          color: Colors.white54,
+          label: 'إجمالي الباكتات',
+          count: filteredItems.length,
+        ),
         const SizedBox(height: 14),
         const Divider(color: Colors.white24),
         const SizedBox(height: 8),
@@ -1107,7 +1412,9 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     double? confidence,
     String? label,
   }) {
-    final confText = confidence != null ? ' (%${confidence.toStringAsFixed(1)})' : '';
+    final confText = confidence != null
+        ? ' (%${confidence.toStringAsFixed(1)})'
+        : '';
     final agoText = timeAgo != null ? ' $timeAgo' : '';
     return Row(
       children: [
@@ -1118,10 +1425,20 @@ class _AIReportDialogState extends State<_AIReportDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (label != null)
-                Text(label, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               Text(
                 label != null ? '$time$confText' : '$time$confText$agoText',
-                style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 12),
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.7),
+                  fontSize: 12,
+                ),
               ),
             ],
           ),
@@ -1139,9 +1456,19 @@ class _AIReportDialogState extends State<_AIReportDialog> {
       children: [
         Icon(Icons.circle, size: 8, color: color),
         const SizedBox(width: 8),
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        Text(
+          label,
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+        ),
         const Spacer(),
-        Text('$count', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+        Text(
+          '$count',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
       ],
     );
   }
@@ -1159,16 +1486,19 @@ class _AIReportDialogState extends State<_AIReportDialog> {
       if (n == 2) return 'يومان';
       return '$n أيام';
     }
+
     String hourWord(int n) {
       if (n == 1) return 'ساعة';
       if (n == 2) return 'ساعتان';
       return '$n ساعات';
     }
+
     String minWord(int n) {
       if (n == 1) return 'دقيقة';
       if (n == 2) return 'دقيقتان';
       return '$n دقائق';
     }
+
     final parts = <String>[];
     if (days > 0) parts.add(dayWord(days));
     if (hours > 0) parts.add(hourWord(hours));
@@ -1181,19 +1511,39 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     final name = _device?.name ?? '';
     final status = widget.deviceStatusMap[name];
     if (status == null || status.internet == null) {
-      return const Text('لا توجد بيانات حالة الجهاز', style: TextStyle(color: Colors.white54, fontSize: 12));
+      return const Text(
+        'لا توجد بيانات حالة الجهاز',
+        style: TextStyle(color: Colors.white54, fontSize: 12),
+      );
     }
     final isUp = status.internet!.toUpperCase() == 'UP';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('حالة الجهاز:', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
+        const Text(
+          'حالة الجهاز:',
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
         const SizedBox(height: 6),
         Row(
           children: [
-            Icon(Icons.circle, size: 8, color: isUp ? Colors.greenAccent : Colors.redAccent),
+            Icon(
+              Icons.circle,
+              size: 8,
+              color: isUp ? Colors.greenAccent : Colors.redAccent,
+            ),
             const SizedBox(width: 8),
-            Text('الاتصال: ${isUp ? "متصل" : "غير متصل"}', style: TextStyle(color: isUp ? Colors.greenAccent : Colors.redAccent, fontSize: 12)),
+            Text(
+              'الاتصال: ${isUp ? "متصل" : "غير متصل"}',
+              style: TextStyle(
+                color: isUp ? Colors.greenAccent : Colors.redAccent,
+                fontSize: 12,
+              ),
+            ),
           ],
         ),
         if (status.temperature != null) ...[
@@ -1204,7 +1554,10 @@ class _AIReportDialogState extends State<_AIReportDialog> {
               const SizedBox(width: 8),
               Directionality(
                 textDirection: TextDirection.rtl,
-                child: Text('°C ${status.temperature!.toStringAsFixed(1)} درجة الحرارة', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                child: Text(
+                  '°C ${status.temperature!.toStringAsFixed(1)} درجة الحرارة',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
               ),
             ],
           ),
@@ -1217,7 +1570,10 @@ class _AIReportDialogState extends State<_AIReportDialog> {
               const SizedBox(width: 8),
               Directionality(
                 textDirection: TextDirection.rtl,
-                child: Text('% ${status.battery!.toStringAsFixed(0)} البطارية', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                child: Text(
+                  '% ${status.battery!.toStringAsFixed(0)} البطارية',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
               ),
             ],
           ),
@@ -1230,7 +1586,10 @@ class _AIReportDialogState extends State<_AIReportDialog> {
               const SizedBox(width: 8),
               Directionality(
                 textDirection: TextDirection.rtl,
-                child: Text('مدة التشغيل: ${_formatUptime(status.uptime)}', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                child: Text(
+                  'مدة التشغيل: ${_formatUptime(status.uptime)}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
               ),
             ],
           ),
@@ -1239,4 +1598,3 @@ class _AIReportDialogState extends State<_AIReportDialog> {
     );
   }
 }
-
