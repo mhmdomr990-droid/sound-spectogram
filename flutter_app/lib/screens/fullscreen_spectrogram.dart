@@ -8,10 +8,12 @@ import 'package:get/get.dart';
 import '../controllers/dashboard_controller.dart';
 import '../models/device_history.dart';
 import '../models/marker.dart';
+import '../services/api_client.dart';
 import '../utils/colormaps.dart';
 import '../utils/export_service.dart';
 import '../utils/log_axis.dart';
 import '../widgets/spectrogram_canvas.dart';
+import '../widgets/target_link_button.dart';
 
 class FullscreenResult {
   final double gainDb;
@@ -381,8 +383,8 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                             const SizedBox(height: 3),
                             Container(
                               decoration: BoxDecoration(
-                                color: const Color(0xFF111111),
-                                borderRadius: BorderRadius.circular(6),
+                                color: const Color(0xFF111111).withOpacity(0.58),
+                                borderRadius: BorderRadius.circular(8),
                               ),
                               padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
                               child: Row(
@@ -395,6 +397,15 @@ class _FullscreenSpectrogramState extends State<FullscreenSpectrogram> {
                                     Expanded(child: _fsBtn(Icons.delete_outline, null, () => setState(() => _markers.clear()))),
                                   if (_markers.isNotEmpty)
                                     const SizedBox(width: 3),
+                                  Expanded(
+                                    child: TargetLinkButton(
+                                      selectedDeviceId: _c?.selected.value?.id,
+                                      selectedDeviceName: _c?.selected.value?.name,
+                                      api: Get.find<ApiClient>(),
+                                      transparent: true,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 3),
                                   Expanded(child: _fsBtn(Icons.fullscreen_exit, null, _exit)),
                                 ],
                               ),

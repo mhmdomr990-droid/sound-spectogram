@@ -532,6 +532,12 @@ class DashboardScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
+                  Obx(() => TargetLinkButton(
+                    selectedDeviceId: c.selected.value?.id,
+                    selectedDeviceName: c.selected.value?.name,
+                    api: Get.find<ApiClient>(),
+                  )),
+                  const SizedBox(width: 8),
                   Obx(() {
                     final open = c.showControls.value;
                     return IconButton(

@@ -8,12 +8,14 @@ class TargetLinkButton extends StatefulWidget {
   final int? selectedDeviceId;
   final String? selectedDeviceName;
   final ApiClient api;
+  final bool transparent;
 
   const TargetLinkButton({
     super.key,
     required this.selectedDeviceId,
     required this.selectedDeviceName,
     required this.api,
+    this.transparent = false,
   });
 
   @override
@@ -246,26 +248,39 @@ class _TargetLinkButtonState extends State<TargetLinkButton> {
         ? Colors.grey
         : (_lastPush!.ok ? Colors.green : Colors.red);
 
+    final buttonColor = active ? Colors.red.shade600 : Colors.orange.shade700;
+    final bgColor = widget.transparent
+        ? Color.alphaBlend(buttonColor.withOpacity(0.26), Colors.black.withOpacity(0.28))
+        : buttonColor;
+    final borderColor = widget.transparent ? Colors.white30 : Colors.transparent;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 6),
       child: FilledButton.icon(
         onPressed: _busy ? null : _onPressed,
         style: FilledButton.styleFrom(
-          backgroundColor: active
-              ? Colors.red.shade600
-              : Colors.orange.shade700,
+          backgroundColor: bgColor,
           foregroundColor: Colors.white,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(10),
+            side: BorderSide(color: borderColor, width: 1),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          elevation: widget.transparent ? 0 : 1,
         ),
         icon: Container(
           width: 10,
           height: 10,
           decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
         ),
-        label: Text(active ? 'إلغاء الهدف' : 'اكتشاف هدف'),
+        label: Text(
+          active ? 'إلغاء الهدف' : 'اكتشاف هدف',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: widget.transparent ? Colors.white.withOpacity(0.95) : Colors.white,
+          ),
+        ),
       ),
     );
   }
