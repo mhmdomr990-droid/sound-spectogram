@@ -67,13 +67,6 @@ class DashboardScreen extends StatelessWidget {
             icon: const Icon(Icons.assessment, color: Colors.white70),
             onPressed: () => _showAIReport(context, controller),
           ),
-          Obx(
-            () => TargetLinkButton(
-              selectedDeviceId: controller.selected.value?.id,
-              selectedDeviceName: controller.selected.value?.name,
-              api: Get.find<ApiClient>(),
-            ),
-          ),
           IconButton(
             tooltip: 'تسجيل الخروج',
             icon: const Icon(Icons.logout),
