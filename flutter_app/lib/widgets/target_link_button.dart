@@ -249,10 +249,47 @@ class _TargetLinkButtonState extends State<TargetLinkButton> {
         : (_lastPush!.ok ? Colors.green : Colors.red);
 
     final buttonColor = active ? Colors.red.shade600 : Colors.orange.shade700;
-    final bgColor = widget.transparent
-        ? Color.alphaBlend(buttonColor.withOpacity(0.26), Colors.black.withOpacity(0.28))
-        : buttonColor;
-    final borderColor = widget.transparent ? Colors.white30 : Colors.transparent;
+
+    // في وضع ملء الشاشة (transparent mode)، نستخدم نفس حجم الأزرار الأخرى مع الحفاظ على الألوان
+    if (widget.transparent) {
+      return Material(
+        color: buttonColor.withOpacity(0.7),
+        borderRadius: BorderRadius.circular(4),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(4),
+          onTap: _busy ? null : _onPressed,
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 7),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: dotColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    active ? Icons.cancel : Icons.flag,
+                    color: Colors.white,
+                    size: 16,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    // في الوضع العادي، التصميم الأصلي
+    final bgColor = buttonColor;
+    final borderColor = Colors.transparent;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -266,7 +303,7 @@ class _TargetLinkButtonState extends State<TargetLinkButton> {
             side: BorderSide(color: borderColor, width: 1),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          elevation: widget.transparent ? 0 : 1,
+          elevation: 1,
         ),
         icon: Container(
           width: 10,
@@ -275,10 +312,9 @@ class _TargetLinkButtonState extends State<TargetLinkButton> {
         ),
         label: Text(
           active ? 'إلغاء الهدف' : 'اكتشاف هدف',
-          style: TextStyle(
+          style: const TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w600,
-            color: widget.transparent ? Colors.white.withOpacity(0.95) : Colors.white,
           ),
         ),
       ),
